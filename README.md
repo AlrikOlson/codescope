@@ -7,6 +7,12 @@ Built in Rust. Indexes 200K+ files in under 2 seconds. Understands module struct
 ## Quick Start
 
 ```bash
+curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash
+```
+
+Or clone and run manually:
+
+```bash
 git clone https://github.com/AlrikOlson/codescope.git
 cd codescope/server
 ./setup.sh
