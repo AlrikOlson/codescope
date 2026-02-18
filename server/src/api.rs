@@ -17,14 +17,6 @@ use crate::stubs::extract_stubs;
 use crate::types::*;
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn is_definition_file(ext: &str) -> bool {
-    matches!(ext, "h" | "hpp" | "hxx" | "d.ts" | "pyi")
-}
-
-// ---------------------------------------------------------------------------
 // Static data endpoints
 // ---------------------------------------------------------------------------
 
@@ -238,8 +230,8 @@ pub async fn api_grep(
         exts.split(',')
             .map(|e| {
                 let e = e.trim();
-                if e.starts_with('.') {
-                    e[1..].to_string()
+                if let Some(stripped) = e.strip_prefix('.') {
+                    stripped.to_string()
                 } else {
                     e.to_string()
                 }
@@ -264,8 +256,6 @@ pub async fn api_grep(
             )
         })?;
 
-    let config = ScanConfig::new(state.project_root.clone());
-
     // Heavy file I/O — run on blocking thread pool with rayon parallelism
     let response = tokio::task::spawn_blocking(move || {
         use rayon::prelude::*;
@@ -282,7 +272,7 @@ pub async fn api_grep(
                     }
                 }
                 if let Some(ref cat) = q.cat {
-                    let file_cat = get_category_path(&f.rel_path, &config).join(" > ");
+                    let file_cat = get_category_path(&f.rel_path, &state.config).join(" > ");
                     if !file_cat.starts_with(cat.as_str()) {
                         return false;
                     }
@@ -319,27 +309,15 @@ pub async fn api_grep(
                 if file_matches.is_empty() {
                     None
                 } else {
-                    // BM25-lite relevance scoring
-                    let tf = total_match_count as f64 / (total_match_count as f64 + 1.5);
                     let filename = file
                         .rel_path
                         .rsplit('/')
                         .next()
                         .unwrap_or(&file.rel_path)
                         .to_lowercase();
-                    let filename_bonus =
-                        if terms_owned.iter().any(|t| filename.contains(t.as_str())) {
-                            50.0
-                        } else {
-                            0.0
-                        };
-                    let def_bonus = if is_definition_file(&file.ext) {
-                        5.0
-                    } else {
-                        0.0
-                    };
-                    let density = total_match_count as f64 / total_lines as f64 * 10.0;
-                    let score = tf * 20.0 + filename_bonus + def_bonus + density;
+                    let score = grep_relevance_score(
+                        total_match_count, total_lines, &filename, &file.ext, &terms_owned,
+                    );
 
                     Some((
                         GrepFileResult {
@@ -475,7 +453,6 @@ pub async fn api_context(
     Json(body): Json<ContextRequest>,
 ) -> Json<ContextResponse> {
     let result = tokio::task::spawn_blocking(move || {
-        let config = ScanConfig::new(state.project_root.clone());
         allocate_budget(
             &state.project_root,
             &body.paths,
@@ -486,7 +463,7 @@ pub async fn api_context(
             &state.deps,
             &state.stub_cache,
             &*state.tokenizer,
-            &config,
+            &state.config,
         )
     })
     .await

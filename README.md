@@ -56,7 +56,25 @@ After running `setup.sh`, browse any project with:
 codescope-web /path/to/project
 ```
 
-Opens at `http://localhost:8432`. Features a file browser, treemap visualization, dependency graph, and full-text search. Set `PORT=9000` for a custom port.
+Opens at `http://localhost:8432`. Set `PORT=9000` for a custom port.
+
+### Features
+
+- **File browser** — tree view with syntax-highlighted source viewer
+- **Full-text search** — regex-powered grep with ranked results
+- **Treemap visualization** — file sizes by module, zoomable
+- **3D dependency graph** — interactive force-directed graph of module dependencies
+- **Theme toggle** — dark, light, and system modes
+
+### Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+K` | Focus search |
+| `Ctrl+B` | Toggle sidebar |
+| `Ctrl+1` through `Ctrl+5` | Switch panels (Files, Search, Modules, Deps, Treemap) |
+
+Panels are drag-to-resize.
 
 The web UI requires Node.js at install time (for building the React frontend). If you installed without Node.js, re-run `setup.sh` after installing it.
 
@@ -74,20 +92,84 @@ skip_dirs = ["vendor", "generated"]
 # Only index these extensions (default: common source extensions)
 extensions = [".rs", ".ts", ".go", ".py"]
 
-# Treat these as noise/library directories (lower priority in search)
+# Treat these as noise/library directories (lower search priority, deprioritized in results)
 noise_dirs = ["third_party"]
 ```
 
-## Building from Source
+Built-in defaults for `skip_dirs`: `node_modules`, `target`, `dist`, `.git`, `build`, `__pycache__`, and others. Built-in defaults for `noise_dirs`: `ThirdParty`, `Plugins`, `External`, and similar vendor directories.
 
-Requires Rust 1.75+.
+## Development
+
+### Prerequisites
+
+- Rust 1.75+ (for the server)
+- Node.js 18+ (for the web UI)
+
+### Running in Dev Mode
+
+Start the backend and frontend separately for hot-reload:
 
 ```bash
+# Terminal 1: Rust server (watches and rebuilds)
 cd server
-cargo build --release
+cargo run -- --root /path/to/project
+
+# Terminal 2: Vite dev server (proxies API to :8432)
+npm run dev
 ```
 
-Binary lands at `server/target/release/codescope-server`.
+### Building from Source
+
+```bash
+# Server only
+cd server
+cargo build --release
+
+# Web UI
+npm install
+npm run build
+
+# Both (via setup script)
+cd server && ./setup.sh
+```
+
+Binary lands at `server/target/release/codescope-server`. Web UI builds to `dist/`.
+
+### Running Tests
+
+```bash
+# Integration tests (requires built server binary)
+bash tests/integration.sh
+
+# Lint
+cargo clippy --manifest-path server/Cargo.toml -- -D warnings
+npx tsc --noEmit
+```
+
+## Architecture
+
+```
+server/src/
+├── main.rs        — CLI parsing, HTTP server (Axum), MCP mode entry
+├── mcp.rs         — MCP stdio server (JSON-RPC over stdin/stdout)
+├── api.rs         — HTTP API handlers (/api/tree, /api/grep, etc.)
+├── scan.rs        — File discovery, module detection, dependency + import scanning
+├── stubs.rs       — Language-aware structural stub extraction (signatures without bodies)
+├── fuzzy.rs       — FZF v2 fuzzy matching (Smith-Waterman with bitmask pre-filter)
+├── budget.rs      — Token budget allocation (water-fill algorithm across files)
+├── tokenizer.rs   — Token counting (bytes-estimate or tiktoken)
+└── types.rs       — Shared types, state structs, scoring helpers
+
+src/               — React 18 frontend (Vite + TypeScript)
+├── App.tsx        — Main app shell, panels, keyboard shortcuts
+└── ...
+```
+
+### Language Support
+
+Stub extraction and import tracing support: Rust, TypeScript/JavaScript, Python, Go, C/C++, C#, Java, Kotlin, Swift, Ruby, PHP, Lua, Zig, TOML, YAML, JSON, XML, and more.
+
+Dependency scanning supports: Cargo.toml, package.json, go.mod, C# `.Build.cs` / `.csproj`.
 
 ## License
 

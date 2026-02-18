@@ -159,6 +159,7 @@ pub struct CachedStub {
 
 pub struct AppState {
     pub project_root: PathBuf,
+    pub config: ScanConfig,
     pub tree_json: String,
     pub manifest_json: String,
     pub deps_json: String,
@@ -174,6 +175,7 @@ pub struct AppState {
 
 pub struct McpState {
     pub project_root: PathBuf,
+    pub config: ScanConfig,
     pub all_files: Vec<ScannedFile>,
     pub manifest: BTreeMap<String, Vec<FileEntry>>,
     pub deps: BTreeMap<String, DepEntry>,
@@ -182,6 +184,35 @@ pub struct McpState {
     pub import_graph: ImportGraph,
     pub stub_cache: DashMap<String, CachedStub>,
     pub tokenizer: Arc<dyn crate::tokenizer::Tokenizer>,
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+/// Check if a file extension indicates a definition/header file.
+pub fn is_definition_file(ext: &str) -> bool {
+    matches!(ext, "h" | "hpp" | "hxx" | "d.ts" | "pyi")
+}
+
+/// BM25-lite relevance score for grep results.
+/// Shared by HTTP API and MCP grep/find handlers.
+pub fn grep_relevance_score(
+    match_count: usize,
+    total_lines: usize,
+    filename_lower: &str,
+    ext: &str,
+    terms_lower: &[String],
+) -> f64 {
+    let tf = match_count as f64 / (match_count as f64 + 1.5);
+    let filename_bonus = if terms_lower.iter().any(|t| filename_lower.contains(t.as_str())) {
+        50.0
+    } else {
+        0.0
+    };
+    let def_bonus = if is_definition_file(ext) { 5.0 } else { 0.0 };
+    let density = match_count as f64 / total_lines.max(1) as f64 * 10.0;
+    tf * 20.0 + filename_bonus + def_bonus + density
 }
 
 // ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ pub struct BytesEstimateTokenizer;
 
 impl Tokenizer for BytesEstimateTokenizer {
     fn count_tokens(&self, text: &str) -> usize {
-        (text.len() + 2) / 3
+        text.len().div_ceil(3)
     }
     fn name(&self) -> &str {
         "bytes-estimate"
@@ -51,6 +51,6 @@ pub fn create_tokenizer(name: &str) -> Arc<dyn Tokenizer> {
     match name {
         #[cfg(feature = "tiktoken")]
         "tiktoken" => Arc::new(TiktokenTokenizer::new()),
-        "bytes" | "bytes-estimate" | _ => Arc::new(BytesEstimateTokenizer),
+        _ => Arc::new(BytesEstimateTokenizer),
     }
 }

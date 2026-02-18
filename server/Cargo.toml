@@ -2,6 +2,13 @@
 name = "codescope-server"
 version = "0.2.0"
 edition = "2021"
+description = "Fast codebase indexer and search server — MCP server for Claude Code and standalone web UI"
+repository = "https://github.com/AlrikOlson/codescope"
+homepage = "https://github.com/AlrikOlson/codescope"
+license = "MIT"
+authors = ["Alrik Olson"]
+keywords = ["codebase", "indexer", "search", "mcp", "code-navigation"]
+categories = ["command-line-utilities", "development-tools"]
 
 [features]
 default = []

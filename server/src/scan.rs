@@ -152,7 +152,7 @@ fn walk_files_parallel(
             .git_exclude(false)
             .threads(rayon::current_num_threads().min(12))
             .filter_entry(move |entry| {
-                if entry.file_type().map_or(false, |ft| ft.is_dir()) {
+                if entry.file_type().is_some_and(|ft| ft.is_dir()) {
                     let name = entry.file_name().to_string_lossy();
                     return !skip.contains(name.as_ref());
                 }
@@ -165,7 +165,7 @@ fn walk_files_parallel(
                         Ok(e) => e,
                         Err(_) => return ignore::WalkState::Continue,
                     };
-                    if !entry.file_type().map_or(false, |ft| ft.is_file()) {
+                    if !entry.file_type().is_some_and(|ft| ft.is_file()) {
                         return ignore::WalkState::Continue;
                     }
 

@@ -9,14 +9,6 @@ use std::fs;
 use std::io::{self, BufRead, Write as IoWrite};
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn is_definition_file(ext: &str) -> bool {
-    matches!(ext, "h" | "hpp" | "hxx" | "d.ts" | "pyi")
-}
-
-// ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
 
@@ -161,7 +153,7 @@ fn tool_definitions() -> serde_json::Value {
 // ---------------------------------------------------------------------------
 
 fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (String, bool) {
-    let config = ScanConfig::new(state.project_root.clone());
+    let config = &state.config;
 
     match name {
         "cs_read_file" => {
@@ -306,7 +298,7 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
                         }
                     }
                     if let Some(cat) = cat_filter {
-                        let file_cat = get_category_path(&f.rel_path, &config).join(" > ");
+                        let file_cat = get_category_path(&f.rel_path, config).join(" > ");
                         if !file_cat.starts_with(cat) {
                             return false;
                         }
@@ -350,27 +342,15 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
                     continue;
                 }
 
-                // BM25-lite scoring
-                let tf = total_match_count as f64 / (total_match_count as f64 + 1.5);
                 let filename = file
                     .rel_path
                     .rsplit('/')
                     .next()
                     .unwrap_or(&file.rel_path)
                     .to_lowercase();
-                let filename_bonus =
-                    if terms_lower.iter().any(|t| filename.contains(t.as_str())) {
-                        50.0
-                    } else {
-                        0.0
-                    };
-                let def_bonus = if is_definition_file(&file.ext) {
-                    5.0
-                } else {
-                    0.0
-                };
-                let density = total_match_count as f64 / total_lines as f64 * 10.0;
-                let score = tf * 20.0 + filename_bonus + def_bonus + density;
+                let score = grep_relevance_score(
+                    total_match_count, total_lines, &filename, &file.ext, &terms_lower,
+                );
 
                 file_hits.push(GrepFileHit {
                     rel_path: file.rel_path.clone(),
@@ -596,7 +576,7 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
                 &state.deps,
                 &state.stub_cache,
                 &*state.tokenizer,
-                &config,
+                config,
             );
 
             // Format as human-readable text for MCP
@@ -816,7 +796,7 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
                         }
                         if let Some(ref cat) = cat_filter {
                             let file_cat =
-                                get_category_path(&f.rel_path, &config).join(" > ");
+                                get_category_path(&f.rel_path, config).join(" > ");
                             if !file_cat.starts_with(cat.as_str()) {
                                 return false;
                             }
@@ -834,7 +814,7 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
                     let total_lines = lines.len().max(1);
                     let mut match_count = 0usize;
                     let mut first_match: Option<String> = None;
-                    for (_i, line) in lines.iter().enumerate() {
+                    for line in &lines {
                         if pattern.is_match(line) {
                             match_count += 1;
                             if first_match.is_none() {
@@ -851,27 +831,15 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
                         continue;
                     }
 
-                    // BM25-lite
-                    let tf = match_count as f64 / (match_count as f64 + 1.5);
                     let filename = file
                         .rel_path
                         .rsplit('/')
                         .next()
                         .unwrap_or(&file.rel_path)
                         .to_lowercase();
-                    let filename_bonus =
-                        if terms_lower.iter().any(|t| filename.contains(t.as_str())) {
-                            50.0
-                        } else {
-                            0.0
-                        };
-                    let def_bonus = if is_definition_file(&file.ext) {
-                        5.0
-                    } else {
-                        0.0
-                    };
-                    let density = match_count as f64 / total_lines as f64 * 10.0;
-                    let grep_score = tf * 20.0 + filename_bonus + def_bonus + density;
+                    let grep_score = grep_relevance_score(
+                        match_count, total_lines, &filename, &file.ext, &terms_lower,
+                    );
 
                     let entry = merged
                         .entry(file.rel_path.clone())
@@ -990,7 +958,7 @@ pub fn run_mcp(state: McpState) {
                         },
                         "serverInfo": {
                             "name": "codescope",
-                            "version": "0.2.0"
+                            "version": env!("CARGO_PKG_VERSION")
                         },
                         "instructions": "CodeScope — search, browse, and read source files in any codebase. Start with cs_find (combined filename + content search) for discovery. Use cs_find_imports to trace import dependencies. Use cs_grep for targeted content search with context. Use cs_read_file to read specific files or line ranges. Use cs_read_context for budget-aware batch reads of 3+ files."
                     }

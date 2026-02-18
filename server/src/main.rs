@@ -78,17 +78,58 @@ fn load_codescope_config(project_root: &std::path::Path) -> ScanConfig {
 }
 
 // ---------------------------------------------------------------------------
+// CLI help
+// ---------------------------------------------------------------------------
+
+fn print_help() {
+    let version = env!("CARGO_PKG_VERSION");
+    eprintln!("codescope-server {version}");
+    eprintln!("Fast codebase indexer and search server");
+    eprintln!();
+    eprintln!("USAGE:");
+    eprintln!("  codescope-server [OPTIONS]");
+    eprintln!();
+    eprintln!("OPTIONS:");
+    eprintln!("  --root <PATH>       Project root directory (default: current directory)");
+    eprintln!("  --mcp               Run as MCP stdio server (for Claude Code)");
+    eprintln!("  --dist <PATH>       Path to web UI dist directory");
+    eprintln!("  --tokenizer <NAME>  Token counter: bytes-estimate (default) or tiktoken");
+    eprintln!("  --help              Show this help message");
+    eprintln!("  --version           Show version");
+    eprintln!();
+    eprintln!("ENVIRONMENT:");
+    eprintln!("  PORT                HTTP server port (default: 8432)");
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().collect();
+
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        print_help();
+        return;
+    }
+
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        eprintln!("codescope-server {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     let mcp_mode = args.iter().any(|a| a == "--mcp");
 
     // Project root: --root flag or current directory
     let project_root = if let Some(pos) = args.iter().position(|a| a == "--root") {
-        PathBuf::from(args.get(pos + 1).expect("--root requires a path argument"))
+        match args.get(pos + 1) {
+            Some(path) => PathBuf::from(path),
+            None => {
+                eprintln!("Error: --root requires a path argument");
+                std::process::exit(1);
+            }
+        }
     } else {
         std::env::current_dir().unwrap_or_else(|_| {
             eprintln!("Error: Could not determine current directory. Use --root <path>");
@@ -146,6 +187,7 @@ async fn main() {
     if mcp_mode {
         let mcp_state = McpState {
             project_root,
+            config,
             all_files,
             manifest,
             deps,
@@ -166,6 +208,7 @@ async fn main() {
 
     let state = Arc::new(AppState {
         project_root,
+        config,
         tree_json,
         manifest_json,
         deps_json,
@@ -180,7 +223,13 @@ async fn main() {
 
     // Resolve dist dir: --dist flag, then cwd/dist, then ~/.local/share/codescope/dist
     let dist_dir = if let Some(pos) = args.iter().position(|a| a == "--dist") {
-        PathBuf::from(args.get(pos + 1).expect("--dist requires a path"))
+        match args.get(pos + 1) {
+            Some(path) => PathBuf::from(path),
+            None => {
+                eprintln!("Error: --dist requires a path argument");
+                std::process::exit(1);
+            }
+        }
     } else {
         let cwd = std::env::current_dir().unwrap();
         let home_dist = std::env::var("HOME")
@@ -223,7 +272,11 @@ async fn main() {
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
         .await
-        .unwrap();
+        .unwrap_or_else(|e| {
+            eprintln!("Error: Could not bind to port {port}: {e}");
+            eprintln!("  Is another instance already running? Try PORT={} codescope-server", port + 1);
+            std::process::exit(1);
+        });
 
     eprintln!("  Serving UI from {}", dist_dir.display());
     eprintln!("  http://localhost:{port}\n");

@@ -12,10 +12,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+      - name: Clippy
+        run: cargo clippy --manifest-path server/Cargo.toml -- -D warnings
       - name: Build server
         run: cargo build --release --manifest-path server/Cargo.toml
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: TypeScript check
+        run: npx tsc --noEmit
+      - name: Build web UI
+        run: npm run build
       - name: Run integration tests
         run: bash tests/integration.sh

@@ -37,16 +37,18 @@ if [ -f "$MCP_FILE" ]; then
     # Merge into existing .mcp.json — add codescope to mcpServers
     # Use a simple Python/node one-liner if available, otherwise warn
     if command -v python3 >/dev/null 2>&1; then
-        python3 -c "
-import json, sys
-with open('$MCP_FILE') as f:
+        MCP_FILE="$MCP_FILE" TARGET="$TARGET" python3 -c "
+import json, os
+mcp_file = os.environ['MCP_FILE']
+target = os.environ['TARGET']
+with open(mcp_file) as f:
     data = json.load(f)
 data.setdefault('mcpServers', {})['codescope'] = {
     'type': 'stdio',
     'command': 'codescope-server',
-    'args': ['--mcp', '--root', '$TARGET']
+    'args': ['--mcp', '--root', target]
 }
-with open('$MCP_FILE', 'w') as f:
+with open(mcp_file, 'w') as f:
     json.dump(data, f, indent=2)
     f.write('\n')
 "

@@ -95,8 +95,12 @@ try {
 
 // Test 6: Import graph
 try {
-  const imports = await api('/api/imports');
-  test('Import graph endpoint works', () => assert(imports !== null, 'imports should return data'));
+  const manifest = await api('/api/manifest');
+  const firstFile = Object.values(manifest).flat()[0];
+  if (firstFile) {
+    const imports = await api(`/api/imports?path=${encodeURIComponent(firstFile.path)}`);
+    test('Import graph endpoint works', () => assert(imports !== null, 'imports should return data'));
+  }
 } catch (e) {
   console.error(`  x Imports: ${e.message}`);
   failed++;

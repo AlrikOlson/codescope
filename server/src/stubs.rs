@@ -509,20 +509,17 @@ fn format_json_depth(val: &serde_json::Value, out: &mut String, depth: usize, ma
     }
 }
 
-/// YAML: return top-level keys
+/// YAML: return top-level keys and their immediate children
 fn stub_yaml(content: &str) -> String {
     let mut out = String::new();
     for line in content.lines() {
-        let trimmed = line.trim();
-        // Top-level keys: no leading whitespace, ends with ':'
-        if !line.starts_with(' ') && !line.starts_with('\t') {
-            if trimmed.starts_with('#') || trimmed.starts_with("---") || trimmed.is_empty() {
-                out.push_str(line);
-                out.push('\n');
-            } else {
-                out.push_str(line);
-                out.push('\n');
-            }
+        // Top-level lines (no leading whitespace) or first-level children (2-space indent)
+        if (!line.starts_with(' ') && !line.starts_with('\t'))
+            || (line.starts_with("  ") && !line.starts_with("    "))
+            || (line.starts_with('\t') && !line.starts_with("\t\t"))
+        {
+            out.push_str(line);
+            out.push('\n');
         }
     }
     out
@@ -790,7 +787,7 @@ pub fn parse_blocks(tier1: &str, ext: &str) -> Vec<StubBlock> {
     match classify_language(ext) {
         LanguageFamily::BraceBased => {}
         _ => {
-            let tokens = (tier1.len() + 2) / 3;
+            let tokens = tier1.len().div_ceil(3);
             return vec![StubBlock {
                 kind: BlockKind::Misc,
                 identifier: String::new(),
@@ -856,7 +853,7 @@ pub fn parse_blocks(tier1: &str, ext: &str) -> Vec<StubBlock> {
                                 .trim()
                         })
                         .and_then(|s| s.rsplit('/').next())
-                        .or_else(|| Some(t))
+                        .or(Some(t))
                 })
                 .collect();
             let summary_text = format!("// {} imports ({})\n", count, first_few.join(", "));
@@ -864,8 +861,8 @@ pub fn parse_blocks(tier1: &str, ext: &str) -> Vec<StubBlock> {
                 kind: BlockKind::IncludeGroup,
                 identifier: String::new(),
                 summary_text: summary_text.clone(),
-                summary_tokens: (summary_text.len() + 2) / 3,
-                full_tokens: (full_text.len() + 2) / 3,
+                summary_tokens: summary_text.len().div_ceil(3),
+                full_tokens: full_text.len().div_ceil(3),
                 full_text,
             });
             continue;
@@ -891,7 +888,7 @@ pub fn parse_blocks(tier1: &str, ext: &str) -> Vec<StubBlock> {
                 i += 1;
             }
             block_text.push('\n');
-            let tokens = (block_text.len() + 2) / 3;
+            let tokens = block_text.len().div_ceil(3);
             blocks.push(StubBlock {
                 kind: BlockKind::MacroDecl,
                 identifier: name.to_lowercase(),
@@ -938,7 +935,7 @@ pub fn parse_blocks(tier1: &str, ext: &str) -> Vec<StubBlock> {
                         i += 1;
                     }
                     let full_text = block_lines.join("\n") + "\n";
-                    let tokens = (full_text.len() + 2) / 3;
+                    let tokens = full_text.len().div_ceil(3);
                     blocks.push(StubBlock {
                         kind: BlockKind::MacroDecl,
                         identifier: name.to_lowercase(),
@@ -966,7 +963,7 @@ pub fn parse_blocks(tier1: &str, ext: &str) -> Vec<StubBlock> {
             }
             // The next line(s) should be the declaration — handled by normal flow
             let full_text = annotation_lines.join("\n") + "\n";
-            let tokens = (full_text.len() + 2) / 3;
+            let tokens = full_text.len().div_ceil(3);
             blocks.push(StubBlock {
                 kind: BlockKind::AnnotatedBlock,
                 identifier: String::new(),
@@ -1037,8 +1034,8 @@ pub fn parse_blocks(tier1: &str, ext: &str) -> Vec<StubBlock> {
                 kind: BlockKind::ClassDecl,
                 identifier: name.to_lowercase(),
                 summary_text: summary_text.clone(),
-                summary_tokens: (summary_text.len() + 2) / 3,
-                full_tokens: (full_text.len() + 2) / 3,
+                summary_tokens: summary_text.len().div_ceil(3),
+                full_tokens: full_text.len().div_ceil(3),
                 full_text,
             });
             continue;
@@ -1048,7 +1045,7 @@ pub fn parse_blocks(tier1: &str, ext: &str) -> Vec<StubBlock> {
         if trimmed.ends_with("{ /* ... */ }") && trimmed.contains('(') {
             let name = block_function_name(trimmed);
             let full_text = format!("{}\n", lines[i]);
-            let tokens = (full_text.len() + 2) / 3;
+            let tokens = full_text.len().div_ceil(3);
             blocks.push(StubBlock {
                 kind: BlockKind::FunctionSig,
                 identifier: name.to_lowercase(),
@@ -1071,7 +1068,7 @@ pub fn parse_blocks(tier1: &str, ext: &str) -> Vec<StubBlock> {
                     let func_lines: Vec<&str> = (i..=j).map(|k| lines[k]).collect();
                     let name = block_function_name(trimmed);
                     let full_text = func_lines.join("\n") + "\n";
-                    let tokens = (full_text.len() + 2) / 3;
+                    let tokens = full_text.len().div_ceil(3);
                     blocks.push(StubBlock {
                         kind: BlockKind::FunctionSig,
                         identifier: name.to_lowercase(),
@@ -1137,7 +1134,7 @@ pub fn parse_blocks(tier1: &str, ext: &str) -> Vec<StubBlock> {
 
         let full_text = misc_lines.join("\n") + "\n";
         if !full_text.trim().is_empty() {
-            let full_tokens = (full_text.len() + 2) / 3;
+            let full_tokens = full_text.len().div_ceil(3);
             blocks.push(StubBlock {
                 kind: BlockKind::Misc,
                 identifier: String::new(),

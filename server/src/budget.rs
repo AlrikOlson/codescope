@@ -79,17 +79,12 @@ pub fn importance_score(rel_path: &str, file_size: u64) -> f64 {
 // Types
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, Clone, PartialEq)]
+#[derive(Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum BudgetUnit {
+    #[default]
     Tokens,
     Chars,
-}
-
-impl Default for BudgetUnit {
-    fn default() -> Self {
-        BudgetUnit::Tokens
-    }
 }
 
 #[derive(Deserialize)]
@@ -391,6 +386,7 @@ fn prune_blocks(blocks: &[StubBlock], query_terms: &[String], file_budget: usize
 // Budget allocation
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 pub fn allocate_budget(
     project_root: &Path,
     paths: &[String],

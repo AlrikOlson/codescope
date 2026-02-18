@@ -101,7 +101,7 @@ fn chars_match(text_byte: u8, pattern_byte: u8, case_sensitive: bool) -> bool {
     if case_sensitive {
         text_byte == pattern_byte
     } else {
-        text_byte.to_ascii_lowercase() == pattern_byte.to_ascii_lowercase()
+        text_byte.eq_ignore_ascii_case(&pattern_byte)
     }
 }
 
@@ -170,14 +170,14 @@ fn fuzzy_score_v2(
 
     // Bonus array for the window
     let mut bonus = vec![0i32; w];
-    for j in 0..w {
+    for (j, slot) in bonus.iter_mut().enumerate() {
         let pos = start_bound + j;
         let prev_class = if pos == 0 {
             CharClass::White
         } else {
             char_class(tb[pos - 1])
         };
-        bonus[j] = compute_bonus(prev_class, char_class(tb[pos]));
+        *slot = compute_bonus(prev_class, char_class(tb[pos]));
     }
 
     // Fast path: exact substring match
