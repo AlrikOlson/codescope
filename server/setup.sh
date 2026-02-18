@@ -47,22 +47,45 @@ else
     ok "Rust installed: $(rustc --version)"
 fi
 
-# --- Build ---
+# --- Build server ---
 info "Building codescope-server (release mode)..."
 cd "$SCRIPT_DIR"
 cargo build --release
 
-# --- Install ---
+# --- Install binaries ---
 mkdir -p "$INSTALL_DIR"
 
 cp "$SCRIPT_DIR/target/release/codescope-server" "$INSTALL_DIR/codescope-server"
 ok "Installed codescope-server -> $INSTALL_DIR/codescope-server"
 
-# Install codescope-init helper if it exists alongside setup.sh
-if [ -f "$SCRIPT_DIR/codescope-init" ]; then
-    cp "$SCRIPT_DIR/codescope-init" "$INSTALL_DIR/codescope-init"
-    chmod +x "$INSTALL_DIR/codescope-init"
-    ok "Installed codescope-init -> $INSTALL_DIR/codescope-init"
+# Install helper scripts
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+for script in codescope-init codescope-web; do
+    if [ -f "$SCRIPT_DIR/$script" ]; then
+        cp "$SCRIPT_DIR/$script" "$INSTALL_DIR/$script"
+        chmod +x "$INSTALL_DIR/$script"
+        ok "Installed $script -> $INSTALL_DIR/$script"
+    fi
+done
+
+# --- Build web UI ---
+DIST_INSTALL="$HOME/.local/share/codescope/dist"
+if command -v npm >/dev/null 2>&1; then
+    info "Building web UI..."
+    cd "$REPO_ROOT"
+    npm install --no-audit --no-fund 2>&1 | tail -1
+    npm run build 2>&1 | tail -1
+    if [ -d "$REPO_ROOT/dist" ]; then
+        mkdir -p "$DIST_INSTALL"
+        rm -rf "$DIST_INSTALL"
+        cp -r "$REPO_ROOT/dist" "$DIST_INSTALL"
+        ok "Installed web UI -> $DIST_INSTALL"
+    else
+        err "Frontend build produced no dist/ directory — web UI not installed"
+    fi
+else
+    info "npm not found — skipping web UI build (MCP server still works)"
+    info "Install Node.js and re-run setup.sh to enable the web UI"
 fi
 
 # --- Ensure ~/.local/bin is in PATH ---
@@ -90,13 +113,15 @@ fi
 echo ""
 ok "Setup complete!"
 echo ""
-echo "  To add CodeScope to any project:"
-echo ""
+echo "  MCP server (for Claude Code):"
 echo "    cd /path/to/your/project"
 echo "    codescope-init"
 echo ""
-echo "  Then open Claude Code in that directory — cs_find, cs_grep, etc. are available."
-echo ""
+if [ -d "$DIST_INSTALL" ]; then
+    echo "  Web UI:"
+    echo "    codescope-web /path/to/your/project"
+    echo ""
+fi
 if ! command -v codescope-server >/dev/null 2>&1; then
     echo "  NOTE: Restart your shell (or run 'source ~/.bashrc') to pick up the new PATH."
     echo ""

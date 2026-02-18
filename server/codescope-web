@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# codescope-web — Launch the CodeScope web UI for any project
+#
+# Usage:
+#   codescope-web                    # browse current directory
+#   codescope-web /path/to/project   # browse a specific project
+#   PORT=9000 codescope-web          # custom port (default: 8432)
+
+TARGET="${1:-.}"
+TARGET="$(cd "$TARGET" && pwd)"
+
+if ! command -v codescope-server >/dev/null 2>&1; then
+    echo "Error: codescope-server not found in PATH." >&2
+    echo "Run setup.sh first: https://github.com/AlrikOlson/codescope" >&2
+    exit 1
+fi
+
+# Find dist directory
+DIST_DIR="$HOME/.local/share/codescope/dist"
+if [ ! -d "$DIST_DIR" ] || [ ! -f "$DIST_DIR/index.html" ]; then
+    echo "Error: Web UI not installed at $DIST_DIR" >&2
+    echo "Re-run setup.sh with Node.js available to build the web UI." >&2
+    exit 1
+fi
+
+PORT="${PORT:-8432}"
+
+# Open browser after a short delay
+open_browser() {
+    sleep 1
+    if command -v xdg-open >/dev/null 2>&1; then
+        xdg-open "http://localhost:$PORT" 2>/dev/null
+    elif command -v open >/dev/null 2>&1; then
+        open "http://localhost:$PORT" 2>/dev/null
+    fi
+}
+open_browser &
+
+echo "CodeScope web UI: http://localhost:$PORT"
+echo "Project: $TARGET"
+echo ""
+
+exec codescope-server --root "$TARGET" --dist "$DIST_DIR"

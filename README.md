@@ -18,16 +18,20 @@ cd codescope/server
 ./setup.sh
 ```
 
-This installs the Rust toolchain (if needed), builds the binary, and puts `codescope-server` and `codescope-init` in `~/.local/bin/`.
+This installs the Rust toolchain (if needed), builds the server, and if Node.js is available, builds the web UI too. Everything goes into `~/.local/bin/`.
 
 Then, in any project you want to index:
 
 ```bash
+# MCP server (for Claude Code)
 cd /path/to/your/project
 codescope-init
+
+# Web UI (standalone browser)
+codescope-web /path/to/your/project
 ```
 
-This creates a `.mcp.json` that Claude Code picks up automatically. Open Claude Code in that directory and the `cs_*` tools are available.
+`codescope-init` creates a `.mcp.json` that Claude Code picks up automatically. `codescope-web` launches the browser UI at `http://localhost:8432`.
 
 ## MCP Tools
 
@@ -44,17 +48,17 @@ This creates a `.mcp.json` that Claude Code picks up automatically. Open Claude 
 | `cs_get_deps` | Module dependency graph |
 | `cs_find_imports` | Import/include relationship tracing |
 
-## HTTP Mode
+## Web UI
 
-Without `--mcp`, the server starts an HTTP server with a web UI:
+After running `setup.sh`, browse any project with:
 
 ```bash
-cd codescope
-npm install && npm run build
-codescope-server --root /path/to/project --dist ./dist
+codescope-web /path/to/project
 ```
 
-Opens at `http://localhost:8432`. Features a file browser, treemap visualization, dependency graph, and full-text search.
+Opens at `http://localhost:8432`. Features a file browser, treemap visualization, dependency graph, and full-text search. Set `PORT=9000` for a custom port.
+
+The web UI requires Node.js at install time (for building the React frontend). If you installed without Node.js, re-run `setup.sh` after installing it.
 
 ## Configuration
 

@@ -178,16 +178,22 @@ async fn main() {
         tokenizer: tok,
     });
 
-    // Resolve dist dir (../dist relative to server/)
+    // Resolve dist dir: --dist flag, then cwd/dist, then ~/.local/share/codescope/dist
     let dist_dir = if let Some(pos) = args.iter().position(|a| a == "--dist") {
         PathBuf::from(args.get(pos + 1).expect("--dist requires a path"))
     } else {
         let cwd = std::env::current_dir().unwrap();
-        let candidates = [cwd.join("dist"), cwd.join("../dist")];
+        let home_dist = std::env::var("HOME")
+            .map(|h| PathBuf::from(h).join(".local/share/codescope/dist"))
+            .unwrap_or_default();
+        let candidates = [cwd.join("dist"), cwd.join("../dist"), home_dist];
         candidates
             .into_iter()
             .find(|p| p.join("index.html").exists())
-            .unwrap_or_else(|| cwd.join("../dist"))
+            .unwrap_or_else(|| {
+                eprintln!("  Warning: No dist/ directory found. Run setup.sh with Node.js to build the web UI.");
+                cwd.join("dist")
+            })
     };
 
     let index_html = dist_dir.join("index.html");
