@@ -1,0 +1,80 @@
+/* ============================================
+   Activity Bar — Vertical Icon Strip
+   ============================================ */
+.activity-bar {
+  width: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+  gap: 2px;
+  flex-shrink: 0;
+  background: var(--glass-strong);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-right: 1px solid var(--border);
+  z-index: 20;
+  position: relative;
+}
+
+.activity-bar-item {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-left: 2px solid transparent;
+  border-right: 2px solid transparent;
+  color: var(--text3);
+  cursor: pointer;
+  position: relative;
+  transition: all var(--fast) var(--ease);
+  border-radius: 0;
+}
+
+.activity-bar-item:hover {
+  color: var(--text);
+  background: var(--hover-accent);
+}
+
+.activity-bar-item.active {
+  color: var(--neon-cyan);
+  border-left-color: var(--neon-cyan);
+  background: var(--hover-accent-mid);
+}
+
+.activity-bar-spacer {
+  flex: 1;
+}
+
+.activity-bar-badge {
+  position: absolute;
+  top: 4px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  background: var(--neon-cyan);
+  color: var(--deep-black);
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Bottom section items (theme, settings) */
+.activity-bar-bottom {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}

@@ -1,0 +1,9 @@
+sample-project
+node_modules
+target
+dist
+.mcp.json
+__pycache__/
+*.pyc
+.DS_Store
+*.swp

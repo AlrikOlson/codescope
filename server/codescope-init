@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# codescope-init — Generate .mcp.json for CodeScope in any project
+#
+# Usage:
+#   cd /path/to/project && codescope-init
+#   codescope-init /path/to/project
+
+TARGET="${1:-.}"
+TARGET="$(cd "$TARGET" && pwd)"
+MCP_FILE="$TARGET/.mcp.json"
+
+# Check if codescope-server is installed
+if ! command -v codescope-server >/dev/null 2>&1; then
+    echo "Error: codescope-server not found in PATH." >&2
+    echo "Run setup.sh first: https://github.com/AlrikOlson/codescope" >&2
+    exit 1
+fi
+
+# Check for existing .mcp.json
+if [ -f "$MCP_FILE" ]; then
+    # Check if codescope is already configured
+    if grep -q '"codescope"' "$MCP_FILE" 2>/dev/null; then
+        echo "CodeScope already configured in $MCP_FILE"
+        exit 0
+    fi
+
+    echo ".mcp.json already exists at $MCP_FILE"
+    printf "Add codescope to existing config? [Y/n] "
+    read -r answer
+    if [ "${answer:-Y}" != "${answer#[Nn]}" ]; then
+        echo "Aborted."
+        exit 0
+    fi
+
+    # Merge into existing .mcp.json — add codescope to mcpServers
+    # Use a simple Python/node one-liner if available, otherwise warn
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c "
+import json, sys
+with open('$MCP_FILE') as f:
+    data = json.load(f)
+data.setdefault('mcpServers', {})['codescope'] = {
+    'type': 'stdio',
+    'command': 'codescope-server',
+    'args': ['--mcp', '--root', '$TARGET']
+}
+with open('$MCP_FILE', 'w') as f:
+    json.dump(data, f, indent=2)
+    f.write('\n')
+"
+        echo "Added codescope to $MCP_FILE"
+    else
+        echo "Cannot merge automatically (python3 not found)."
+        echo "Add this to your .mcp.json mcpServers manually:"
+        echo ""
+        echo '  "codescope": {'
+        echo '    "type": "stdio",'
+        echo '    "command": "codescope-server",'
+        echo "    \"args\": [\"--mcp\", \"--root\", \"$TARGET\"]"
+        echo '  }'
+        exit 1
+    fi
+else
+    # Create new .mcp.json
+    cat > "$MCP_FILE" <<EOF
+{
+  "mcpServers": {
+    "codescope": {
+      "type": "stdio",
+      "command": "codescope-server",
+      "args": ["--mcp", "--root", "$TARGET"]
+    }
+  }
+}
+EOF
+    echo "Created $MCP_FILE"
+fi
+
+echo ""
+echo "Open Claude Code in $TARGET — CodeScope tools are now available."

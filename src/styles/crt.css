@@ -1,0 +1,270 @@
+/* ============================================
+   CRT Terminal Effects — Global Overlays
+   GPU-composited transforms, @property animations,
+   multi-layer compositing, RGB phosphor stripes
+
+   Strategy: CRT on the frame, clean content inside.
+   Chrome (topbar, activity bar) sits above scanlines.
+   Content panels (.layout z-index: 6) paint above scanlines (z-index: 5).
+   ============================================ */
+
+/* ---- Scanlines (static phosphor rows) ---- */
+/* Real CRT scanlines are fixed horizontal gaps between phosphor rows.
+   They don't move — all visible motion comes from the refresh sweep.
+   Two layers: primary 2px scanlines + finer 1px sub-scanlines for depth.
+   z-index: 5 — content panels at z-index: 6 paint above these. */
+.app::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      transparent 0px 2px,
+      light-dark(rgba(255, 255, 255, 0.07), rgba(0, 0, 0, 0.07)) 2px 4px
+    ),
+    repeating-linear-gradient(
+      0deg,
+      transparent 0px 1px,
+      light-dark(rgba(255, 255, 255, 0.02), rgba(0, 0, 0, 0.02)) 1px 2px
+    );
+  background-size: 100% 4px, 100% 2px;
+  pointer-events: none;
+  z-index: 5;
+  mix-blend-mode: multiply;
+}
+
+/* ---- CRT Flicker (reduced micro-glitch) ---- */
+/* 12s cycle with subtle base wobble. Micro-glitch burst reduced
+   for readability while preserving the CRT character. */
+.app {
+  animation: crtFlicker 12s ease-in-out infinite;
+}
+
+@keyframes crtFlicker {
+  0%    { opacity: 1; }
+  2%    { opacity: 0.992; }
+  4%    { opacity: 1; }
+  30%   { opacity: 0.995; }
+  31%   { opacity: 1; }
+  /* Micro-glitch burst — reduced amplitude */
+  58%   { opacity: 1; }
+  58.5% { opacity: 0.985; }
+  59%   { opacity: 0.995; }
+  59.5% { opacity: 0.99; }
+  60%   { opacity: 1; }
+  82%   { opacity: 0.995; }
+  83%   { opacity: 1; }
+  100%  { opacity: 1; }
+}
+
+/* ---- Phosphor Dot Grid + RGB Aperture Grille ---- */
+/* Three-layer pattern:
+   1. RGB aperture grille stripes (Trinitron-style sub-pixel rendering)
+   2. Fine phosphor dot grid (24px spacing)
+   3. Coarser secondary dot grid (72px spacing, offset for depth)
+   Reduced opacity for better content readability. */
+.app-grid {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      rgba(255, 60, 60, 0.03) 0px 1px,
+      rgba(60, 255, 60, 0.03) 1px 2px,
+      rgba(60, 60, 255, 0.03) 2px 3px
+    ),
+    radial-gradient(
+      circle,
+      light-dark(rgba(0, 138, 119, 0.07), rgba(0, 255, 204, 0.07)) 1px,
+      transparent 1px
+    ),
+    radial-gradient(
+      circle,
+      light-dark(rgba(0, 138, 119, 0.03), rgba(0, 255, 204, 0.03)) 1.5px,
+      transparent 1.5px
+    );
+  background-size: 3px 3px, 24px 24px, 72px 72px;
+  background-position: 0 0, 0 0, 12px 12px;
+  animation: gridPulse 8s ease-in-out infinite;
+}
+
+@keyframes gridPulse {
+  0%, 100% { opacity: 0.18; }
+  50% { opacity: 0.08; }
+}
+
+/* ---- CRT Vignette + Warm Edge Tint ---- */
+/* Dark vignette with subtle amber warmth at edges (real CRTs have
+   warm blacks) + cyan edge-glow simulating bezel light bleed.
+   Reduced intensity for less aggressive framing. */
+.app-vignette {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+  background:
+    radial-gradient(
+      ellipse at center,
+      transparent 55%,
+      light-dark(rgba(0, 0, 0, 0.18), rgba(0, 0, 0, 0.22)) 100%
+    ),
+    radial-gradient(
+      ellipse at center,
+      transparent 65%,
+      light-dark(rgba(180, 140, 0, 0.012), rgba(255, 176, 0, 0.015)) 100%
+    );
+  box-shadow: inset 0 0 120px 40px light-dark(rgba(0, 138, 119, 0.02), rgba(0, 255, 204, 0.02));
+}
+
+/* ---- Phosphor Refresh Sweep ---- */
+/* A bright horizontal band that travels top-to-bottom, simulating
+   the electron beam refresh. Uses mix-blend-mode: screen to
+   BRIGHTEN content as it passes (like a real beam).
+   Reduced opacity for subtlety. */
+.app-sweep {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: -100vh;
+  height: 100vh;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    transparent 92%,
+    light-dark(rgba(0, 138, 119, 0.02), rgba(0, 255, 204, 0.02)) 95%,
+    light-dark(rgba(0, 138, 119, 0.04), rgba(0, 255, 204, 0.04)) 97.5%,
+    light-dark(rgba(0, 138, 119, 0.02), rgba(0, 255, 204, 0.02)) 99%,
+    transparent 100%
+  );
+  pointer-events: none;
+  z-index: 4;
+  mix-blend-mode: screen;
+  will-change: transform;
+  animation: refreshSweep 5s linear infinite;
+}
+
+@keyframes refreshSweep {
+  from { transform: translateY(0); }
+  to   { transform: translateY(200vh); }
+}
+
+/* ---- Chromatic Aberration (chrome only) ---- */
+/* SVG feColorMatrix filter for authentic RGB channel offset.
+   Applied only to chrome elements (topbar, activity bar) —
+   NOT to content areas for readability. Filter defined
+   in index.html as #chromatic-aberration. */
+.chromatic-always {
+  filter: url(#chromatic-aberration);
+}
+
+/* Enhanced chromatic on focus-within (stacks with base) */
+.chromatic-focus:focus-within {
+  text-shadow:
+    -1px 0 light-dark(rgba(184, 0, 184, 0.25), rgba(255, 0, 255, 0.25)),
+     1px 0 light-dark(rgba(0, 138, 119, 0.25), rgba(0, 255, 204, 0.25));
+}
+
+/* ---- Blinking Cursor ---- */
+input::placeholder {
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* ---- Glitch Hover (8-step with scale/skew) ---- */
+.glitch-on-hover:hover {
+  animation: glitch 0.2s linear;
+}
+
+@keyframes glitch {
+  0%    { transform: translate(-2px, 1px) skewX(0deg); }
+  12.5% { transform: translate(2px, -1px) skewX(-2deg) scaleX(1.01); }
+  25%   { transform: translate(-1px, -2px) skewX(1deg); }
+  37.5% { transform: translate(3px, 0px) skewX(-1deg) scaleY(0.99); }
+  50%   { transform: translate(-1px, 2px) skewX(3deg) scaleX(0.98); }
+  62.5% { transform: translate(1px, -1px) skewX(-2deg); }
+  75%   { transform: translate(-3px, 1px) skewX(1deg) scaleY(1.01); }
+  87.5% { transform: translate(2px, -2px) skewX(-1deg); }
+  100%  { transform: translate(0, 0) skewX(0deg) scale(1); }
+}
+
+/* ---- Animated Border Pulse ---- */
+.pulse-border {
+  animation: borderPulse 4s ease-in-out infinite;
+}
+
+@keyframes borderPulse {
+  0%, 100% {
+    border-color: var(--neon-cyan);
+    box-shadow: var(--glow-cyan);
+  }
+  50% {
+    border-color: var(--neon-magenta);
+    box-shadow: var(--glow-magenta);
+  }
+}
+
+/* ---- Terminal Input ---- */
+.terminal-input {
+  font-family: var(--font-mono);
+  background: var(--deep-black);
+  color: var(--text);
+  border: 1px solid var(--border);
+  caret-color: var(--neon-cyan);
+  transition: all var(--fast) var(--ease);
+}
+
+.terminal-input:focus {
+  border-color: var(--neon-cyan);
+  box-shadow: var(--glow-cyan);
+  outline: none;
+}
+
+/* ---- Holographic Shimmer Utility ---- */
+.holo-shimmer {
+  background: conic-gradient(
+    from var(--holo-angle),
+    var(--neon-cyan),
+    var(--neon-magenta),
+    var(--phosphor-green),
+    var(--amber),
+    var(--neon-cyan)
+  );
+  animation: holoShimmer 8s linear infinite;
+}
+
+/* ---- Animated Gradient Border Utility ---- */
+.animated-border {
+  border: var(--border-width) solid transparent;
+  background:
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    conic-gradient(
+      from var(--holo-angle),
+      var(--neon-cyan),
+      var(--neon-magenta),
+      var(--phosphor-green),
+      var(--neon-cyan)
+    ) border-box;
+  animation: holoShimmer 8s linear infinite;
+}
+
+/* ---- Reduced Motion ---- */
+@media (prefers-reduced-motion: reduce) {
+  .app-sweep {
+    animation: none;
+    display: none;
+  }
+  .app {
+    animation: none;
+  }
+  .app-grid {
+    animation: none;
+    opacity: 0.1;
+  }
+}

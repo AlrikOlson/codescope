@@ -1,0 +1,471 @@
+/* ============================================
+   App Shell, Glow, Topbar, Loading
+   ============================================ */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  position: relative;
+  background: var(--bg);
+}
+
+/* Noise overlay — animated analog static modulation.
+   Rapidly translates the tiled noise texture to pseudo-random
+   positions using steps(1) for hard jumps (no interpolation).
+   8 discrete positions per 0.4s cycle = 20 unique frames/sec.
+   GPU-composited via transform: translate(). */
+.app-noise {
+  position: fixed;
+  inset: -256px;
+  opacity: light-dark(0.02, 0.03);
+  background-image: var(--noise-texture);
+  background-repeat: repeat;
+  background-size: 256px 256px;
+  pointer-events: none;
+  z-index: 5;
+  mix-blend-mode: overlay;
+  will-change: transform;
+  animation: noiseModulate 0.4s steps(1) infinite;
+}
+
+@keyframes noiseModulate {
+  0%    { transform: translate(0, 0); }
+  12.5% { transform: translate(-128px, -64px); }
+  25%   { transform: translate(64px, -192px); }
+  37.5% { transform: translate(-192px, 128px); }
+  50%   { transform: translate(96px, -32px); }
+  62.5% { transform: translate(-48px, 160px); }
+  75%   { transform: translate(160px, -128px); }
+  87.5% { transform: translate(-96px, 48px); }
+}
+
+/* Ambient background orbs */
+.app-ambient {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+.app-ambient::before,
+.app-ambient::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(160px);
+  opacity: light-dark(0.025, 0.035);
+  animation: ambientFloat 25s ease-in-out infinite alternate;
+}
+.app-ambient::before {
+  width: 500px; height: 500px;
+  background: var(--neon-cyan);
+  top: -250px; left: -150px;
+}
+.app-ambient::after {
+  width: 400px; height: 400px;
+  background: var(--neon-magenta);
+  bottom: -250px; right: -150px;
+  animation-delay: -12s;
+}
+@keyframes ambientFloat {
+  from { transform: translate(0, 0) scale(1); }
+  to   { transform: translate(80px, 60px) scale(1.15); }
+}
+
+/* Mouse Glow */
+.app-glow {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: radial-gradient(circle 350px at var(--mx, 50%) var(--my, 50%), light-dark(color-mix(in oklch, var(--neon-cyan) 1.5%, transparent), color-mix(in oklch, var(--neon-cyan) 1.5%, transparent)) 0%, transparent 100%);
+  transition: background 0.3s ease;
+}
+
+/* ============================================
+   Loading Screen
+   ============================================ */
+.loading-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  gap: 32px;
+  background: var(--bg);
+  position: relative;
+  overflow: hidden;
+}
+.loading-screen::before {
+  content: '';
+  position: absolute;
+  width: 500px;
+  height: 500px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--hover-accent) 0%, transparent 70%);
+  animation: loadingOrbit 8s linear infinite;
+}
+@keyframes loadingOrbit {
+  0% { transform: translate(-30%, -30%) rotate(0deg); }
+  100% { transform: translate(-30%, -30%) rotate(360deg); }
+}
+
+.loading-logo {
+  font-size: 36px;
+  font-weight: 800;
+  letter-spacing: -1.5px;
+  background: var(--gradient-accent);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  position: relative;
+  z-index: 1;
+  text-shadow: var(--text-glow);
+}
+
+.loading-bar {
+  width: 160px;
+  height: 3px;
+  background: var(--surface2);
+  border-radius: var(--r-full);
+  overflow: hidden;
+  position: relative;
+  z-index: 1;
+}
+.loading-bar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--gradient-accent);
+  animation: loadingSlide 1.2s ease-in-out infinite;
+}
+@keyframes loadingSlide {
+  0% { transform: translateX(-100%); }
+  50% { transform: translateX(0); }
+  100% { transform: translateX(100%); }
+}
+
+.loading-text {
+  color: var(--text3);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  position: relative;
+  z-index: 1;
+  animation: loadingFade 0.8s ease 0.2s both;
+}
+@keyframes loadingFade {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ============================================
+   Top Bar (40px slim)
+   ============================================ */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+  height: 40px;
+  background: var(--glass-strong);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-bottom: 1px solid color-mix(in oklch, var(--neon-cyan) 10%, transparent);
+  box-shadow: var(--elevation-1), 0 1px 0 color-mix(in oklch, var(--neon-cyan) 5%, transparent);
+  flex-shrink: 0;
+  z-index: 20;
+  position: relative;
+}
+.topbar::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in oklch, var(--neon-cyan) 18%, transparent), transparent);
+  box-shadow: 0 0 6px color-mix(in oklch, var(--neon-cyan) 10%, transparent);
+}
+
+.logo {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  background: linear-gradient(135deg, var(--neon-cyan), var(--neon-magenta));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  white-space: nowrap;
+  filter: drop-shadow(0 0 6px color-mix(in oklch, var(--neon-cyan) 30%, transparent)) drop-shadow(0 0 14px color-mix(in oklch, var(--neon-cyan) 10%, transparent));
+}
+
+.topbar-spacer { flex: 1; }
+
+/* ============================================
+   Breadcrumb Navigation
+   ============================================ */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text3);
+  min-width: 0;
+  overflow: hidden;
+}
+.breadcrumb-sep {
+  color: var(--text3);
+  opacity: 0.4;
+  flex-shrink: 0;
+}
+.breadcrumb-item {
+  background: none;
+  border: none;
+  color: var(--text3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--r-sm);
+  transition: all var(--fast) var(--ease);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+.breadcrumb-item:hover {
+  color: var(--neon-cyan);
+  background: var(--hover-accent);
+}
+.breadcrumb-item.current {
+  color: var(--text2);
+}
+
+/* ============================================
+   Search Trigger
+   ============================================ */
+.search-trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 14px;
+  background: var(--deep-black);
+  border: 1px solid color-mix(in oklch, var(--neon-cyan) 20%, transparent);
+  border-radius: var(--r-md);
+  color: var(--text3);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all var(--normal) var(--ease);
+  flex: 1;
+  max-width: 420px;
+  min-width: 180px;
+}
+.search-trigger:hover {
+  border-color: color-mix(in oklch, var(--neon-cyan) 40%, transparent);
+  background: var(--surface);
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--neon-cyan) 10%, transparent), var(--shadow-glow);
+  color: var(--neon-cyan);
+}
+.search-trigger kbd {
+  margin-left: auto;
+  font-size: 9px;
+  padding: 1px 5px;
+  background: var(--bg);
+  border: 1px solid color-mix(in oklch, var(--neon-cyan) 15%, transparent);
+  border-radius: var(--r-sm);
+  color: var(--text3);
+  font-family: inherit;
+  font-weight: 600;
+}
+
+/* ============================================
+   Layout — CSS Grid (Activity Bar + Sidebar + Main)
+   ============================================ */
+.layout {
+  display: grid;
+  grid-template-columns: 48px auto 1fr;
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  z-index: 6;
+  transition: grid-template-columns var(--slow) var(--ease);
+}
+
+.layout.sidebar-hidden {
+  grid-template-columns: 48px 0px 1fr;
+}
+
+/* ============================================
+   Sidebar Panel
+   ============================================ */
+.sidebar-panel {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  transition: width var(--normal) var(--ease);
+}
+
+/* ============================================
+   Main Content Area
+   ============================================ */
+.main-content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+  z-index: 6;
+  background: var(--bg);
+}
+
+/* ============================================
+   Resize Handle
+   ============================================ */
+.resize-handle {
+  width: var(--border-width);
+  cursor: col-resize;
+  background: var(--border);
+  flex-shrink: 0;
+  transition: all var(--normal) var(--ease);
+  position: relative;
+}
+.resize-handle:hover {
+  background: color-mix(in oklch, var(--neon-cyan) 30%, transparent);
+  box-shadow: 0 0 6px color-mix(in oklch, var(--neon-cyan) 12%, transparent);
+}
+.resize-handle:active, .resize-handle.dragging {
+  background: var(--neon-cyan);
+  box-shadow: 0 0 12px color-mix(in oklch, var(--neon-cyan) 25%, transparent);
+}
+
+/* ============================================
+   List Content Wrapper
+   ============================================ */
+.list-content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Preview resize handle */
+.preview-resize-handle {
+  width: var(--border-width);
+  cursor: col-resize;
+  background: var(--border);
+  flex-shrink: 0;
+  transition: all var(--normal) var(--ease);
+}
+.preview-resize-handle:hover {
+  background: color-mix(in oklch, var(--neon-cyan) 30%, transparent);
+  box-shadow: 0 0 6px color-mix(in oklch, var(--neon-cyan) 12%, transparent);
+}
+.preview-resize-handle.dragging {
+  background: var(--neon-cyan);
+  box-shadow: 0 0 12px color-mix(in oklch, var(--neon-cyan) 25%, transparent);
+}
+
+/* ============================================
+   Context Panel — Pinned Right Sidebar (wide screens)
+   ============================================ */
+.context-right-sidebar {
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+
+/* Wide screens: 4-column grid with pinned context */
+@media (min-width: 1920px) {
+  .layout.context-pinned {
+    grid-template-columns: 48px auto 1fr 340px;
+  }
+}
+
+/* ============================================
+   Compact Mode: Activity bar at bottom, sidebar as drawer
+   ============================================ */
+@media (max-width: 1365px) {
+  .layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 48px;
+  }
+
+  .layout .activity-bar {
+    grid-row: 2;
+    width: 100%;
+    height: 48px;
+    flex-direction: row;
+    justify-content: center;
+    border-right: none;
+    border-top: 1px solid var(--border);
+    padding: 0 8px;
+  }
+
+  .layout .activity-bar .activity-bar-spacer { display: none; }
+  .layout .activity-bar .activity-bar-bottom {
+    flex-direction: row;
+    border-top: none;
+    border-left: 1px solid var(--border);
+    margin-top: 0;
+    margin-left: 4px;
+    padding-top: 0;
+    padding-left: 8px;
+  }
+
+  .sidebar-panel-wrapper {
+    position: fixed;
+    top: 40px;
+    left: 0;
+    bottom: 48px;
+    width: 320px !important;
+    z-index: 100;
+    transform: translateX(-100%);
+    transition: transform var(--normal) var(--ease);
+    box-shadow: var(--shadow-lg);
+    background: var(--bg);
+  }
+
+  .layout:not(.sidebar-hidden) .sidebar-panel-wrapper {
+    transform: translateX(0);
+  }
+
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 99;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--normal) var(--ease);
+  }
+
+  .sidebar-backdrop.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Hide resize handle in compact mode */
+  .layout .resize-handle {
+    display: none;
+  }
+}
+
+/* ============================================
+   View Transitions
+   ============================================ */
+.list-content,
+.codemap,
+.depgraph,
+.stats-dashboard {
+  view-transition-name: main-content;
+}
+::view-transition-old(main-content) {
+  animation: vtFadeOut var(--normal) var(--ease);
+}
+::view-transition-new(main-content) {
+  animation: vtFadeIn var(--normal) var(--ease);
+}
+@keyframes vtFadeOut { to { opacity: 0; transform: translateY(-8px); } }
+@keyframes vtFadeIn { from { opacity: 0; transform: translateY(8px); } }

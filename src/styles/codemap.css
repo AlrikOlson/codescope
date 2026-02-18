@@ -1,0 +1,73 @@
+/* ============================================
+   Codebase Map — Cyberpunk Terminal
+   ============================================ */
+.codemap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+.codemap-canvas-wrap {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  box-shadow: inset 0 0 60px light-dark(rgba(0, 0, 0, 0.15), rgba(0, 0, 0, 0.4));
+}
+.codemap-canvas-wrap canvas { display: block; cursor: grab; }
+.codemap-canvas-wrap canvas:active { cursor: grabbing; }
+
+.codemap-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.codemap-btn {
+  padding: 4px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text2);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--fast) var(--ease);
+}
+.codemap-btn:hover {
+  border-color: color-mix(in oklch, var(--neon-cyan) 30%, transparent);
+  background: var(--hover-accent);
+  color: var(--neon-cyan);
+}
+.codemap-breadcrumb { color: var(--text3); font-size: 11px; margin-left: 4px; }
+.codemap-sep { opacity: 0.3; }
+.codemap-seg { color: var(--text2); }
+
+.codemap-tooltip {
+  position: fixed;
+  pointer-events: none;
+  background: var(--glass-strong);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid color-mix(in oklch, var(--neon-cyan) 30%, transparent);
+  border-radius: var(--r-lg);
+  padding: 10px 14px;
+  box-shadow: var(--elevation-3), var(--glow-cyan);
+  z-index: 100;
+  max-width: 280px;
+  font-family: var(--font-mono);
+  animation: tooltipIn var(--fast) var(--ease-spring);
+}
+@keyframes tooltipIn {
+  from { opacity: 0; transform: translateY(4px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+.codemap-tooltip-name { font-size: 13px; font-weight: 700; color: var(--neon-cyan); }
+.codemap-tooltip-id { font-size: 10px; color: var(--text3); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.codemap-tooltip-count { font-size: 11px; color: var(--text2); margin-top: 4px; }
+.codemap-tooltip-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.codemap-tooltip-ext { font-size: 10px; color: var(--text3); }

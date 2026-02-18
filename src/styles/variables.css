@@ -1,0 +1,230 @@
+/* ============================================
+   CodeScope — Design Tokens & Base Reset
+   Cyberpunk Terminal Theme — Enhanced
+   ============================================ */
+
+/* --- CSS Houdini: Animatable Custom Properties --- */
+@property --holo-angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@property --gradient-pos {
+  syntax: "<percentage>";
+  initial-value: 0%;
+  inherits: false;
+}
+
+@property --glow-intensity {
+  syntax: "<number>";
+  initial-value: 0;
+  inherits: true;
+}
+
+@property --accent-hue {
+  syntax: "<number>";
+  initial-value: 165;
+  inherits: true;
+}
+
+@property --scan-y {
+  syntax: "<length>";
+  initial-value: 0px;
+  inherits: false;
+}
+
+@property --flicker {
+  syntax: "<number>";
+  initial-value: 1;
+  inherits: false;
+}
+
+/* --- Design Tokens --- */
+:root {
+  color-scheme: light dark;
+
+  /* --- Backgrounds --- */
+  --bg:       light-dark(#f0f0ea, #0a0a0a);
+  --bg2:      light-dark(#e8e8e2, #0f0f1a);
+  --surface:  light-dark(#deded6, #141422);
+  --surface2: light-dark(#d2d2ca, #1a1a2e);
+  --surface3: light-dark(#c5c5bd, #222240);
+
+  /* --- Borders --- */
+  --border:        light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.06));
+  --border-strong: light-dark(rgba(0, 0, 0, 0.14), rgba(255, 255, 255, 0.10));
+
+  /* --- Text --- */
+  --text:  light-dark(#1a1a2e, #e2e8f0);
+  --text2: light-dark(#4a4a5e, #94a3b8);
+  --text3: light-dark(#6a6a7e, #64748b);
+
+  /* --- Neon Accents (WCAG-adjusted for light mode) --- */
+  --neon-cyan:       light-dark(#008a77, #00ffcc);
+  --neon-magenta:    light-dark(#b800b8, #ff00ff);
+  --phosphor-green:  light-dark(#00993a, #00ff41);
+  --amber:           light-dark(#b88d00, #ffb000);
+  --deep-black:      light-dark(#f0f0ea, #0a0a0a);
+
+  /* --- Semantic Aliases --- */
+  --accent: var(--neon-cyan);
+  --accent2: light-dark(#007766, #00ccaa);
+  --accent-bright: var(--neon-cyan);
+
+  /* --- Status Colors --- */
+  --green:  light-dark(#059669, #34d399);
+  --yellow: light-dark(#d97706, #fbbf24);
+  --mauve:  light-dark(#9333ea, #c084fc);
+  --peach:  light-dark(#ea580c, #fb923c);
+  --red:    light-dark(#dc2626, #f87171);
+  --cyan:   light-dark(#0891b2, #22d3ee);
+
+  /* --- Glow Variables (subtle in light, restrained in dark) --- */
+  --glow-cyan:    light-dark(
+    0 1px 4px rgba(0, 138, 119, 0.10),
+    0 0 8px rgba(0, 255, 204, 0.25)
+  );
+  --glow-cyan-lg: light-dark(
+    0 1px 8px rgba(0, 138, 119, 0.08),
+    0 0 8px rgba(0, 255, 204, 0.25), 0 0 30px rgba(0, 255, 204, 0.08)
+  );
+  --glow-magenta: light-dark(
+    0 1px 4px rgba(184, 0, 184, 0.10),
+    0 0 8px rgba(255, 0, 255, 0.25), 0 0 30px rgba(255, 0, 255, 0.08)
+  );
+  --glow-green:   light-dark(
+    0 1px 4px rgba(0, 153, 58, 0.10),
+    0 0 8px rgba(0, 255, 65, 0.25), 0 0 30px rgba(0, 255, 65, 0.08)
+  );
+  --text-glow:    light-dark(
+    0 0 3px rgba(0, 138, 119, 0.12),
+    0 0 6px rgba(0, 255, 204, 0.3), 0 0 14px rgba(0, 255, 204, 0.1), 0 0 30px rgba(0, 255, 204, 0.04)
+  );
+
+  /* --- Font --- */
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace;
+
+  /* --- Glass (inverted for light mode) --- */
+  --glass:        light-dark(rgba(255, 255, 255, 0.65), rgba(10, 10, 10, 0.60));
+  --glass-mid:    light-dark(rgba(255, 255, 255, 0.75), rgba(10, 10, 10, 0.75));
+  --glass-strong: light-dark(rgba(255, 255, 255, 0.88), rgba(10, 10, 10, 0.85));
+  --glass-border: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.08));
+  --glass-highlight: light-dark(rgba(0, 0, 0, 0.03), rgba(255, 255, 255, 0.05));
+  --glass-blur: 20px;
+
+  /* --- Elevation --- */
+  --shadow-sm:   light-dark(0 1px 2px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.5));
+  --shadow-md:   light-dark(0 4px 16px rgba(0,0,0,0.08), 0 4px 16px rgba(0,0,0,0.5));
+  --shadow-lg:   light-dark(0 16px 48px rgba(0,0,0,0.10), 0 16px 48px rgba(0,0,0,0.6));
+  --shadow-glow: light-dark(
+    0 0 16px rgba(0, 138, 119, 0.04),
+    0 0 20px rgba(0, 255, 204, 0.08)
+  );
+  --shadow-glow-strong: light-dark(
+    0 0 30px rgba(0, 138, 119, 0.05),
+    0 0 40px rgba(0, 255, 204, 0.12)
+  );
+
+  --elevation-1: var(--shadow-sm);
+  --elevation-2: light-dark(
+    0 4px 12px rgba(0,0,0,0.06),
+    0 4px 12px rgba(0,0,0,0.4)
+  );
+  --elevation-3: light-dark(
+    0 8px 24px rgba(0,0,0,0.08),
+    0 8px 24px rgba(0,0,0,0.5)
+  );
+  --elevation-4: light-dark(
+    0 16px 48px rgba(0,0,0,0.10),
+    0 16px 48px rgba(0,0,0,0.6)
+  );
+
+  /* --- Motion --- */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --fast: 0.12s;
+  --normal: 0.2s;
+  --slow: 0.35s;
+
+  /* --- Gradients --- */
+  --gradient-accent: linear-gradient(135deg, var(--neon-cyan), var(--neon-magenta));
+  --gradient-sidebar: light-dark(
+    linear-gradient(180deg, rgba(0, 138, 119, 0.06) 0%, transparent 40%),
+    linear-gradient(180deg, rgba(0, 255, 204, 0.03) 0%, transparent 40%)
+  );
+
+  /* --- Radius --- */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+  --r-full: 9999px;
+
+  /* --- Standardized Border Width --- */
+  --border-width: 2px;
+
+  /* --- Hover Patterns (color-mix) --- */
+  --hover-accent:        color-mix(in oklch, var(--neon-cyan) 8%, transparent);
+  --hover-accent-mid:    color-mix(in oklch, var(--neon-cyan) 14%, transparent);
+  --hover-accent-strong: color-mix(in oklch, var(--neon-cyan) 22%, transparent);
+  --hover-danger:        color-mix(in oklch, var(--red) 12%, transparent);
+
+  /* --- Noise Texture --- */
+  --noise-texture: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* --- Holographic Shimmer Keyframes --- */
+@keyframes holoShimmer {
+  from { --holo-angle: 0deg; }
+  to   { --holo-angle: 360deg; }
+}
+
+@keyframes rowFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* --- Base Reset --- */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body, #root { height: 100%; overflow: hidden; }
+
+body {
+  font-family: var(--font-mono);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: 'tnum' 1;
+}
+
+::selection {
+  background: color-mix(in oklch, var(--neon-cyan) 30%, transparent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+  box-shadow: 0 0 0 4px color-mix(in oklch, var(--accent) 18%, transparent);
+  transition: outline-offset var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+:focus { outline: none; }
+
+/* --- Utilities --- */
+.spinner {
+  width: 32px; height: 32px;
+  border: 2px solid var(--surface3);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+mark {
+  background: color-mix(in oklch, var(--yellow) 20%, transparent);
+  color: var(--yellow);
+  border-radius: 2px;
+  padding: 0 2px;
+}

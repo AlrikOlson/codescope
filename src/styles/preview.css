@@ -1,0 +1,196 @@
+/* ============================================
+   File Preview Panel — Cyberpunk Terminal
+   ============================================ */
+.preview-panel {
+  flex: 0 0 480px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--bg);
+  overflow: hidden;
+  animation: previewSlide var(--normal) var(--ease);
+}
+.preview-panel.resizable {
+  flex: none;
+}
+.preview-panel.maximized {
+  flex: 1;
+}
+@keyframes previewSlide {
+  from { transform: translateX(60px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+.preview-header {
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid color-mix(in oklch, var(--neon-cyan) 10%, transparent);
+  flex-shrink: 0;
+  background: var(--glass);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: inset 0 1px 0 var(--glass-highlight);
+}
+.preview-header-top { display: flex; align-items: center; gap: 10px; }
+.preview-ext-badge {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2px 8px;
+  border: 1px solid;
+  border-radius: var(--r-sm);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+  text-transform: uppercase;
+  text-shadow: 0 0 6px currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+.preview-filename {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+.preview-header-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.preview-maximize,
+.preview-close {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  color: var(--text3);
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all var(--fast) var(--ease);
+  flex-shrink: 0;
+}
+.preview-maximize:hover,
+.preview-close:hover { color: var(--text); border-color: color-mix(in oklch, var(--neon-cyan) 30%, transparent); }
+.preview-maximize:hover { color: var(--neon-cyan); }
+.preview-meta { font-size: 11px; color: var(--text3); margin-top: 6px; }
+.preview-dot { opacity: 0.3; }
+.preview-truncated { color: var(--yellow); font-weight: 600; }
+.preview-toolbar { display: flex; gap: 6px; margin-top: 10px; }
+.preview-select-btn {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--text2);
+  cursor: pointer;
+  transition: all var(--fast) var(--ease);
+}
+.preview-select-btn:hover {
+  border-color: color-mix(in oklch, var(--neon-cyan) 30%, transparent);
+  color: var(--neon-cyan);
+  background: var(--hover-accent);
+}
+.preview-select-btn.selected {
+  background: var(--green);
+  border-color: var(--green);
+  color: #000;
+  font-weight: 700;
+  box-shadow: var(--glow-green);
+}
+.preview-body {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--bg);
+}
+.preview-body::-webkit-scrollbar { width: 0; }
+.preview-body:hover::-webkit-scrollbar { width: 4px; }
+.preview-body::-webkit-scrollbar-thumb { background: color-mix(in oklch, var(--neon-cyan) 20%, transparent); border-radius: 4px; }
+
+.preview-loading,
+.preview-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 48px;
+  color: var(--text3);
+  font-size: 13px;
+}
+.preview-error { color: var(--red); }
+.preview-code {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  tab-size: 4;
+}
+.preview-line {
+  display: flex;
+  min-height: 20px;
+  border-left: var(--border-width) solid transparent;
+  transition: all var(--fast) var(--ease);
+}
+.preview-line:hover {
+  background: color-mix(in oklch, var(--neon-cyan) 3%, transparent);
+  border-left-color: color-mix(in oklch, var(--neon-cyan) 30%, transparent);
+  box-shadow: inset 2px 0 8px color-mix(in oklch, var(--neon-cyan) 5%, transparent);
+}
+.preview-linenum {
+  display: inline-block;
+  width: 52px;
+  padding-right: 16px;
+  text-align: right;
+  color: var(--neon-cyan);
+  opacity: 0.25;
+  font-size: 11px;
+  user-select: none;
+  flex-shrink: 0;
+  transition: opacity var(--fast) var(--ease);
+}
+.preview-line:hover .preview-linenum { opacity: 0.6; }
+.preview-linetext {
+  flex: 1;
+  white-space: pre;
+  overflow-x: auto;
+  padding-right: 16px;
+}
+
+/* ============================================
+   Preview Resize Handle
+   ============================================ */
+.preview-resize-handle {
+  width: var(--border-width);
+  cursor: col-resize;
+  background: var(--border);
+  flex-shrink: 0;
+  transition: all var(--normal) var(--ease);
+  position: relative;
+}
+.preview-resize-handle:hover {
+  background: color-mix(in oklch, var(--neon-cyan) 30%, transparent);
+  box-shadow: 0 0 6px color-mix(in oklch, var(--neon-cyan) 12%, transparent);
+}
+.preview-resize-handle:active, .preview-resize-handle.dragging {
+  background: var(--neon-cyan);
+  box-shadow: 0 0 12px color-mix(in oklch, var(--neon-cyan) 25%, transparent);
+}
+
+/* ============================================
+   Syntax Highlighting (keep Catppuccin colors)
+   ============================================ */
+.syntax-keyword { color: var(--mauve); font-weight: 500; }
+.syntax-type { color: var(--yellow); }
+.syntax-string { color: var(--green); }
+.syntax-comment { color: var(--text3); font-style: italic; opacity: 0.7; }
+.syntax-preprocessor { color: var(--peach); font-weight: 500; }
+.syntax-number { color: var(--peach); }
+.syntax-plain { color: var(--text); }

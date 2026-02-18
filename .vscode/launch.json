@@ -1,0 +1,28 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "CodeScope",
+            "type": "node",
+            "request": "launch",
+            "runtimeExecutable": "${workspaceFolder}/server/target/release/codescope-server",
+            "runtimeArgs": [
+                "--root", "/path/to/your/project",
+                "--dist", "${workspaceFolder}/dist"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "preLaunchTask": "build-frontend"
+        },
+        {
+            "name": "CodeScope (Dev)",
+            "type": "node",
+            "request": "launch",
+            "runtimeExecutable": "npx",
+            "runtimeArgs": ["vite", "--open"],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "skipFiles": ["<node_internals>/**"]
+        }
+    ]
+}
