@@ -724,12 +724,17 @@ fn import_exts_go() -> HashSet<&'static str> {
     ["go"].iter().copied().collect()
 }
 
+fn import_exts_csharp() -> HashSet<&'static str> {
+    ["cs"].iter().copied().collect()
+}
+
 pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
     let cpp_exts = import_exts_cpp();
     let py_exts = import_exts_python();
     let js_exts = import_exts_js();
     let rust_exts = import_exts_rust();
     let go_exts = import_exts_go();
+    let cs_exts = import_exts_csharp();
 
     // Regex patterns for each language family
     let include_re = regex::Regex::new(r#"#include\s+"([^"]+)""#).unwrap();
@@ -741,6 +746,9 @@ pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
     let rust_import_re =
         regex::Regex::new(r#"(?:use\s+(?:crate|super)::([\w]+)|mod\s+([\w]+)\s*;)"#).unwrap();
     let go_import_re = regex::Regex::new(r#"import\s+(?:\(\s*)?(?:"([^"]+)")"#).unwrap();
+    let cs_using_re = regex::Regex::new(r#"(?m)^using\s+(?:static\s+)?([\w.]+)\s*;"#).unwrap();
+    let cs_namespace_re =
+        regex::Regex::new(r#"(?m)^(?:namespace\s+([\w.]+))"#).unwrap();
 
     // Build a lookup: filename (without ext) → Vec<rel_path> for resolving imports
     let mut filename_to_paths: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -758,6 +766,30 @@ pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
             .or_default()
             .push(f.rel_path.clone());
     }
+
+    // Build namespace → files index for C# resolution
+    let namespace_to_files: BTreeMap<String, Vec<String>> = {
+        let mut ns_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let cs_files: Vec<&ScannedFile> = all_files
+            .iter()
+            .filter(|f| cs_exts.contains(f.ext.as_str()))
+            .collect();
+        let ns_pairs: Vec<(String, String)> = cs_files
+            .par_iter()
+            .filter_map(|f| {
+                let content = fs::read_to_string(&f.abs_path).ok()?;
+                let ns = cs_namespace_re
+                    .captures(&content)
+                    .and_then(|cap| cap.get(1))
+                    .map(|m| m.as_str().to_string())?;
+                Some((ns, f.rel_path.clone()))
+            })
+            .collect();
+        for (ns, path) in ns_pairs {
+            ns_map.entry(ns).or_default().push(path);
+        }
+        ns_map
+    };
 
     // Resolve an import string to a file path
     let resolve_import = |import_str: &str| -> Option<String> {
@@ -801,7 +833,8 @@ pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
                 || py_exts.contains(ext)
                 || js_exts.contains(ext)
                 || rust_exts.contains(ext)
-                || go_exts.contains(ext);
+                || go_exts.contains(ext)
+                || cs_exts.contains(ext);
             if !has_patterns {
                 return None;
             }
@@ -872,6 +905,42 @@ pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
                 for cap in go_import_re.captures_iter(&content) {
                     if let Some(m) = cap.get(1) {
                         if let Some(path) = resolve_import(m.as_str()) {
+                            resolved.push(path);
+                        }
+                    }
+                }
+            }
+
+            if cs_exts.contains(ext) {
+                for cap in cs_using_re.captures_iter(&content) {
+                    let ns = &cap[1];
+                    // Skip System/Microsoft framework namespaces
+                    if ns.starts_with("System") || ns.starts_with("Microsoft") {
+                        continue;
+                    }
+                    // Try exact namespace match first
+                    if let Some(files) = namespace_to_files.get(ns) {
+                        for file in files {
+                            if file != &f.rel_path {
+                                resolved.push(file.clone());
+                            }
+                        }
+                        continue;
+                    }
+                    // Try prefix match: using Foo.Bar matches namespace Foo.Bar.* files
+                    let prefix = format!("{}.", ns);
+                    for (full_ns, files) in namespace_to_files.iter() {
+                        if full_ns.starts_with(&prefix) || full_ns == ns {
+                            for file in files {
+                                if file != &f.rel_path {
+                                    resolved.push(file.clone());
+                                }
+                            }
+                        }
+                    }
+                    // Fallback: resolve by last component (filename-based)
+                    if let Some(path) = resolve_import(ns) {
+                        if path != f.rel_path {
                             resolved.push(path);
                         }
                     }
