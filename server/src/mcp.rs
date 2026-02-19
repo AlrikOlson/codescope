@@ -102,15 +102,19 @@ fn tool_definitions() -> serde_json::Value {
         },
         {
             "name": "cs_grep",
-            "description": "Search source file contents (case-insensitive). Multi-word queries use OR matching: 'cloud reconstruct' finds lines containing 'cloud' OR 'reconstruct'. Returns matching lines with surrounding context.\n\nTips: Use specific single terms for precision. Filter with ext='rs,go' or category prefix. Follow up with cs_read_file start_line/end_line to read full context around matches.",
+            "description": "Search source file contents (case-insensitive). Default match_mode='all' requires ALL terms present in a line. Use 'any' for OR, 'exact' for literal phrases, 'regex' for patterns.\n\nTips: Filter with ext='rs,go', path='server/src' prefix, or category. Follow up with cs_read_file for full context.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "description": "Search terms (min 2 chars). Multiple words are OR-matched." },
+                    "query": { "type": "string", "description": "Search terms (min 2 chars)." },
+                    "match_mode": { "type": "string", "enum": ["all", "any", "exact", "regex"], "description": "How to match multi-word queries. 'all' (default): line must contain ALL terms. 'any': line contains ANY term (OR). 'exact': treat query as literal phrase. 'regex': raw regex pattern." },
                     "ext": { "type": "string", "description": "Comma-separated extensions to filter (e.g. 'h,cpp' or 'rs,go')" },
+                    "path": { "type": "string", "description": "Path prefix to filter files (e.g. 'server/src' or 'src/components')" },
                     "category": { "type": "string", "description": "Module category prefix to filter" },
                     "limit": { "type": "integer", "description": "Max total matches to return. Default: 100" },
+                    "max_per_file": { "type": "integer", "description": "Max matching lines shown per file. Default: 8, max: 50" },
                     "context": { "type": "integer", "description": "Lines of context before/after each match (0-10). Default: 2" },
+                    "output": { "type": "string", "enum": ["full", "files_only"], "description": "Output mode. 'full' (default): matching lines with context. 'files_only': just filenames and match counts." },
                     "repo": { "type": "string", "description": "Repository name (searches all repos if omitted)" }
                 },
                 "required": ["query"]
@@ -152,20 +156,6 @@ fn tool_definitions() -> serde_json::Value {
             }
         },
         {
-            "name": "cs_search",
-            "description": "Fuzzy search for files and modules by name. Space-separated terms must all match. File extensions are auto-stripped ('main.rs' works). CamelCase queries are case-sensitive. For searching file CONTENTS, use cs_grep instead.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string", "description": "Search query (e.g. 'config parser', 'FMeshBatch', 'main.rs')" },
-                    "fileLimit": { "type": "integer", "description": "Max file results (default 20)" },
-                    "moduleLimit": { "type": "integer", "description": "Max module results (default 8)" },
-                    "repo": { "type": "string", "description": "Repository name (searches all repos if omitted)" }
-                },
-                "required": ["query"]
-            }
-        },
-        {
             "name": "cs_read_context",
             "description": "Budget-aware batch read. Reads multiple files, compresses to fit token budget via importance-weighted allocation with block-level pruning (full stubs -> pruned -> manifest). Use instead of multiple cs_read_file calls when reading 3+ related files.",
             "inputSchema": {
@@ -197,14 +187,17 @@ fn tool_definitions() -> serde_json::Value {
         },
         {
             "name": "cs_find",
-            "description": "Combined search: fuzzy filename match + content grep in one call. Returns a unified ranked list. Use this as your first search tool — it replaces calling cs_search + cs_grep separately.\n\nReturns files ranked by combined name relevance and content match density.",
+            "description": "Combined search: fuzzy filename + content grep in one call. Returns a unified ranked list. Use this as your primary search tool for discovering files and modules.\n\nReturns files ranked by combined name relevance and content match density. Use fileLimit/moduleLimit to control result counts.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "query": { "type": "string", "description": "Search terms (e.g. 'VolumetricCloud', 'config parser')" },
+                    "match_mode": { "type": "string", "enum": ["all", "any", "exact", "regex"], "description": "How to match multi-word queries. 'all' (default): line must contain ALL terms. 'any': line contains ANY term (OR). 'exact': treat query as literal phrase. 'regex': raw regex pattern." },
                     "ext": { "type": "string", "description": "Comma-separated extensions to filter (e.g. 'h,cpp' or 'rs,ts')" },
+                    "path": { "type": "string", "description": "Path prefix to filter files (e.g. 'server/src' or 'src/components')" },
                     "category": { "type": "string", "description": "Module category prefix to filter" },
-                    "limit": { "type": "integer", "description": "Max results to return. Default: 30" },
+                    "fileLimit": { "type": "integer", "description": "Max file results (default: 30)" },
+                    "moduleLimit": { "type": "integer", "description": "Max module results (default: 5)" },
                     "repo": { "type": "string", "description": "Repository name (searches all repos if omitted)" }
                 },
                 "required": ["query"]
@@ -392,18 +385,57 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
             }
 
             let limit = args["limit"].as_u64().unwrap_or(100).min(500) as usize;
-            let max_per_file = 8;
+            let max_per_file = args["max_per_file"].as_u64().unwrap_or(8).min(50) as usize;
             let context_lines = args["context"].as_u64().unwrap_or(2).min(10) as usize;
             let ext_filter: Option<HashSet<String>> = args["ext"].as_str().map(|exts| {
                 exts.split(',').map(|e| e.trim().trim_start_matches('.').to_string()).collect()
             });
             let cat_filter = args["category"].as_str();
+            let path_filter = args["path"].as_str();
+            let match_mode = args["match_mode"].as_str().unwrap_or("all");
+            let output_mode = args["output"].as_str().unwrap_or("full");
 
-            // Multi-term OR
+            // Build match pattern based on match_mode
             let terms: Vec<&str> = query.split_whitespace().collect();
             let terms_lower: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
-            let pattern_str = terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|");
-            let pattern = match RegexBuilder::new(&pattern_str).case_insensitive(true).build() {
+
+            let pattern = match match_mode {
+                "exact" => {
+                    RegexBuilder::new(&regex::escape(query))
+                        .case_insensitive(true)
+                        .build()
+                }
+                "regex" => {
+                    RegexBuilder::new(query)
+                        .case_insensitive(true)
+                        .build()
+                }
+                "any" => {
+                    let pattern_str = terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|");
+                    RegexBuilder::new(&pattern_str)
+                        .case_insensitive(true)
+                        .build()
+                }
+                _ => {
+                    // "all" mode (default): build a pattern that requires all terms
+                    if terms.len() == 1 {
+                        RegexBuilder::new(&regex::escape(terms[0]))
+                            .case_insensitive(true)
+                            .build()
+                    } else {
+                        let lookaheads: String = terms
+                            .iter()
+                            .map(|t| format!("(?=.*(?i:{}))", regex::escape(t)))
+                            .collect::<Vec<_>>()
+                            .join("");
+                        let pattern_str = format!("^{}", lookaheads);
+                        RegexBuilder::new(&pattern_str)
+                            .case_insensitive(true)
+                            .build()
+                    }
+                }
+            };
+            let pattern = match pattern {
                 Ok(p) => p,
                 Err(_) => return ("Error: Invalid pattern".to_string(), true),
             };
@@ -431,6 +463,11 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                     .all_files
                     .iter()
                     .filter(|f| {
+                        if let Some(prefix) = path_filter {
+                            if !f.rel_path.starts_with(prefix) {
+                                return false;
+                            }
+                        }
                         if let Some(ref exts) = ext_filter {
                             if !exts.contains(&f.ext) {
                                 return false;
@@ -535,7 +572,12 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                     String::new()
                 };
 
-                if context_lines == 0 {
+                if output_mode == "files_only" {
+                    results.push(format!(
+                        "{}  ({}, score {:.0}{}, {} matches)",
+                        hit.display_path, hit.desc, hit.score, term_info, hit.total_match_count
+                    ));
+                } else if context_lines == 0 {
                     let file_lines: Vec<String> = hit
                         .match_indices
                         .iter()
@@ -661,86 +703,6 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                 }
             }
         }
-        "cs_search" => {
-            let repos = resolve_repos_for_search(state, args);
-            if repos.is_empty() {
-                return ("Error: No matching repos found".to_string(), true);
-            }
-            let multi = repos.len() > 1;
-
-            let raw_query = args["query"].as_str().unwrap_or("");
-            let query = crate::fuzzy::preprocess_search_query(raw_query);
-            let file_limit = args["fileLimit"].as_u64().unwrap_or(20) as usize;
-            let module_limit = args["moduleLimit"].as_u64().unwrap_or(8) as usize;
-
-            let mut all_modules = Vec::new();
-            let mut all_files = Vec::new();
-            let mut total_files = 0usize;
-            let mut total_modules = 0usize;
-
-            let start = std::time::Instant::now();
-
-            for repo in &repos {
-                let resp = run_search(
-                    &repo.search_files,
-                    &repo.search_modules,
-                    &query,
-                    file_limit,
-                    module_limit,
-                );
-                total_files += resp.total_files;
-                total_modules += resp.total_modules;
-
-                for m in resp.modules {
-                    all_modules.push((repo, m));
-                }
-                for f in resp.files {
-                    all_files.push((repo, f));
-                }
-            }
-
-            // Sort by score descending
-            all_modules.sort_by(|a, b| {
-                b.1.score.partial_cmp(&a.1.score).unwrap_or(std::cmp::Ordering::Equal)
-            });
-            all_files.sort_by(|a, b| {
-                b.1.score.partial_cmp(&a.1.score).unwrap_or(std::cmp::Ordering::Equal)
-            });
-            all_modules.truncate(module_limit);
-            all_files.truncate(file_limit);
-
-            let query_time = start.elapsed().as_secs_f64() * 1000.0;
-            let mut out = String::new();
-            if !all_modules.is_empty() {
-                out.push_str("Modules:\n");
-                for (repo, m) in &all_modules {
-                    let prefix = if multi { format!("[{}] ", repo.name) } else { String::new() };
-                    out.push_str(&format!(
-                        "  {prefix}{} ({} files, score {:.1})\n",
-                        m.id, m.file_count, m.score
-                    ));
-                }
-                out.push('\n');
-            }
-            if !all_files.is_empty() {
-                out.push_str("Files:\n");
-                for (repo, f) in &all_files {
-                    let prefix = if multi { format!("[{}] ", repo.name) } else { String::new() };
-                    out.push_str(&format!(
-                        "  {prefix}{} — {} (score {:.1})\n",
-                        f.path, f.desc, f.score
-                    ));
-                }
-            }
-            if all_modules.is_empty() && all_files.is_empty() {
-                out.push_str(&format!("No results for '{raw_query}'"));
-            }
-            out.push_str(&format!(
-                "\n({:.1}ms, searched {} files / {} modules)",
-                query_time, total_files, total_modules
-            ));
-            (out, false)
-        }
         "cs_read_context" => {
             let repo = match resolve_repo(state, args) {
                 Ok(r) => r,
@@ -820,32 +782,6 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                     }
                 }
             }
-
-            // Append AI-friendly usage hint
-            out.push_str("\n---\n");
-            out.push_str("## How to explore further with CodeScope tools\n\n");
-            out.push_str("The above is a **compressed overview** — stubs show signatures only, pruned files omit low-priority blocks, and manifest entries are one-line summaries. To dig deeper:\n\n");
-            out.push_str("**Read full source for a specific file:**\n");
-            out.push_str("  cs_read_file({ path: \"path/to/File.h\", mode: \"full\" })\n");
-            out.push_str("  -> Returns complete file contents. Use start_line/end_line to read a specific range.\n\n");
-            out.push_str("**Read structural outline first (recommended):**\n");
-            out.push_str("  cs_read_file({ path: \"...\", mode: \"stubs\" })\n");
-            out.push_str("  -> Class/function signatures without bodies. Use this BEFORE mode=\"full\" on large files.\n\n");
-            out.push_str("**Search for code patterns or keywords:**\n");
-            out.push_str("  cs_grep({ query: \"FogVolume\", ext: \"h,cpp\", context: 3 })\n");
-            out.push_str(
-                "  -> Searches file contents. Returns matching lines with surrounding context.\n\n",
-            );
-            out.push_str("**Find files by name + content (best first search):**\n");
-            out.push_str("  cs_find({ query: \"VolumetricCloud\" })\n");
-            out.push_str("  -> Combined fuzzy filename + content grep, ranked by relevance.\n\n");
-            out.push_str("**Trace import dependencies:**\n");
-            out.push_str("  cs_find_imports({ path: \"...\", direction: \"both\" })\n");
-            out.push_str("  -> Shows what a file imports and what imports it. Essential for understanding coupling.\n\n");
-            out.push_str("**Impact analysis:**\n");
-            out.push_str("  cs_impact({ path: \"path/to/file.rs\" })\n");
-            out.push_str("  -> Find everything that depends on this file. Answers 'what breaks if I change this?'\n\n");
-            out.push_str("**Typical workflow:** cs_find -> pick top files -> cs_read_file (stubs) -> cs_read_file (full, start_line/end_line) for the specific section you need -> cs_grep to find usages.\n");
 
             (out, false)
         }
@@ -949,19 +885,59 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
             if raw_query.len() < 2 {
                 return ("Error: Query must be at least 2 characters".to_string(), true);
             }
-            let limit = args["limit"].as_u64().unwrap_or(30).min(100) as usize;
+            let file_limit = args["fileLimit"].as_u64().unwrap_or(
+                args["limit"].as_u64().unwrap_or(30)
+            ).min(100) as usize;
+            let module_limit = args["moduleLimit"].as_u64().unwrap_or(5).min(50) as usize;
             let ext_filter: Option<HashSet<String>> = args["ext"].as_str().map(|exts| {
                 exts.split(',').map(|e| e.trim().trim_start_matches('.').to_string()).collect()
             });
             let cat_filter = args["category"].as_str().map(|s| s.to_string());
+            let path_filter = args["path"].as_str();
+            let match_mode = args["match_mode"].as_str().unwrap_or("all");
 
             let start = std::time::Instant::now();
 
             // Content grep pattern
             let terms: Vec<&str> = raw_query.split_whitespace().collect();
             let terms_lower: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
-            let pattern_str = terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|");
-            let pattern = RegexBuilder::new(&pattern_str).case_insensitive(true).build();
+
+            let pattern = match match_mode {
+                "exact" => {
+                    RegexBuilder::new(&regex::escape(raw_query))
+                        .case_insensitive(true)
+                        .build()
+                }
+                "regex" => {
+                    RegexBuilder::new(raw_query)
+                        .case_insensitive(true)
+                        .build()
+                }
+                "any" => {
+                    let pattern_str = terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|");
+                    RegexBuilder::new(&pattern_str)
+                        .case_insensitive(true)
+                        .build()
+                }
+                _ => {
+                    // "all" mode (default)
+                    if terms.len() == 1 {
+                        RegexBuilder::new(&regex::escape(terms[0]))
+                            .case_insensitive(true)
+                            .build()
+                    } else {
+                        let lookaheads: String = terms
+                            .iter()
+                            .map(|t| format!("(?=.*(?i:{}))", regex::escape(t)))
+                            .collect::<Vec<_>>()
+                            .join("");
+                        let pattern_str = format!("^{}", lookaheads);
+                        RegexBuilder::new(&pattern_str)
+                            .case_insensitive(true)
+                            .build()
+                    }
+                }
+            };
 
             struct FindResult {
                 display_path: String,
@@ -976,6 +952,7 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
 
             let mut merged: std::collections::HashMap<String, FindResult> =
                 std::collections::HashMap::new();
+            let mut all_modules: Vec<(&RepoState, crate::fuzzy::SearchModuleResult)> = Vec::new();
 
             for repo in &repos {
                 let config = &repo.config;
@@ -983,10 +960,20 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                 // 1. Fuzzy filename search
                 let query = crate::fuzzy::preprocess_search_query(raw_query);
                 let search_resp =
-                    run_search(&repo.search_files, &repo.search_modules, &query, limit, 0);
+                    run_search(&repo.search_files, &repo.search_modules, &query, file_limit, module_limit);
+
+                // Collect module results
+                for m in search_resp.modules {
+                    all_modules.push((repo, m));
+                }
 
                 // Add fuzzy search results
                 for f in &search_resp.files {
+                    if let Some(prefix) = path_filter {
+                        if !f.path.starts_with(prefix) {
+                            continue;
+                        }
+                    }
                     if let Some(ref exts) = ext_filter {
                         let ext = f.ext.trim_start_matches('.');
                         if !exts.contains(ext) {
@@ -1022,6 +1009,11 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                         .all_files
                         .iter()
                         .filter(|f| {
+                            if let Some(prefix) = path_filter {
+                                if !f.rel_path.starts_with(prefix) {
+                                    return false;
+                                }
+                            }
                             if let Some(ref exts) = ext_filter {
                                 if !exts.contains(&f.ext) {
                                     return false;
@@ -1140,7 +1132,7 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                     .partial_cmp(&(norm_a * boost_a))
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
-            ranked.truncate(limit);
+            ranked.truncate(file_limit);
 
             let query_time = start.elapsed().as_millis();
             let mut out = format!(
@@ -1149,6 +1141,19 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                 raw_query
             );
 
+            // Module results
+            if !all_modules.is_empty() {
+                all_modules.sort_by(|a, b| b.1.score.partial_cmp(&a.1.score).unwrap_or(std::cmp::Ordering::Equal));
+                all_modules.truncate(module_limit);
+                out.push_str("Modules:\n");
+                for (repo, m) in &all_modules {
+                    let prefix = if multi { format!("[{}] ", repo.name) } else { String::new() };
+                    out.push_str(&format!("  {prefix}{} ({} files, score {:.1})\n", m.id, m.file_count, m.score));
+                }
+                out.push('\n');
+            }
+
+            // File results
             for r in &ranked {
                 let has_name = r.name_score > 0.0;
                 let has_content = r.grep_count > 0;
