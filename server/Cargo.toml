@@ -14,6 +14,7 @@ categories = ["command-line-utilities", "development-tools"]
 default = []
 tiktoken = ["dep:tiktoken-rs"]
 semantic = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers", "dep:hf-hub"]
+cuda = ["semantic", "candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
 
 [dependencies]
 axum = "0.8"

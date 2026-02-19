@@ -1327,11 +1327,12 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
             }
             let limit = args["limit"].as_u64().unwrap_or(10).min(50) as usize;
 
-            let index = match &repo.semantic_index {
+            let sem_guard = repo.semantic_index.read().unwrap();
+            let index = match sem_guard.as_ref() {
                 Some(idx) => idx,
                 None => {
                     return (
-                        "Error: Semantic index not available. Start the server with --semantic flag to enable.".to_string(),
+                        "Error: Semantic index not available. It may still be building in the background, or start the server with --semantic flag.".to_string(),
                         true,
                     );
                 }

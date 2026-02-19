@@ -20,6 +20,22 @@ const MODEL_ID: &str = "sentence-transformers/all-MiniLM-L6-v2";
 /// Embedding dimensionality for all-MiniLM-L6-v2.
 const EMBEDDING_DIM: usize = 384;
 
+/// Select the best available device: CUDA GPU if available, otherwise CPU.
+fn select_device() -> Device {
+    #[cfg(feature = "cuda")]
+    {
+        match Device::new_cuda(0) {
+            Ok(dev) => {
+                return dev;
+            }
+            Err(e) => {
+                eprintln!("  [semantic] CUDA unavailable ({e}), falling back to CPU");
+            }
+        }
+    }
+    Device::Cpu
+}
+
 // ---------------------------------------------------------------------------
 // Chunk extraction
 // ---------------------------------------------------------------------------
@@ -104,14 +120,23 @@ fn extract_chunks(files: &[ScannedFile]) -> Vec<Chunk> {
 
 /// Load the BERT model and tokenizer from HuggingFace Hub.
 /// Models are cached in `~/.cache/codescope/models/` via hf-hub defaults.
-fn load_model() -> Result<(BertModel, Tokenizer), String> {
+/// Returns (model, tokenizer, device) so callers reuse the same device.
+fn load_model() -> Result<(BertModel, Tokenizer, Device), String> {
+    let device = select_device();
+    let device_name = match &device {
+        Device::Cpu => "CPU".to_string(),
+        #[cfg(feature = "cuda")]
+        Device::Cuda(_) => "CUDA GPU".to_string(),
+        #[allow(unreachable_patterns)]
+        _ => "unknown".to_string(),
+    };
+
     let api = Api::new().map_err(|e| format!("Failed to create HF API: {e}"))?;
 
-    // Set cache dir to ~/.cache/codescope/models/ if possible
     let repo =
         api.repo(Repo::with_revision(MODEL_ID.to_string(), RepoType::Model, "main".to_string()));
 
-    eprintln!("  [semantic] Downloading/loading model {MODEL_ID}...");
+    eprintln!("  [semantic] Loading model {MODEL_ID} on {device_name}...");
 
     let config_path =
         repo.get("config.json").map_err(|e| format!("Failed to get config.json: {e}"))?;
@@ -129,7 +154,6 @@ fn load_model() -> Result<(BertModel, Tokenizer), String> {
     let tokenizer = Tokenizer::from_file(&tokenizer_path)
         .map_err(|e| format!("Failed to load tokenizer: {e}"))?;
 
-    let device = Device::Cpu;
     let vb = unsafe {
         VarBuilder::from_mmaped_safetensors(&[weights_path], DType::F32, &device)
             .map_err(|e| format!("Failed to load weights: {e}"))?
@@ -138,8 +162,8 @@ fn load_model() -> Result<(BertModel, Tokenizer), String> {
     let model =
         BertModel::load(vb, &config).map_err(|e| format!("Failed to load BERT model: {e}"))?;
 
-    eprintln!("  [semantic] Model loaded successfully");
-    Ok((model, tokenizer))
+    eprintln!("  [semantic] Model loaded on {device_name}");
+    Ok((model, tokenizer, device))
 }
 
 // ---------------------------------------------------------------------------
@@ -150,13 +174,12 @@ fn load_model() -> Result<(BertModel, Tokenizer), String> {
 fn encode_batch(
     model: &BertModel,
     tokenizer: &Tokenizer,
+    device: &Device,
     texts: &[&str],
 ) -> Result<Vec<Vec<f32>>, String> {
     if texts.is_empty() {
         return Ok(Vec::new());
     }
-
-    let device = Device::Cpu;
 
     let encodings = tokenizer
         .encode_batch(texts.to_vec(), true)
@@ -185,15 +208,15 @@ fn encode_batch(
     }
 
     let batch_size = texts.len();
-    let input_ids = Tensor::from_vec(all_ids, (batch_size, max_len), &device)
+    let input_ids = Tensor::from_vec(all_ids, (batch_size, max_len), device)
         .map_err(|e| format!("Tensor creation failed: {e}"))?;
     let attention_mask = Tensor::from_vec(
         all_mask.iter().map(|&x| x as f32).collect::<Vec<_>>(),
         (batch_size, max_len),
-        &device,
+        device,
     )
     .map_err(|e| format!("Tensor creation failed: {e}"))?;
-    let token_type_ids = Tensor::from_vec(all_type_ids, (batch_size, max_len), &device)
+    let token_type_ids = Tensor::from_vec(all_type_ids, (batch_size, max_len), device)
         .map_err(|e| format!("Tensor creation failed: {e}"))?;
 
     // Forward pass
@@ -259,6 +282,7 @@ fn encode_batch(
 // ---------------------------------------------------------------------------
 
 /// Build a semantic index from scanned files.
+/// Uses parallel workers to saturate CPU cores during embedding.
 /// Returns `None` if model loading fails or no chunks found.
 pub fn build_semantic_index(files: &[ScannedFile]) -> Option<SemanticIndex> {
     let chunks = extract_chunks(files);
@@ -269,56 +293,102 @@ pub fn build_semantic_index(files: &[ScannedFile]) -> Option<SemanticIndex> {
 
     eprintln!("  [semantic] Extracted {} chunks from {} files", chunks.len(), files.len());
 
-    let (model, tokenizer) = match load_model() {
-        Ok(m) => m,
+    // Pre-load model once to validate, warm the HF cache, and detect device
+    let use_gpu = match load_model() {
+        Ok((_, _, ref dev)) => !matches!(dev, Device::Cpu),
         Err(e) => {
             eprintln!("  [semantic] Failed to load model: {e}");
             return None;
         }
     };
 
-    // Embed in batches of 32
-    let batch_size = 32;
+    // GPU: single worker with larger batches (GPU handles parallelism internally)
+    // CPU: multiple workers to saturate cores
+    let batch_size = if use_gpu { 128 } else { 32 };
+    let total_batches = (chunks.len() + batch_size - 1) / batch_size;
+    let n_workers = if use_gpu { 1 } else { num_cpus().min(total_batches).max(1) };
+
+    let device_label = if use_gpu { "GPU" } else { "CPU" };
+    eprintln!(
+        "  [semantic] Embedding {} batches across {} worker(s) on {device_label}...",
+        total_batches, n_workers
+    );
+
+    // Split chunks into per-worker groups
+    let batches: Vec<&[Chunk]> = chunks.chunks(batch_size).collect();
+    let group_size = (batches.len() + n_workers - 1) / n_workers;
+    let groups: Vec<Vec<&[Chunk]>> = batches.chunks(group_size).map(|g| g.to_vec()).collect();
+
+    let progress = std::sync::atomic::AtomicUsize::new(0);
+
+    // Each worker loads its own model instance and processes its batch group
+    let results: Vec<Option<(Vec<f32>, Vec<ChunkMeta>)>> = std::thread::scope(|s| {
+        let handles: Vec<_> = groups
+            .iter()
+            .enumerate()
+            .map(|(worker_id, group)| {
+                let progress = &progress;
+                s.spawn(move || {
+                    let (model, tokenizer, device) = match load_model() {
+                        Ok(m) => m,
+                        Err(e) => {
+                            eprintln!("  [semantic] Worker {worker_id} failed to load model: {e}");
+                            return None;
+                        }
+                    };
+
+                    let mut embs: Vec<f32> = Vec::new();
+                    let mut metas: Vec<ChunkMeta> = Vec::new();
+
+                    for batch in group {
+                        let texts: Vec<&str> = batch.iter().map(|c| c.text.as_str()).collect();
+                        match encode_batch(&model, &tokenizer, &device, &texts) {
+                            Ok(embeddings) => {
+                                for (i, emb) in embeddings.into_iter().enumerate() {
+                                    embs.extend_from_slice(&emb);
+                                    let chunk = &batch[i];
+                                    let snippet = if chunk.text.len() > 200 {
+                                        let mut end = 200;
+                                        while !chunk.text.is_char_boundary(end) && end > 0 {
+                                            end -= 1;
+                                        }
+                                        chunk.text[..end].to_string()
+                                    } else {
+                                        chunk.text.clone()
+                                    };
+                                    metas.push(ChunkMeta {
+                                        file_path: chunk.file_path.clone(),
+                                        start_line: chunk.start_line,
+                                        snippet,
+                                    });
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("  [semantic] Worker {worker_id} batch failed: {e}");
+                                continue;
+                            }
+                        }
+
+                        let done = progress.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                        if done % 20 == 0 || done == total_batches {
+                            eprintln!("  [semantic] Progress: {done}/{total_batches} batches");
+                        }
+                    }
+
+                    Some((embs, metas))
+                })
+            })
+            .collect();
+
+        handles.into_iter().map(|h| h.join().unwrap_or(None)).collect()
+    });
+
+    // Merge worker results
     let mut all_embeddings: Vec<f32> = Vec::with_capacity(chunks.len() * EMBEDDING_DIM);
     let mut chunk_meta: Vec<ChunkMeta> = Vec::with_capacity(chunks.len());
-
-    let total_batches = (chunks.len() + batch_size - 1) / batch_size;
-
-    for (batch_idx, batch) in chunks.chunks(batch_size).enumerate() {
-        let texts: Vec<&str> = batch.iter().map(|c| c.text.as_str()).collect();
-
-        match encode_batch(&model, &tokenizer, &texts) {
-            Ok(embeddings) => {
-                for (i, emb) in embeddings.into_iter().enumerate() {
-                    all_embeddings.extend_from_slice(&emb);
-                    let chunk = &batch[i];
-                    let snippet = if chunk.text.len() > 200 {
-                        chunk.text[..200].to_string()
-                    } else {
-                        chunk.text.clone()
-                    };
-                    chunk_meta.push(ChunkMeta {
-                        file_path: chunk.file_path.clone(),
-                        start_line: chunk.start_line,
-                        snippet,
-                    });
-                }
-            }
-            Err(e) => {
-                eprintln!("  [semantic] Batch {}/{} failed: {e}", batch_idx + 1, total_batches);
-                // Skip failed batch, continue with others
-                continue;
-            }
-        }
-
-        if (batch_idx + 1) % 10 == 0 || batch_idx + 1 == total_batches {
-            eprintln!(
-                "  [semantic] Embedded {}/{} batches ({} chunks)",
-                batch_idx + 1,
-                total_batches,
-                chunk_meta.len()
-            );
-        }
+    for result in results.into_iter().flatten() {
+        all_embeddings.extend(result.0);
+        chunk_meta.extend(result.1);
     }
 
     if chunk_meta.is_empty() {
@@ -333,6 +403,11 @@ pub fn build_semantic_index(files: &[ScannedFile]) -> Option<SemanticIndex> {
     );
 
     Some(SemanticIndex { embeddings: all_embeddings, chunk_meta, dim: EMBEDDING_DIM })
+}
+
+/// Get number of available CPU cores (capped at 8 to avoid memory explosion).
+fn num_cpus() -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).min(8)
 }
 
 // ---------------------------------------------------------------------------
@@ -353,9 +428,9 @@ pub fn semantic_search(
     query: &str,
     limit: usize,
 ) -> Result<Vec<SemanticSearchResult>, String> {
-    let (model, tokenizer) = load_model()?;
+    let (model, tokenizer, device) = load_model()?;
 
-    let query_embeddings = encode_batch(&model, &tokenizer, &[query])?;
+    let query_embeddings = encode_batch(&model, &tokenizer, &device, &[query])?;
     if query_embeddings.is_empty() {
         return Ok(Vec::new());
     }

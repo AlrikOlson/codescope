@@ -213,7 +213,7 @@ pub struct RepoState {
     pub term_doc_freq: TermDocFreq,
     pub scan_time_ms: u64,
     #[cfg(feature = "semantic")]
-    pub semantic_index: Option<SemanticIndex>,
+    pub semantic_index: std::sync::Arc<std::sync::RwLock<Option<SemanticIndex>>>,
 }
 
 // ---------------------------------------------------------------------------

@@ -119,21 +119,7 @@ pub fn scan_repo_with_options(
     let term_doc_freq = build_term_doc_freq(&all_files);
 
     #[cfg(feature = "semantic")]
-    let semantic_index = if _enable_semantic {
-        eprintln!("  [{name}] Building semantic index...");
-        let sem_start = Instant::now();
-        let idx = semantic::build_semantic_index(&all_files);
-        if let Some(ref idx) = idx {
-            eprintln!(
-                "  [{name}] Semantic index: {} chunks ({}ms)",
-                idx.chunk_meta.len(),
-                sem_start.elapsed().as_millis()
-            );
-        }
-        idx
-    } else {
-        None
-    };
+    let semantic_index = std::sync::Arc::new(std::sync::RwLock::new(None));
 
     let scan_time_ms = start.elapsed().as_millis() as u64;
 
@@ -228,9 +214,13 @@ fn print_help() {
     eprintln!("  --dist <PATH>         Path to web UI dist directory");
     eprintln!("  --tokenizer <NAME>    Token counter: bytes-estimate (default) or tiktoken");
     #[cfg(feature = "semantic")]
-    eprintln!(
-        "  --semantic            Enable semantic code search (downloads ML model on first use)"
-    );
+    {
+        eprintln!(
+            "  --semantic            Enable semantic code search (downloads ML model on first use)"
+        );
+        #[cfg(feature = "cuda")]
+        eprintln!("                        (CUDA GPU acceleration enabled)");
+    }
     eprintln!("  --help                Show this help message");
     eprintln!("  --version             Show version");
     eprintln!();
@@ -407,6 +397,41 @@ async fn main() {
     // Build unified ServerState (shared by MCP and HTTP modes)
     let server_state = ServerState { repos, default_repo, cross_repo_edges, tokenizer: tok };
     let state = Arc::new(RwLock::new(server_state));
+
+    // Spawn background semantic indexing — server starts immediately
+    #[cfg(feature = "semantic")]
+    if enable_semantic {
+        let state_bg = Arc::clone(&state);
+        std::thread::spawn(move || {
+            let s = state_bg.read().unwrap();
+            // Collect (name, files, semantic_index_handle) for each repo
+            let work: Vec<(
+                String,
+                Vec<ScannedFile>,
+                std::sync::Arc<std::sync::RwLock<Option<types::SemanticIndex>>>,
+            )> = s
+                .repos
+                .values()
+                .map(|r| {
+                    (r.name.clone(), r.all_files.clone(), std::sync::Arc::clone(&r.semantic_index))
+                })
+                .collect();
+            drop(s); // release the read lock
+
+            for (name, files, sem_handle) in work {
+                eprintln!("  [{name}] Building semantic index in background...");
+                let sem_start = std::time::Instant::now();
+                if let Some(idx) = semantic::build_semantic_index(&files) {
+                    eprintln!(
+                        "  [{name}] Semantic index ready: {} chunks ({}ms)",
+                        idx.chunk_meta.len(),
+                        sem_start.elapsed().as_millis()
+                    );
+                    *sem_handle.write().unwrap() = Some(idx);
+                }
+            }
+        });
+    }
 
     if mcp_mode {
         run_mcp(state);
