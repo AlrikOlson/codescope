@@ -115,7 +115,7 @@ jobs:
           git add server/Cargo.toml
           git diff --cached --quiet || git commit -m "release: $NEW_TAG"
           git tag "$NEW_TAG"
-          git push origin master --tags
+          git push origin HEAD:master --tags
 
   build:
     needs: version
