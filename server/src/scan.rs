@@ -49,9 +49,12 @@ pub fn describe(rel_path: &str) -> String {
         // Config
         "ini" | "cfg" | "conf" | "toml" | "yaml" | "yml" | "json" | "xml" => "config",
         // Scripts
-        "py" | "rb" | "lua" | "sh" | "bash" | "zsh" | "ps1" | "bat" => "script",
+        "py" | "rb" | "lua" | "sh" | "bash" | "zsh" | "ps1" | "psm1" | "psd1" | "bat"
+        | "cmd" => "script",
+        // C# source
+        "cs" => "source",
         // Build
-        "cs" | "csproj" | "sln" | "cmake" | "make" | "gradle" => "build",
+        "csproj" | "sln" | "cmake" | "make" | "gradle" | "props" | "targets" => "build",
         // Web source
         "js" | "ts" | "jsx" | "tsx" | "mjs" | "cjs" => "source",
         // Style
@@ -728,6 +731,10 @@ fn import_exts_csharp() -> HashSet<&'static str> {
     ["cs"].iter().copied().collect()
 }
 
+fn import_exts_powershell() -> HashSet<&'static str> {
+    ["ps1", "psm1", "psd1"].iter().copied().collect()
+}
+
 pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
     let cpp_exts = import_exts_cpp();
     let py_exts = import_exts_python();
@@ -735,6 +742,7 @@ pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
     let rust_exts = import_exts_rust();
     let go_exts = import_exts_go();
     let cs_exts = import_exts_csharp();
+    let ps_exts = import_exts_powershell();
 
     // Regex patterns for each language family
     let include_re = regex::Regex::new(r#"#include\s+"([^"]+)""#).unwrap();
@@ -747,6 +755,9 @@ pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
         regex::Regex::new(r#"(?:use\s+(?:crate|super)::([\w]+)|mod\s+([\w]+)\s*;)"#).unwrap();
     let go_import_re = regex::Regex::new(r#"import\s+(?:\(\s*)?(?:"([^"]+)")"#).unwrap();
     let cs_using_re = regex::Regex::new(r#"(?m)^using\s+(?:static\s+)?([\w.]+)\s*;"#).unwrap();
+    // PowerShell: dot-source (. .\file.ps1) and Import-Module
+    let ps_dotsource_re = regex::Regex::new(r#"(?m)\.\s+['".]?\.?[\\/]?([^\s'"]+\.ps[md]?1)"#).unwrap();
+    let ps_import_re = regex::Regex::new(r#"(?mi)Import-Module\s+['".]?\.?[\\/]?([^\s'";\)]+)"#).unwrap();
     let cs_namespace_re =
         regex::Regex::new(r#"(?m)^(?:namespace\s+([\w.]+))"#).unwrap();
 
@@ -834,7 +845,8 @@ pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
                 || js_exts.contains(ext)
                 || rust_exts.contains(ext)
                 || go_exts.contains(ext)
-                || cs_exts.contains(ext);
+                || cs_exts.contains(ext)
+                || ps_exts.contains(ext);
             if !has_patterns {
                 return None;
             }
@@ -943,6 +955,21 @@ pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
                         if path != f.rel_path {
                             resolved.push(path);
                         }
+                    }
+                }
+            }
+
+            if ps_exts.contains(ext) {
+                // Dot-source: . .\helpers.ps1, . "$PSScriptRoot\utils.ps1"
+                for cap in ps_dotsource_re.captures_iter(&content) {
+                    if let Some(path) = resolve_import(&cap[1]) {
+                        resolved.push(path);
+                    }
+                }
+                // Import-Module .\MyModule or Import-Module MyModule
+                for cap in ps_import_re.captures_iter(&content) {
+                    if let Some(path) = resolve_import(&cap[1]) {
+                        resolved.push(path);
                     }
                 }
             }

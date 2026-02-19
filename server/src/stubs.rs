@@ -20,7 +20,8 @@ pub fn classify_language(ext: &str) -> LanguageFamily {
         // Brace-based languages
         "h" | "hpp" | "hxx" | "cpp" | "cxx" | "cc" | "c" | "cs" | "java" | "kt" | "scala"
         | "rs" | "go" | "js" | "ts" | "jsx" | "tsx" | "mjs" | "cjs" | "swift" | "usf"
-        | "ush" | "hlsl" | "glsl" | "vert" | "frag" | "comp" | "wgsl" | "d" => {
+        | "ush" | "hlsl" | "glsl" | "vert" | "frag" | "comp" | "wgsl" | "d"
+        | "ps1" | "psm1" | "psd1" => {
             LanguageFamily::BraceBased
         }
         // Indent-based languages

@@ -535,7 +535,7 @@ const KNOWN_EXTS: &[&str] = &[
     "rs", "go", "java", "kt", "scala", "swift",
     "css", "scss", "less", "sass",
     "html", "htm", "vue", "svelte",
-    "sh", "bash", "zsh", "ps1", "bat",
+    "sh", "bash", "zsh", "ps1", "psm1", "psd1", "bat", "cmd",
     "md", "rst", "txt", "adoc",
     "cmake", "make", "gradle", "csproj", "sln",
 ];
