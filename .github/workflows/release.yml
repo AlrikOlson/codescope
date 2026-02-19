@@ -14,8 +14,8 @@ jobs:
     if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     outputs:
-      new_tag: ${{ steps.bump.outputs.new_tag }}
-      skip: ${{ steps.bump.outputs.skip }}
+      new_tag: ${{ steps.ai.outputs.new_tag }}
+      skip: ${{ steps.ai.outputs.skip }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,80 +42,39 @@ jobs:
       - name: Initialize CodeScope index
         run: codescope-server init .
 
-      - name: Determine version bump
-        id: bump
+      - name: AI release analysis
+        id: ai
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        shell: bash
+        run: node .github/scripts/ai-release.mjs
+
+      - name: Update Cargo.toml, commit, and tag
+        if: steps.ai.outputs.skip != 'true'
         run: |
-          set -euo pipefail
-
-          LAST_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "v0.0.0")
-          echo "Last tag: $LAST_TAG"
-
-          HEAD_TAGS=$(git tag --points-at HEAD | grep '^v' || true)
-          if [ -n "$HEAD_TAGS" ]; then
-            echo "HEAD already tagged ($HEAD_TAGS) — skipping"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "new_tag=$HEAD_TAGS" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          if [ "$LAST_TAG" = "v0.0.0" ]; then
-            COMMITS=$(git log --pretty=format:"%h %s" -20)
-          else
-            COMMITS=$(git log "$LAST_TAG"..HEAD --pretty=format:"%h %s")
-          fi
-
-          if [ -z "$COMMITS" ]; then
-            echo "No new commits since $LAST_TAG — skipping"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "new_tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "Commits since $LAST_TAG:"
-          echo "$COMMITS"
-          echo "---"
-
-          # Run the AI version bump agent
-          BUMP=$(node .github/scripts/ai-version-bump.mjs "$LAST_TAG" 2>&1 | tee /dev/stderr | tail -1)
-
-          # Validate
-          case "$BUMP" in
-            major|minor|patch) ;;
-            *) echo "Invalid bump '$BUMP' — defaulting to patch"; BUMP="patch" ;;
-          esac
-
-          VERSION="${LAST_TAG#v}"
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
-
-          case "$BUMP" in
-            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
-            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
-            patch) PATCH=$((PATCH + 1)) ;;
-          esac
-
-          NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
-          echo "AI Bump: $BUMP ($LAST_TAG -> $NEW_TAG)"
-          echo "new_tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
-          echo "skip=false" >> "$GITHUB_OUTPUT"
-
-      - name: Update Cargo.toml and tag
-        if: steps.bump.outputs.skip != 'true'
-        run: |
-          NEW_TAG="${{ steps.bump.outputs.new_tag }}"
+          NEW_TAG="${{ steps.ai.outputs.new_tag }}"
           VERSION="${NEW_TAG#v}"
+          COMMIT_MSG=$(node -e "
+            const fs = require('fs');
+            const data = JSON.parse(fs.readFileSync('/tmp/ai-release-output.json', 'utf8'));
+            process.stdout.write(data.commitMessage);
+          ")
 
           sed -i "s/^version = \".*\"/version = \"$VERSION\"/" server/Cargo.toml
-          echo "Updated server/Cargo.toml to $VERSION"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add server/Cargo.toml
-          git diff --cached --quiet || git commit -m "release: $NEW_TAG"
+          git diff --cached --quiet || git commit -m "$COMMIT_MSG"
           git tag "$NEW_TAG"
           git push origin HEAD:master --tags
+
+      - name: Upload AI release output
+        if: steps.ai.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-release-output
+          path: /tmp/ai-release-output.json
+          retention-days: 1
 
   build:
     needs: version
@@ -129,13 +88,51 @@ jobs:
     if: needs.version.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Download all artifacts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
 
-      - name: Create GitHub Release
+      - name: Download AI release output
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-release-output
+          path: /tmp
+
+      - name: Read AI release body
+        id: notes
+        run: |
+          BODY=$(node -e "
+            const fs = require('fs');
+            const data = JSON.parse(fs.readFileSync('/tmp/ai-release-output.json', 'utf8'));
+            process.stdout.write(data.releaseBody || '');
+          ")
+          if [ -z "$BODY" ]; then
+            echo "use_generated=true" >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "body<<RELEASE_BODY_DELIM"
+              echo "$BODY"
+              echo "RELEASE_BODY_DELIM"
+            } >> "$GITHUB_OUTPUT"
+            echo "use_generated=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release (AI body)
+        if: steps.notes.outputs.use_generated == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.new_tag }}
+          body: ${{ steps.notes.outputs.body }}
+          files: artifacts/*.tar.gz
+
+      - name: Create GitHub Release (auto-generated)
+        if: steps.notes.outputs.use_generated == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.version.outputs.new_tag }}

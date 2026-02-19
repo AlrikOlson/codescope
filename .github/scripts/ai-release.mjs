@@ -1,0 +1,156 @@
+#!/usr/bin/env node
+// AI-powered release analysis using Claude Agent SDK + CodeScope MCP.
+// Produces: semver bump, release commit message, and GitHub release body.
+// All outputs written to GITHUB_OUTPUT and /tmp/ai-release-output.json.
+
+import { gatherContext } from "./lib/git.mjs";
+import { runAgent, parseAgentJson } from "./lib/agent.mjs";
+import { parseTag, applyBump, validateBump } from "./lib/version.mjs";
+import { setOutput, writeReleaseOutput } from "./lib/output.mjs";
+
+const OUTPUT_FILE = "/tmp/ai-release-output.json";
+
+const SYSTEM_PROMPT = `You are a precise release engineer for CodeScope, a Rust MCP server + TypeScript web UI for codebase search and navigation.
+
+You have access to CodeScope MCP tools. Use them to read changed files and understand the impact of changes before making decisions.
+
+Be thorough in your analysis but concise in your output.`;
+
+/**
+ * Build the prompt for the AI agent.
+ * @param {string} lastTag
+ * @param {string} commits
+ * @param {string} diffStat
+ * @returns {string}
+ */
+function buildPrompt(lastTag, commits, diffStat) {
+  return `Analyze the changes to CodeScope since the last release and produce release metadata.
+
+LAST TAG: ${lastTag}
+
+COMMITS SINCE LAST TAG:
+${commits}
+
+FILES CHANGED:
+${diffStat}
+
+## Instructions
+
+1. Use CodeScope tools (cs_find, cs_grep, cs_read_file, cs_read_context) to read the changed files and understand what was modified.
+2. Check if any public APIs, MCP tool interfaces, CLI flags, or config formats changed in breaking ways.
+3. Check if new features, tools, or capabilities were added.
+4. Determine the correct semver bump:
+   - **MAJOR**: breaking changes to MCP protocol, CLI interface, API endpoints, or config format that would break existing users/integrations
+   - **MINOR**: new features, new MCP tools, new CLI flags, new API endpoints, meaningful new capabilities
+   - **PATCH**: bug fixes, performance improvements, refactoring, documentation, CI/CD changes, dependency updates
+   When in doubt between minor and patch, prefer patch. Only use major for genuine breaking changes.
+5. Write a conventional-commit release commit message (e.g. "release: v1.2.4 \u2014 fix module resolution edge case").
+6. Write a GitHub release body in markdown with:
+   - A "What's Changed" section grouping changes by category (Features, Fixes, Improvements, Internal)
+   - Specific file/module references from your CodeScope analysis
+   - Keep it concise but informative
+
+After your analysis, your FINAL line of output must be EXACTLY one JSON object (no markdown fencing, no text after):
+{"bump":"patch","reason":"one sentence explanation","commitMessage":"release: vX.Y.Z \u2014 summary","releaseBody":"## What's Changed\\n\\n### Fixes\\n- ..."}`;
+}
+
+/**
+ * Defaults for when AI output is incomplete.
+ * @param {string} newTag
+ * @returns {{ commitMessage: string, releaseBody: string, reason: string }}
+ */
+function defaults(newTag) {
+  return {
+    commitMessage: `release: ${newTag}`,
+    releaseBody: "",
+    reason: "AI output incomplete, used defaults",
+  };
+}
+
+async function main() {
+  const { lastTag, headTag, commits, diffStat } = gatherContext();
+
+  // Early exit: HEAD already tagged
+  if (headTag) {
+    console.error(`HEAD already tagged (${headTag}) — skipping`);
+    setOutput("skip", "true");
+    setOutput("new_tag", headTag);
+    return;
+  }
+
+  // Early exit: no new commits
+  if (!commits) {
+    console.error(`No new commits since ${lastTag} — skipping`);
+    setOutput("skip", "true");
+    setOutput("new_tag", lastTag);
+    return;
+  }
+
+  console.error(`Last tag: ${lastTag}`);
+  console.error(`Commits since ${lastTag}:\n${commits}\n---`);
+
+  // Run AI analysis
+  let text;
+  try {
+    text = await runAgent({
+      prompt: buildPrompt(lastTag, commits, diffStat),
+      systemPrompt: SYSTEM_PROMPT,
+    });
+  } catch (err) {
+    console.error(`Agent SDK error: ${err.message}`);
+    const version = parseTag(lastTag);
+    const newTag = applyBump(version, "patch");
+    const fallback = defaults(newTag);
+    finalize("patch", newTag, fallback.commitMessage, fallback.releaseBody, fallback.reason);
+    return;
+  }
+
+  // Parse structured output
+  const result = parseAgentJson(text, ["bump"]);
+  const bump = validateBump(result?.bump);
+  const version = parseTag(lastTag);
+  const newTag = applyBump(version, bump);
+  const fallback = defaults(newTag);
+
+  const commitMessage = result?.commitMessage || fallback.commitMessage;
+  const releaseBody = result?.releaseBody || fallback.releaseBody;
+  const reason = result?.reason || fallback.reason;
+
+  finalize(bump, newTag, commitMessage, releaseBody, reason);
+}
+
+/**
+ * Write all outputs and log the result.
+ */
+function finalize(bump, newTag, commitMessage, releaseBody, reason) {
+  setOutput("new_tag", newTag);
+  setOutput("skip", "false");
+  setOutput("bump", bump);
+
+  writeReleaseOutput(OUTPUT_FILE, {
+    bump,
+    newTag,
+    commitMessage,
+    releaseBody,
+    reason,
+  });
+
+  console.error(`AI Release: ${bump} — ${reason}`);
+}
+
+main().catch((err) => {
+  console.error(`Fatal: ${err.message}`);
+  // Don't fail the workflow — write patch defaults
+  const version = parseTag(process.argv[2] || "v0.0.0");
+  const newTag = applyBump(version, "patch");
+  setOutput("new_tag", newTag);
+  setOutput("skip", "false");
+  setOutput("bump", "patch");
+  writeReleaseOutput(OUTPUT_FILE, {
+    bump: "patch",
+    newTag,
+    commitMessage: `release: ${newTag}`,
+    releaseBody: "",
+    reason: `Fatal error: ${err.message}`,
+  });
+});
