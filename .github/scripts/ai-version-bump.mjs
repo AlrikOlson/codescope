@@ -3,11 +3,9 @@
 // Runs a Claude Code session with full codebase search capabilities
 // to analyze changes and determine the correct version bump.
 
-import { query } from "@anthropic-ai/claude-code";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import { execSync } from "child_process";
-import { appendFileSync } from "fs";
 
-const GITHUB_OUTPUT = process.env.GITHUB_OUTPUT;
 const lastTag = process.argv[2] || "v0.0.0";
 
 function git(cmd) {
@@ -80,6 +78,7 @@ async function main() {
           "mcp__codescope__cs_status",
         ],
         permissionMode: "bypassPermissions",
+        allowDangerouslySkipPermissions: true,
         cwd: process.cwd(),
       },
     })) {
@@ -107,7 +106,6 @@ async function main() {
     }
   } catch (err) {
     console.error(`Agent SDK error: ${err.message}`);
-    // Fall back to patch
     output("patch", "Agent SDK error, defaulting to patch");
     return;
   }

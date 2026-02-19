@@ -28,7 +28,7 @@ jobs:
           node-version: 22
 
       - name: Install Claude Agent SDK
-        run: npm install @anthropic-ai/claude-code
+        run: npm install @anthropic-ai/claude-agent-sdk
 
       - name: Install CodeScope
         run: |
