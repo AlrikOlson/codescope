@@ -207,34 +207,41 @@ pub struct CrossRepoEdge {
 }
 
 // ---------------------------------------------------------------------------
-// MCP state (multi-repo)
+// Server state (unified — used by both MCP and HTTP modes)
 // ---------------------------------------------------------------------------
 
-pub struct McpState {
+pub struct ServerState {
     pub repos: BTreeMap<String, RepoState>,
     pub default_repo: Option<String>,
     pub cross_repo_edges: Vec<CrossRepoEdge>,
     pub tokenizer: Arc<dyn crate::tokenizer::Tokenizer>,
 }
 
+impl ServerState {
+    /// Returns the default repo (single-repo mode) or the first repo.
+    pub fn default_repo(&self) -> &RepoState {
+        if let Some(ref name) = self.default_repo {
+            &self.repos[name]
+        } else {
+            self.repos.values().next().expect("no repos in state")
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
-// App state (HTTP — kept for web UI, single-repo for now)
+// HTTP-specific types (pre-computed JSON cache + Axum state)
 // ---------------------------------------------------------------------------
 
-pub struct AppState {
-    pub project_root: PathBuf,
-    pub config: ScanConfig,
+pub struct HttpCache {
     pub tree_json: String,
     pub manifest_json: String,
     pub deps_json: String,
-    pub deps: BTreeMap<String, DepEntry>,
-    pub all_files: Vec<ScannedFile>,
-    pub search_files: Vec<SearchFileEntry>,
-    pub search_modules: Vec<SearchModuleEntry>,
-    pub import_graph: ImportGraph,
-    /// Lazy cache: rel_path -> (raw content, tier1 stubs, fast token estimate)
-    pub stub_cache: DashMap<String, CachedStub>,
-    pub tokenizer: Arc<dyn crate::tokenizer::Tokenizer>,
+}
+
+#[derive(Clone)]
+pub struct AppContext {
+    pub state: Arc<std::sync::RwLock<ServerState>>,
+    pub cache: Arc<HttpCache>,
 }
 
 // ---------------------------------------------------------------------------

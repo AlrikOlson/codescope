@@ -408,40 +408,33 @@ async fn main() {
         repos.len()
     );
 
+    // Build unified ServerState (shared by MCP and HTTP modes)
+    let server_state = ServerState {
+        repos,
+        default_repo,
+        cross_repo_edges,
+        tokenizer: tok,
+    };
+    let state = Arc::new(RwLock::new(server_state));
+
     if mcp_mode {
-        let mcp_state = McpState {
-            repos,
-            default_repo,
-            cross_repo_edges,
-            tokenizer: tok,
-        };
-        run_mcp(Arc::new(RwLock::new(mcp_state)));
+        run_mcp(state);
         return;
     }
 
-    // HTTP server mode — use first repo for backwards compat
-    let first_repo_name = repo_specs[0].0.clone();
-    let first_repo = repos.remove(&first_repo_name).unwrap();
+    // HTTP mode — build pre-computed JSON cache from default repo
+    let cache = {
+        let s = state.read().unwrap();
+        let repo = s.default_repo();
+        let tree = build_tree(&repo.manifest);
+        Arc::new(HttpCache {
+            tree_json: serde_json::to_string(&tree).unwrap(),
+            manifest_json: serde_json::to_string(&repo.manifest).unwrap(),
+            deps_json: serde_json::to_string(&repo.deps).unwrap(),
+        })
+    };
 
-    let tree = build_tree(&first_repo.manifest);
-    let tree_json = serde_json::to_string(&tree).unwrap();
-    let manifest_json = serde_json::to_string(&first_repo.manifest).unwrap();
-    let deps_json = serde_json::to_string(&first_repo.deps).unwrap();
-
-    let state = Arc::new(AppState {
-        project_root: first_repo.root,
-        config: first_repo.config,
-        tree_json,
-        manifest_json,
-        deps_json,
-        deps: first_repo.deps,
-        all_files: first_repo.all_files,
-        search_files: first_repo.search_files,
-        search_modules: first_repo.search_modules,
-        import_graph: first_repo.import_graph,
-        stub_cache: first_repo.stub_cache,
-        tokenizer: tok,
-    });
+    let ctx = AppContext { state, cache };
 
     // Resolve dist dir: --dist flag, then cwd/dist, then ~/.local/share/codescope/dist
     let dist_dir = if let Some(pos) = args.iter().position(|a| a == "--dist") {
@@ -485,7 +478,7 @@ async fn main() {
         )
         .layer(CompressionLayer::new())
         .layer(CorsLayer::permissive())
-        .with_state(state);
+        .with_state(ctx);
 
     let port = std::env::var("PORT")
         .ok()

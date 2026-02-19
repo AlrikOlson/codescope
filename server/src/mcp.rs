@@ -14,7 +14,7 @@ use std::sync::{Arc, RwLock};
 // ---------------------------------------------------------------------------
 
 fn resolve_repo<'a>(
-    state: &'a McpState,
+    state: &'a ServerState,
     args: &serde_json::Value,
 ) -> Result<&'a RepoState, String> {
     match args.get("repo").and_then(|v| v.as_str()) {
@@ -42,7 +42,7 @@ fn resolve_repo<'a>(
 
 /// For search tools: collect all repos when no specific repo is requested.
 fn resolve_repos_for_search<'a>(
-    state: &'a McpState,
+    state: &'a ServerState,
     args: &serde_json::Value,
 ) -> Vec<&'a RepoState> {
     match args.get("repo").and_then(|v| v.as_str()) {
@@ -283,10 +283,10 @@ fn tool_definitions() -> serde_json::Value {
 }
 
 // ---------------------------------------------------------------------------
-// Tool call handler (read-only, takes &McpState)
+// Tool call handler (read-only, takes &ServerState)
 // ---------------------------------------------------------------------------
 
-fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (String, bool) {
+fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -> (String, bool) {
     match name {
         "cs_read_file" => {
             let repo = match resolve_repo(state, args) {
@@ -1352,7 +1352,7 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
 // ---------------------------------------------------------------------------
 
 fn handle_rescan(
-    state: &mut McpState,
+    state: &mut ServerState,
     args: &serde_json::Value,
 ) -> (String, bool) {
     let target_repo = args.get("repo").and_then(|v| v.as_str());
@@ -1390,7 +1390,7 @@ fn handle_rescan(
 }
 
 fn handle_add_repo(
-    state: &mut McpState,
+    state: &mut ServerState,
     args: &serde_json::Value,
 ) -> (String, bool) {
     let name = match args["name"].as_str() {
@@ -1432,7 +1432,7 @@ fn handle_add_repo(
 // MCP stdio server loop
 // ---------------------------------------------------------------------------
 
-pub fn run_mcp(state: Arc<RwLock<McpState>>) {
+pub fn run_mcp(state: Arc<RwLock<ServerState>>) {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let reader = stdin.lock();

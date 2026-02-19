@@ -7,7 +7,6 @@ use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::sync::Arc;
 use std::time::Instant;
 
 use crate::budget::{allocate_budget, ContextRequest, ContextResponse};
@@ -17,27 +16,27 @@ use crate::stubs::extract_stubs;
 use crate::types::*;
 
 // ---------------------------------------------------------------------------
-// Static data endpoints
+// Static data endpoints (served from pre-computed HttpCache — no lock needed)
 // ---------------------------------------------------------------------------
 
-pub async fn api_tree(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn api_tree(State(ctx): State<AppContext>) -> impl IntoResponse {
     (
         [("content-type", "application/json")],
-        state.tree_json.clone(),
+        ctx.cache.tree_json.clone(),
     )
 }
 
-pub async fn api_manifest(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn api_manifest(State(ctx): State<AppContext>) -> impl IntoResponse {
     (
         [("content-type", "application/json")],
-        state.manifest_json.clone(),
+        ctx.cache.manifest_json.clone(),
     )
 }
 
-pub async fn api_deps(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn api_deps(State(ctx): State<AppContext>) -> impl IntoResponse {
     (
         [("content-type", "application/json")],
-        state.deps_json.clone(),
+        ctx.cache.deps_json.clone(),
     )
 }
 
@@ -60,10 +59,13 @@ pub(crate) struct FileResponse {
 }
 
 pub async fn api_file(
-    State(state): State<Arc<AppState>>,
+    State(ctx): State<AppContext>,
     Query(q): Query<FileQuery>,
 ) -> Result<Json<FileResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let full_path = validate_path(&state.project_root, &q.path).map_err(|e| {
+    let s = ctx.state.read().unwrap();
+    let repo = s.default_repo();
+
+    let full_path = validate_path(&repo.root, &q.path).map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({ "error": e })),
@@ -131,13 +133,16 @@ pub(crate) struct BatchFilesResponse {
 }
 
 pub async fn api_files(
-    State(state): State<Arc<AppState>>,
+    State(ctx): State<AppContext>,
     Json(body): Json<BatchFilesRequest>,
 ) -> Result<Json<BatchFilesResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let s = ctx.state.read().unwrap();
+    let repo = s.default_repo();
+
     let mut files = HashMap::new();
 
     for p in &body.paths {
-        match validate_path(&state.project_root, p) {
+        match validate_path(&repo.root, p) {
             Err(e) => {
                 files.insert(
                     p.clone(),
@@ -214,7 +219,7 @@ pub(crate) struct GrepResponse {
 }
 
 pub async fn api_grep(
-    State(state): State<Arc<AppState>>,
+    State(ctx): State<AppContext>,
     Query(q): Query<GrepQuery>,
 ) -> Result<Json<GrepResponse>, (StatusCode, Json<serde_json::Value>)> {
     if q.q.len() < 2 {
@@ -256,13 +261,16 @@ pub async fn api_grep(
             )
         })?;
 
-    // Heavy file I/O — run on blocking thread pool with rayon parallelism
+    // Heavy file I/O — clone Arc, acquire read lock inside blocking closure
+    let state = ctx.state.clone();
     let response = tokio::task::spawn_blocking(move || {
         use rayon::prelude::*;
 
+        let s = state.read().unwrap();
+        let repo = s.default_repo();
         let start = Instant::now();
 
-        let candidates: Vec<&ScannedFile> = state
+        let candidates: Vec<&ScannedFile> = repo
             .all_files
             .iter()
             .filter(|f| {
@@ -272,7 +280,7 @@ pub async fn api_grep(
                     }
                 }
                 if let Some(ref cat) = q.cat {
-                    let file_cat = get_category_path(&f.rel_path, &state.config).join(" > ");
+                    let file_cat = get_category_path(&f.rel_path, &repo.config).join(" > ");
                     if !file_cat.starts_with(cat.as_str()) {
                         return false;
                     }
@@ -379,15 +387,17 @@ pub struct SearchQuery {
 }
 
 pub async fn api_search(
-    State(state): State<Arc<AppState>>,
+    State(ctx): State<AppContext>,
     Query(q): Query<SearchQuery>,
 ) -> Json<SearchResponse> {
+    let s = ctx.state.read().unwrap();
+    let repo = s.default_repo();
     let file_limit = q.file_limit.unwrap_or(80);
     let module_limit = q.module_limit.unwrap_or(8);
     let query = preprocess_search_query(&q.q);
     Json(run_search(
-        &state.search_files,
-        &state.search_modules,
+        &repo.search_files,
+        &repo.search_modules,
         &query,
         file_limit,
         module_limit,
@@ -413,13 +423,14 @@ pub(crate) struct ImportsResponse {
 }
 
 pub async fn api_imports(
-    State(state): State<Arc<AppState>>,
+    State(ctx): State<AppContext>,
     Query(q): Query<ImportsQuery>,
 ) -> Json<ImportsResponse> {
+    let s = ctx.state.read().unwrap();
+    let repo = s.default_repo();
     let direction = q.direction.as_deref().unwrap_or("both");
     let imports = if direction == "both" || direction == "imports" {
-        state
-            .import_graph
+        repo.import_graph
             .imports
             .get(&q.path)
             .cloned()
@@ -428,8 +439,7 @@ pub async fn api_imports(
         vec![]
     };
     let imported_by = if direction == "both" || direction == "imported_by" {
-        state
-            .import_graph
+        repo.import_graph
             .imported_by
             .get(&q.path)
             .cloned()
@@ -449,21 +459,24 @@ pub async fn api_imports(
 // ---------------------------------------------------------------------------
 
 pub async fn api_context(
-    State(state): State<Arc<AppState>>,
+    State(ctx): State<AppContext>,
     Json(body): Json<ContextRequest>,
 ) -> Json<ContextResponse> {
+    let state = ctx.state.clone();
     let result = tokio::task::spawn_blocking(move || {
+        let s = state.read().unwrap();
+        let repo = s.default_repo();
         allocate_budget(
-            &state.project_root,
+            &repo.root,
             &body.paths,
-            &state.all_files,
+            &repo.all_files,
             body.budget,
             &body.unit,
             body.query.as_deref(),
-            &state.deps,
-            &state.stub_cache,
-            &*state.tokenizer,
-            &state.config,
+            &repo.deps,
+            &repo.stub_cache,
+            &*s.tokenizer,
+            &repo.config,
         )
     })
     .await
