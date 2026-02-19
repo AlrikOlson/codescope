@@ -19,8 +19,8 @@ info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 ok()    { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 err()   { printf '\033[1;31mERR\033[0m %s\n' "$*" >&2; }
 
-# --- Detect if we're running from a pipe (curl | bash) ---
-if [ ! -f "$SCRIPT_DIR/Cargo.toml" ]; then
+# --- Detect if we're in the codescope repo or running from pipe/arbitrary dir ---
+if ! grep -q 'name = "codescope-server"' "$SCRIPT_DIR/Cargo.toml" 2>/dev/null; then
     info "Running from pipe — cloning codescope repo..."
     TMPDIR="$(mktemp -d)"
     git clone --depth 1 https://github.com/AlrikOlson/codescope.git "$TMPDIR/codescope"
