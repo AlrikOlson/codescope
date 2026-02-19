@@ -9,7 +9,7 @@ enum ProjectType {
     Rust,
     Node,
     Go,
-    UnrealEngine,
+    CppProject,
     Python,
     Unknown,
 }
@@ -20,7 +20,7 @@ impl ProjectType {
             Self::Rust => "Rust",
             Self::Node => "Node.js",
             Self::Go => "Go",
-            Self::UnrealEngine => "Unreal Engine",
+            Self::CppProject => "C/C++",
             Self::Python => "Python",
             Self::Unknown => "Unknown",
         }
@@ -40,15 +40,9 @@ fn detect_project_type(root: &Path) -> ProjectType {
     if root.join("pyproject.toml").exists() || root.join("setup.py").exists() {
         return ProjectType::Python;
     }
-    // Check for *.uproject
-    if let Ok(entries) = std::fs::read_dir(root) {
-        for entry in entries.flatten() {
-            if let Some(ext) = entry.path().extension() {
-                if ext == "uproject" {
-                    return ProjectType::UnrealEngine;
-                }
-            }
-        }
+    // Check for CMakeLists.txt or Makefile (C/C++ projects)
+    if root.join("CMakeLists.txt").exists() || root.join("Makefile").exists() {
+        return ProjectType::CppProject;
     }
     ProjectType::Unknown
 }
@@ -71,9 +65,9 @@ fn generate_codescope_toml(project_type: ProjectType) -> Option<String> {
             vec![],
             vec!["go", "mod"],
         ),
-        ProjectType::UnrealEngine => (
-            vec!["Source"],
-            vec!["h", "cpp", "cs", "usf", "ush"],
+        ProjectType::CppProject => (
+            vec!["src"],
+            vec!["h", "hpp", "cpp", "c", "cc"],
         ),
         ProjectType::Python => (
             vec!["src"],

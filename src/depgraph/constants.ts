@@ -1,7 +1,6 @@
 export const CLUSTER_POSITIONS: Record<string, [number, number, number]> = {
   'Source':    [ 300,    0,    0],
   'Runtime':   [ 300,    0,    0],
-  'Plugins':  [-300,    0,    0],
   'Editor':   [   0,  300,    0],
   'Developer':[   0, -300,    0],
   'Programs': [   0,    0,  300],

@@ -77,7 +77,6 @@ export function getExtRgb(ext: string): [number, number, number] | null {
 // Category/group colors for dependency graph
 export const CATEGORY_COLORS: Record<string, string> = {
   'Source':     '#a6e3a1',
-  'Plugins':   '#89b4fa',
   'Runtime':   '#a6e3a1',
   'Editor':    '#f9e2af',
   'Developer': '#fab387',

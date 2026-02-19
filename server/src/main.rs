@@ -1,3 +1,5 @@
+//! CodeScope — fast codebase indexer and search server.
+
 mod api;
 mod budget;
 mod fuzzy;

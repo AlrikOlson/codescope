@@ -9,6 +9,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
+/// Default token budget for context requests when no explicit budget is provided.
 pub const DEFAULT_TOKEN_BUDGET: usize = 50_000;
 
 // ---------------------------------------------------------------------------
@@ -79,6 +80,7 @@ pub fn importance_score(rel_path: &str, file_size: u64) -> f64 {
 // Types
 // ---------------------------------------------------------------------------
 
+/// Unit of measurement for the context budget: token count or raw character count.
 #[derive(Deserialize, Clone, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum BudgetUnit {
@@ -87,6 +89,7 @@ pub enum BudgetUnit {
     Chars,
 }
 
+/// Incoming request for budget-aware file context, specifying paths, budget, and optional query.
 #[derive(Deserialize)]
 pub struct ContextRequest {
     pub paths: Vec<String>,

@@ -321,6 +321,7 @@ struct TokenInfo {
     mask: u64,
 }
 
+/// A scored file match from a fuzzy search query, with match position indices.
 #[derive(Serialize)]
 pub struct SearchFileResult {
     pub path: String,
@@ -336,6 +337,7 @@ pub struct SearchFileResult {
     pub path_indices: Vec<usize>,
 }
 
+/// A scored module match from a fuzzy search query, with match position indices.
 #[derive(Serialize)]
 pub struct SearchModuleResult {
     pub id: String,
@@ -347,6 +349,7 @@ pub struct SearchModuleResult {
     pub matched_indices: Vec<usize>,
 }
 
+/// Combined search response containing ranked file and module results with timing metadata.
 #[derive(Serialize)]
 pub struct SearchResponse {
     pub files: Vec<SearchFileResult>,
@@ -460,6 +463,7 @@ fn score_file(f: &SearchFileEntry, tokens: &[TokenInfo]) -> Option<SearchFileRes
 // Public search entry point
 // ---------------------------------------------------------------------------
 
+/// Execute a fuzzy search query against the file and module indexes, returning ranked results.
 pub fn run_search(
     search_files: &[SearchFileEntry],
     search_modules: &[SearchModuleEntry],
@@ -540,8 +544,8 @@ const KNOWN_EXTS: &[&str] = &[
     "cmake", "make", "gradle", "csproj", "sln",
 ];
 
-/// Strip known file extensions from search tokens so fuzzy search matches
-/// the stem. "VolumetricCloudRendering.usf" -> "VolumetricCloudRendering"
+/// Strip known file extensions from search tokens so fuzzy search matches the stem.
+/// For example, "VolumetricCloudRendering.usf" becomes "VolumetricCloudRendering".
 pub fn preprocess_search_query(query: &str) -> String {
     query
         .split_whitespace()

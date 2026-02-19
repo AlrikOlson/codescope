@@ -8,6 +8,7 @@ use std::sync::Arc;
 // Constants
 // ---------------------------------------------------------------------------
 
+/// Maximum file size (in bytes) that will be read into memory.
 pub const MAX_FILE_READ: usize = 512 * 1024;
 
 // ---------------------------------------------------------------------------
@@ -43,16 +44,12 @@ impl ScanConfig {
                 "build",
                 ".next",
                 "vendor",
-                "Intermediate",
-                "Saved",
-                "Binaries",
-                "DerivedDataCache",
             ]
             .iter()
             .map(|s| s.to_string())
             .collect(),
             noise_dirs: [
-                "Private", "Public", "Classes", "Internal", "Inc", "Source", "Src", "Include",
+                "Private", "Public", "Internal", "Source", "Src", "Include",
                 "src", "lib",
             ]
             .iter()
@@ -72,6 +69,7 @@ impl Default for ScanConfig {
 // Core types
 // ---------------------------------------------------------------------------
 
+/// A single file within a category, carrying its path, description, and size.
 #[derive(Clone, Serialize)]
 pub struct FileEntry {
     pub path: String,
@@ -79,6 +77,7 @@ pub struct FileEntry {
     pub size: u64,
 }
 
+/// Dependency entry for a module, split into public and private (dev) dependencies.
 #[derive(Clone, Serialize, Default)]
 pub struct DepEntry {
     pub public: Vec<String>,
@@ -87,6 +86,7 @@ pub struct DepEntry {
     pub category_path: String,
 }
 
+/// Metadata for a file discovered during the directory scan.
 #[derive(Clone)]
 pub struct ScannedFile {
     pub rel_path: String,
@@ -99,6 +99,7 @@ pub struct ScannedFile {
 // Search index types
 // ---------------------------------------------------------------------------
 
+/// Pre-computed search index entry for a file, with lowercased fields and bitmasks for fast fuzzy matching.
 #[derive(Clone, Serialize)]
 pub struct SearchFileEntry {
     pub path: String,
@@ -118,6 +119,7 @@ pub struct SearchFileEntry {
     pub desc_mask: u64,
 }
 
+/// Pre-computed search index entry for a module (category), with bitmasks for fast fuzzy matching.
 #[derive(Clone, Serialize)]
 pub struct SearchModuleEntry {
     pub id: String,
@@ -135,6 +137,7 @@ pub struct SearchModuleEntry {
 // Import graph (built at startup from import/include directives)
 // ---------------------------------------------------------------------------
 
+/// Bidirectional import/include graph mapping files to their dependencies and dependents.
 pub struct ImportGraph {
     /// file -> files it imports (resolved to rel_paths)
     pub imports: BTreeMap<String, Vec<String>>,
@@ -179,6 +182,7 @@ pub struct ChunkMeta {
 // Per-repo state (one instance per indexed repository)
 // ---------------------------------------------------------------------------
 
+/// Complete indexed state for a single repository, including files, deps, search index, and caches.
 pub struct RepoState {
     pub name: String,
     pub root: PathBuf,
@@ -199,6 +203,7 @@ pub struct RepoState {
 // Cross-repo import edges
 // ---------------------------------------------------------------------------
 
+/// An import edge that crosses repository boundaries (file in repo A imports file in repo B).
 pub struct CrossRepoEdge {
     pub from_repo: String,
     pub from_file: String,
@@ -210,6 +215,7 @@ pub struct CrossRepoEdge {
 // Server state (unified — used by both MCP and HTTP modes)
 // ---------------------------------------------------------------------------
 
+/// Unified server state holding all indexed repos, shared by both MCP and HTTP modes.
 pub struct ServerState {
     pub repos: BTreeMap<String, RepoState>,
     pub default_repo: Option<String>,
@@ -219,11 +225,17 @@ pub struct ServerState {
 
 impl ServerState {
     /// Returns the default repo (single-repo mode) or the first repo.
+    ///
+    /// # Panics
+    /// Panics if no repositories have been indexed.
     pub fn default_repo(&self) -> &RepoState {
         if let Some(ref name) = self.default_repo {
             &self.repos[name]
         } else {
-            self.repos.values().next().expect("no repos in state")
+            self.repos
+                .values()
+                .next()
+                .expect("ServerState must have at least one repo")
         }
     }
 }
@@ -232,12 +244,14 @@ impl ServerState {
 // HTTP-specific types (pre-computed JSON cache + Axum state)
 // ---------------------------------------------------------------------------
 
+/// Pre-serialized JSON responses for the HTTP API, computed once at startup.
 pub struct HttpCache {
     pub tree_json: String,
     pub manifest_json: String,
     pub deps_json: String,
 }
 
+/// Axum application state combining the shared server state with the HTTP JSON cache.
 #[derive(Clone)]
 pub struct AppContext {
     pub state: Arc<std::sync::RwLock<ServerState>>,
@@ -277,6 +291,7 @@ pub fn grep_relevance_score(
 // Path validation
 // ---------------------------------------------------------------------------
 
+/// Validate and canonicalize a relative path, rejecting traversal attacks and paths outside the root.
 pub fn validate_path(project_root: &Path, rel_path: &str) -> Result<PathBuf, &'static str> {
     if rel_path.is_empty() || rel_path.contains("..") || rel_path.starts_with('/') {
         return Err("Invalid path");

@@ -15,6 +15,18 @@ use crate::scan::get_category_path;
 use crate::stubs::extract_stubs;
 use crate::types::*;
 
+/// Acquire read lock on server state, returning HTTP 500 if the lock is poisoned.
+fn read_state(
+    state: &std::sync::RwLock<ServerState>,
+) -> Result<std::sync::RwLockReadGuard<'_, ServerState>, (StatusCode, Json<serde_json::Value>)> {
+    state.read().map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": "Internal server error" })),
+        )
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Static data endpoints (served from pre-computed HttpCache — no lock needed)
 // ---------------------------------------------------------------------------
@@ -62,7 +74,7 @@ pub async fn api_file(
     State(ctx): State<AppContext>,
     Query(q): Query<FileQuery>,
 ) -> Result<Json<FileResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let s = ctx.state.read().unwrap();
+    let s = read_state(&ctx.state)?;
     let repo = s.default_repo();
 
     let full_path = validate_path(&repo.root, &q.path).map_err(|e| {
@@ -136,7 +148,7 @@ pub async fn api_files(
     State(ctx): State<AppContext>,
     Json(body): Json<BatchFilesRequest>,
 ) -> Result<Json<BatchFilesResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let s = ctx.state.read().unwrap();
+    let s = read_state(&ctx.state)?;
     let repo = s.default_repo();
 
     let mut files = HashMap::new();
@@ -261,12 +273,14 @@ pub async fn api_grep(
             )
         })?;
 
-    // Heavy file I/O — clone Arc, acquire read lock inside blocking closure
+    // Heavy file I/O — clone Arc, acquire read lock inside blocking closure.
+    // The read() call here is safe to unwrap: lock poisoning only occurs if a
+    // writer panics, and we never hold a write lock in request handlers.
     let state = ctx.state.clone();
     let response = tokio::task::spawn_blocking(move || {
         use rayon::prelude::*;
 
-        let s = state.read().unwrap();
+        let s = state.read().expect("state lock poisoned");
         let repo = s.default_repo();
         let start = Instant::now();
 
@@ -389,19 +403,19 @@ pub struct SearchQuery {
 pub async fn api_search(
     State(ctx): State<AppContext>,
     Query(q): Query<SearchQuery>,
-) -> Json<SearchResponse> {
-    let s = ctx.state.read().unwrap();
+) -> Result<Json<SearchResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let s = read_state(&ctx.state)?;
     let repo = s.default_repo();
     let file_limit = q.file_limit.unwrap_or(80);
     let module_limit = q.module_limit.unwrap_or(8);
     let query = preprocess_search_query(&q.q);
-    Json(run_search(
+    Ok(Json(run_search(
         &repo.search_files,
         &repo.search_modules,
         &query,
         file_limit,
         module_limit,
-    ))
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -425,8 +439,8 @@ pub(crate) struct ImportsResponse {
 pub async fn api_imports(
     State(ctx): State<AppContext>,
     Query(q): Query<ImportsQuery>,
-) -> Json<ImportsResponse> {
-    let s = ctx.state.read().unwrap();
+) -> Result<Json<ImportsResponse>, (StatusCode, Json<serde_json::Value>)> {
+    let s = read_state(&ctx.state)?;
     let repo = s.default_repo();
     let direction = q.direction.as_deref().unwrap_or("both");
     let imports = if direction == "both" || direction == "imports" {
@@ -447,11 +461,11 @@ pub async fn api_imports(
     } else {
         vec![]
     };
-    Json(ImportsResponse {
+    Ok(Json(ImportsResponse {
         path: q.path,
         imports,
         imported_by,
-    })
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -464,7 +478,7 @@ pub async fn api_context(
 ) -> Json<ContextResponse> {
     let state = ctx.state.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let s = state.read().unwrap();
+        let s = state.read().expect("state lock poisoned");
         let repo = s.default_repo();
         allocate_budget(
             &repo.root,

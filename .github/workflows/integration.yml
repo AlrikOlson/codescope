@@ -19,6 +19,8 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - name: Rustfmt
+        run: cargo fmt --manifest-path server/Cargo.toml -- --check
       - name: Clippy
         run: cargo clippy --manifest-path server/Cargo.toml -- -D warnings
       - name: Build server

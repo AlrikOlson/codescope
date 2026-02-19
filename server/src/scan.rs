@@ -11,6 +11,7 @@ use std::sync::Mutex;
 // Descriptions and categories
 // ---------------------------------------------------------------------------
 
+/// Generate a human-readable description for a file by splitting its stem into words and appending a language hint.
 pub fn describe(rel_path: &str) -> String {
     let file_name = rel_path.rsplit('/').next().unwrap_or(rel_path);
     let stem = file_name.rsplit_once('.').map(|(s, _)| s).unwrap_or(file_name);
@@ -74,6 +75,7 @@ pub fn describe(rel_path: &str) -> String {
     }
 }
 
+/// Derive a category path (breadcrumb trail) from a file's directory, stripping noise dirs and scan prefixes.
 pub fn get_category_path(rel_path: &str, config: &ScanConfig) -> Vec<String> {
     let mut parts: Vec<&str> = rel_path.split('/').collect();
 
@@ -203,6 +205,7 @@ fn walk_files_parallel(
 // File scanning
 // ---------------------------------------------------------------------------
 
+/// Walk the project directory tree and return all discovered files plus a category-keyed manifest.
 pub fn scan_files(config: &ScanConfig) -> (Vec<ScannedFile>, BTreeMap<String, Vec<FileEntry>>) {
     // If scan_dirs is empty, scan root itself
     let scan_dirs: Vec<String> = if config.scan_dirs.is_empty() {
@@ -284,6 +287,7 @@ pub fn scan_files(config: &ScanConfig) -> (Vec<ScannedFile>, BTreeMap<String, Ve
 // Tree and dependency building
 // ---------------------------------------------------------------------------
 
+/// Build a nested JSON tree from the flat category manifest for the tree API endpoint.
 pub fn build_tree(manifest: &BTreeMap<String, Vec<FileEntry>>) -> serde_json::Value {
     let mut root = serde_json::Map::new();
 
@@ -327,53 +331,6 @@ pub trait DependencyScanner: Send + Sync {
     fn module_name(&self, abs_path: &Path) -> Option<String>;
     /// Parse dependencies from file content. Returns (public/direct, private/dev).
     fn parse_deps(&self, content: &str) -> (Vec<String>, Vec<String>);
-}
-
-/// C# .Build.cs dependency scanner
-struct CSharpBuildCsScanner;
-
-impl DependencyScanner for CSharpBuildCsScanner {
-    fn matches(&self, abs_path: &Path) -> bool {
-        abs_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n.ends_with(".Build.cs"))
-            .unwrap_or(false)
-    }
-
-    fn module_name(&self, abs_path: &Path) -> Option<String> {
-        abs_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .and_then(|n| n.strip_suffix(".Build.cs"))
-            .map(|s| s.to_string())
-    }
-
-    fn parse_deps(&self, content: &str) -> (Vec<String>, Vec<String>) {
-        let dep_re = regex::Regex::new(
-            r#"(Public|Private)DependencyModuleNames\.AddRange\(\s*new\s+string\[\]\s*\{([^}]+)\}"#,
-        )
-        .unwrap();
-        let str_re = regex::Regex::new(r#""([^"]+)""#).unwrap();
-
-        let mut public = Vec::new();
-        let mut private = Vec::new();
-
-        for cap in dep_re.captures_iter(content) {
-            let dep_type = &cap[1];
-            let block = &cap[2];
-            let list = if dep_type == "Public" {
-                &mut public
-            } else {
-                &mut private
-            };
-            for str_cap in str_re.captures_iter(block) {
-                list.push(str_cap[1].to_string());
-            }
-        }
-
-        (public, private)
-    }
 }
 
 /// Cargo.toml scanner
@@ -551,13 +508,13 @@ impl DependencyScanner for GoModScanner {
 /// Get the default set of dependency scanners.
 fn default_scanners() -> Vec<Box<dyn DependencyScanner>> {
     vec![
-        Box::new(CSharpBuildCsScanner),
         Box::new(CargoTomlScanner),
         Box::new(PackageJsonScanner),
         Box::new(GoModScanner),
     ]
 }
 
+/// Scan for dependency manifest files (Cargo.toml, package.json, go.mod) and extract module dependencies.
 pub fn scan_deps(config: &ScanConfig) -> BTreeMap<String, DepEntry> {
     let scanners = default_scanners();
 
@@ -623,6 +580,7 @@ pub fn scan_deps(config: &ScanConfig) -> BTreeMap<String, DepEntry> {
 // Search index
 // ---------------------------------------------------------------------------
 
+/// Build the fuzzy search index from the manifest, producing file and module entries with pre-computed bitmasks.
 pub fn build_search_index(
     manifest: &BTreeMap<String, Vec<FileEntry>>,
 ) -> (Vec<SearchFileEntry>, Vec<SearchModuleEntry>) {
@@ -735,6 +693,7 @@ fn import_exts_powershell() -> HashSet<&'static str> {
     ["ps1", "psm1", "psd1"].iter().copied().collect()
 }
 
+/// Parse import/include directives across all files and build a bidirectional import graph.
 pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
     let cpp_exts = import_exts_cpp();
     let py_exts = import_exts_python();

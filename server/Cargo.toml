@@ -40,3 +40,4 @@ hf-hub = { version = "0.4", optional = true, default-features = false, features 
 [profile.release]
 opt-level = 3
 lto = true
+strip = true
