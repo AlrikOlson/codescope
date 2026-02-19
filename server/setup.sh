@@ -7,7 +7,7 @@ set -euo pipefail
 # Usage:
 #   curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash
 #   curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- /path/to/project
-#   curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --with-semantic
+#   curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --edge
 
 INSTALL_DIR="$HOME/.local/bin"
 REPO="AlrikOlson/codescope"
@@ -28,9 +28,11 @@ Usage:
 Options:
   --edge            Install bleeding-edge build from latest master commit
   --dev             Install development build from latest dev branch commit
-  --with-semantic   Enable ML-powered semantic search
   --from-source     Force compilation from source instead of downloading a binary
   --help, -h        Show this help
+
+All pre-built binaries include semantic search. Enable it at runtime
+with the --semantic flag when starting codescope-server.
 
 Examples:
   # Standard install (downloads pre-built binary, ~10 seconds)
@@ -44,21 +46,17 @@ Examples:
 
   # Install development build (latest dev branch commit)
   bash setup.sh --dev
-
-  # Install with semantic search (downloads pre-built binary with ML support)
-  bash setup.sh --with-semantic
 EOF
 }
 
 # --- Parse flags ---
-WITH_SEMANTIC=0
 FROM_SOURCE=0
 EDGE=0
 DEV=0
 PROJECT_PATH=""
 for arg in "$@"; do
     case "$arg" in
-        --with-semantic) WITH_SEMANTIC=1 ;;
+        --with-semantic) ;; # accepted for backwards compatibility, now a no-op
         --from-source)   FROM_SOURCE=1 ;;
         --edge)          EDGE=1 ;;
         --dev)           DEV=1 ;;
@@ -121,11 +119,7 @@ download_binary() {
         return 1
     fi
 
-    local suffix=""
-    if [ "$WITH_SEMANTIC" = "1" ]; then
-        suffix="-semantic"
-    fi
-    local archive="codescope-server-${platform}${suffix}.tar.gz"
+    local archive="codescope-server-${platform}.tar.gz"
     local url="https://github.com/$REPO/releases/download/$tag/$archive"
 
     info "Downloading CodeScope $tag ($platform)..."
@@ -155,6 +149,8 @@ download_binary() {
         err "Archive did not contain codescope-server"
         return 1
     fi
+    # Remove old binary first — avoids "Text file busy" if it's running (e.g., as MCP server)
+    rm -f "$INSTALL_DIR/codescope-server"
     cp "$binary" "$INSTALL_DIR/codescope-server"
     chmod +x "$INSTALL_DIR/codescope-server"
 
@@ -196,7 +192,7 @@ install_helper_scripts() {
     done
 }
 
-# --- Compile from source (fallback / semantic search) ---
+# --- Compile from source (fallback) ---
 install_from_source() {
     local script_dir="$1"
 
@@ -222,16 +218,12 @@ install_from_source() {
 
     # Build
     cd "$script_dir"
-    if [ "$WITH_SEMANTIC" = "1" ]; then
-        info "Compiling with semantic search (this takes a few minutes)..."
-        cargo build --release --features semantic
-    else
-        info "Compiling from source (this takes a few minutes)..."
-        cargo build --release
-    fi
+    info "Compiling from source (this takes a few minutes)..."
+    cargo build --release --features semantic
 
     # Install binary
     mkdir -p "$INSTALL_DIR"
+    rm -f "$INSTALL_DIR/codescope-server"
     cp "$script_dir/target/release/codescope-server" "$INSTALL_DIR/codescope-server"
     ok "Installed codescope-server -> $INSTALL_DIR/"
 
@@ -357,13 +349,8 @@ elif [ "$EDGE" = "1" ]; then
     ok "Edge channel — built from latest master commit"
     echo ""
 fi
-if [ "$WITH_SEMANTIC" = "1" ]; then
-    ok "Semantic search enabled (ML model downloads on first use, ~90MB)"
-    echo ""
-else
-    echo "  Optional: re-run with --with-semantic for ML-powered search"
-    echo ""
-fi
+echo "  Semantic search included. Enable with: codescope-server --mcp --semantic --root ."
+echo ""
 if [ "$EDGE" = "0" ] && [ "$DEV" = "0" ]; then
     echo "  Optional: re-run with --edge or --dev for pre-release builds"
     echo ""
