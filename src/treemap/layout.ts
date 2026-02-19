@@ -11,8 +11,14 @@ export function layoutTreemap(root: TreemapNode, rect: Rect): void {
   }
 }
 
-function squarify(children: TreemapNode[], parentValue: number, rect: Rect): void {
+function squarify(children: TreemapNode[], _parentValue: number, rect: Rect): void {
   if (children.length === 0 || rect.w <= 0 || rect.h <= 0) return;
+
+  // Always derive from actual children sum — dampening may have changed
+  // parent values independently from children values.
+  let parentValue = 0;
+  for (const c of children) parentValue += c.value;
+  if (parentValue <= 0) return;
 
   const scale = (rect.w * rect.h) / parentValue;
   let remaining = { ...rect };

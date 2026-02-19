@@ -149,12 +149,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Bake release version into Cargo.toml
+      - name: Bake release version into manifests
         if: needs.version.result == 'success' && needs.version.outputs.skip != 'true'
         run: |
           VERSION="${{ needs.version.outputs.new_tag }}"
           VERSION="${VERSION#v}"
           perl -i -pe "s/^version = \".*\"/version = \"$VERSION\"/" server/Cargo.toml
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '$VERSION';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -219,7 +225,7 @@ jobs:
           name: ai-release-output
           path: /tmp
 
-      - name: Update Cargo.toml, commit, and tag
+      - name: Update version files, commit, and tag
         run: |
           NEW_TAG="${{ needs.version.outputs.new_tag }}"
           VERSION="${NEW_TAG#v}"
@@ -232,9 +238,20 @@ jobs:
 
           sed -i "s/^version = \".*\"/version = \"$VERSION\"/" server/Cargo.toml
 
+          # Sync frontend version
+          node -e "
+            const fs = require('fs');
+            for (const f of ['package.json', 'package-lock.json']) {
+              const pkg = JSON.parse(fs.readFileSync(f, 'utf8'));
+              pkg.version = '$VERSION';
+              if (pkg.packages && pkg.packages['']) pkg.packages[''].version = '$VERSION';
+              fs.writeFileSync(f, JSON.stringify(pkg, null, 2) + '\n');
+            }
+          "
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add server/Cargo.toml
+          git add server/Cargo.toml package.json package-lock.json
           git diff --cached --quiet || git commit -m "$COMMIT_MSG"
           git tag -f "$NEW_TAG"
           git push origin HEAD:master --tags --force

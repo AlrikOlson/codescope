@@ -20,7 +20,10 @@ export interface NodeSystem {
 }
 
 export function createNodeSystem(scene: THREE.Scene, nodes: GraphNode[]): NodeSystem {
-  const sphereGeo = new THREE.SphereGeometry(1, 24, 16);
+  // Scale geometry detail with node count — 384 tris/node is too much for 1000+ nodes
+  const segs = nodes.length > 500 ? 8 : nodes.length > 200 ? 12 : 24;
+  const rings = nodes.length > 500 ? 6 : nodes.length > 200 ? 8 : 16;
+  const sphereGeo = new THREE.SphereGeometry(1, segs, rings);
   const groups = new Map<string, number[]>();
   for (let i = 0; i < nodes.length; i++) {
     let arr = groups.get(nodes[i].group);
@@ -45,6 +48,7 @@ export function createNodeSystem(scene: THREE.Scene, nodes: GraphNode[]): NodeSy
         .replace('#include <common>', 'attribute float instanceGlow;\nvarying float vGlow;\n#include <common>')
         .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGlow = instanceGlow;');
       shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', 'varying float vGlow;\n#include <common>')
         .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance *= (1.0 + vGlow * 3.0);');
     };
     const mesh = new THREE.InstancedMesh(sphereGeo, mat, indices.length);

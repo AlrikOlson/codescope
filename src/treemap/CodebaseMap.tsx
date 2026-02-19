@@ -14,9 +14,10 @@ interface Props {
   selected: Set<string>;
   onNavigateModule: (id: string) => void;
   onToggleFile: (path: string) => void;
+  onSelectModule: (moduleId: string) => void;
 }
 
-export default function CodebaseMap({ tree, manifest, activeCategory, selected, onNavigateModule, onToggleFile }: Props) {
+export default function CodebaseMap({ tree, manifest, activeCategory, selected, onNavigateModule, onToggleFile, onSelectModule }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rootRef = useRef<TreemapNode | null>(null);
@@ -28,7 +29,8 @@ export default function CodebaseMap({ tree, manifest, activeCategory, selected, 
   // Build treemap data
   const rootNode = useMemo(() => buildTreemapData(tree), [tree]);
 
-  // Which modules/files are selected (includes file: prefixed ids)
+  // Which modules/files are selected — includes file: prefixed ids AND ancestor paths
+  // so parent treemap nodes show selection indicators when any child is selected
   const selectedModules = useMemo(() => {
     const mods = new Set<string>();
     for (const [cat, files] of Object.entries(manifest)) {
@@ -36,6 +38,11 @@ export default function CodebaseMap({ tree, manifest, activeCategory, selected, 
         if (selected.has(f.path)) {
           mods.add(cat);
           mods.add(`file:${f.path}`);
+          // Add all ancestor paths so parent nodes highlight too
+          const parts = cat.split(' > ');
+          for (let i = 1; i < parts.length; i++) {
+            mods.add(parts.slice(0, i).join(' > '));
+          }
         }
       }
     }
@@ -83,13 +90,16 @@ export default function CodebaseMap({ tree, manifest, activeCategory, selected, 
       draw();
     };
 
-    doLayout();
+    const raf = requestAnimationFrame(() => doLayout());
 
     const ro = new ResizeObserver(() => {
       doLayout();
     });
     ro.observe(container);
-    return () => ro.disconnect();
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+    };
   }, [rootNode, draw, vpAPI.viewportRef]);
 
   // Bind canvas events
@@ -140,7 +150,7 @@ export default function CodebaseMap({ tree, manifest, activeCategory, selected, 
         if (hit.id.startsWith('file:')) {
           onToggleFile(hit.id.slice(5));
         } else {
-          onNavigateModule(hit.id);
+          onSelectModule(hit.id);
         }
       }
     };
@@ -172,7 +182,7 @@ export default function CodebaseMap({ tree, manifest, activeCategory, selected, 
       canvas.removeEventListener('click', onClick);
       canvas.removeEventListener('dblclick', onDblClick);
     };
-  }, [vpAPI, onNavigateModule, onToggleFile]);
+  }, [vpAPI, onNavigateModule, onToggleFile, onSelectModule]);
 
   // Redraw when active/selected changes
   useEffect(() => { draw(); }, [draw, activeCategory, selectedModules]);
@@ -217,7 +227,7 @@ export default function CodebaseMap({ tree, manifest, activeCategory, selected, 
           <div className="codemap-tooltip-name">{tooltip.node.name}</div>
           <div className="codemap-tooltip-id">{tooltip.node.id.startsWith('file:') ? tooltip.node.id.slice(5) : tooltip.node.id}</div>
           {tooltip.node.id.startsWith('file:') ? null : (
-            <div className="codemap-tooltip-count">{tooltip.node.value.toLocaleString()} files</div>
+            <div className="codemap-tooltip-count">{tooltip.node.fileCount.toLocaleString()} files</div>
           )}
           <div className="codemap-tooltip-bar">
             {Object.entries(tooltip.node.extBreakdown)

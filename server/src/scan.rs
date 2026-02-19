@@ -554,12 +554,162 @@ impl DependencyScanner for GoModScanner {
     }
 }
 
-/// Get the default set of dependency scanners.
-fn default_scanners() -> Vec<Box<dyn DependencyScanner>> {
-    vec![Box::new(CargoTomlScanner), Box::new(PackageJsonScanner), Box::new(GoModScanner)]
+/// CMakeLists.txt scanner
+struct CmakeScanner;
+
+impl DependencyScanner for CmakeScanner {
+    fn matches(&self, abs_path: &Path) -> bool {
+        abs_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n == "CMakeLists.txt")
+            .unwrap_or(false)
+    }
+
+    fn module_name(&self, abs_path: &Path) -> Option<String> {
+        if let Ok(content) = fs::read_to_string(abs_path) {
+            // Try project(<name>) first
+            let proj_re = regex::Regex::new(r"(?mi)^\s*project\s*\(\s*([A-Za-z_]\w*)").unwrap();
+            if let Some(cap) = proj_re.captures(&content) {
+                return Some(cap[1].to_string());
+            }
+            // Fallback to add_library/add_executable
+            let lib_re =
+                regex::Regex::new(r"(?mi)^\s*add_(?:library|executable)\s*\(\s*([A-Za-z_][\w-]*)")
+                    .unwrap();
+            if let Some(cap) = lib_re.captures(&content) {
+                return Some(cap[1].to_string());
+            }
+        }
+        abs_path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string())
+    }
+
+    fn parse_deps(&self, content: &str) -> (Vec<String>, Vec<String>) {
+        let block_re = regex::Regex::new(r"(?msi)target_link_libraries\s*\(([^)]+)\)").unwrap();
+        let skip =
+            ["PUBLIC", "PRIVATE", "INTERFACE", "IMPORTED", "ALIAS", "SHARED", "STATIC", "OBJECT"];
+        let mut public = Vec::new();
+        let mut private = Vec::new();
+
+        for block_cap in block_re.captures_iter(content) {
+            let body = &block_cap[1];
+            let tokens: Vec<&str> = body.split_whitespace().collect();
+            if tokens.is_empty() {
+                continue;
+            }
+            // First token is target name — skip it
+            let mut current_is_private = false;
+            for &tok in &tokens[1..] {
+                let upper = tok.to_uppercase();
+                if upper == "PRIVATE" {
+                    current_is_private = true;
+                    continue;
+                }
+                if upper == "PUBLIC" || upper == "INTERFACE" {
+                    current_is_private = false;
+                    continue;
+                }
+                if skip.iter().any(|&s| s == upper) {
+                    continue;
+                }
+                if tok.starts_with('$') || tok.starts_with('-') {
+                    continue;
+                }
+                // Strip :: namespace prefix (fmt::fmt → fmt)
+                let name = tok.rsplit("::").next().unwrap_or(tok);
+                if name.is_empty() {
+                    continue;
+                }
+                if current_is_private {
+                    private.push(name.to_string());
+                } else {
+                    public.push(name.to_string());
+                }
+            }
+        }
+
+        (public, private)
+    }
 }
 
-/// Scan for dependency manifest files (Cargo.toml, package.json, go.mod) and extract module dependencies.
+/// C# build definition scanner (*.Build.cs)
+struct CsharpBuildScanner;
+
+impl DependencyScanner for CsharpBuildScanner {
+    fn matches(&self, abs_path: &Path) -> bool {
+        abs_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.ends_with(".Build.cs"))
+            .unwrap_or(false)
+    }
+
+    fn module_name(&self, abs_path: &Path) -> Option<String> {
+        // Core.Build.cs → Core
+        let fname = abs_path.file_name()?.to_str()?;
+        fname.strip_suffix(".Build.cs").map(|s| s.to_string())
+    }
+
+    fn parse_deps(&self, content: &str) -> (Vec<String>, Vec<String>) {
+        let quoted_re = regex::Regex::new(r#""([^"]+)""#).unwrap();
+
+        let extract = |prefix: &str| -> Vec<String> {
+            let mut deps = Vec::new();
+
+            // .AddRange(new string[] { ... })
+            let range_curly =
+                format!(r"(?s){}\.AddRange\s*\(\s*(?:new\s+string\[\]\s*)?\{{([^}}]*)\}}", prefix);
+            if let Ok(re) = regex::Regex::new(&range_curly) {
+                for cap in re.captures_iter(content) {
+                    for m in quoted_re.captures_iter(&cap[1]) {
+                        deps.push(m[1].to_string());
+                    }
+                }
+            }
+
+            // .AddRange([ ... ])
+            let range_bracket = format!(r"(?s){}\.AddRange\s*\(\s*\[([^\]]*)\]", prefix);
+            if let Ok(re) = regex::Regex::new(&range_bracket) {
+                for cap in re.captures_iter(content) {
+                    for m in quoted_re.captures_iter(&cap[1]) {
+                        deps.push(m[1].to_string());
+                    }
+                }
+            }
+
+            // .Add("Name")
+            let single = format!(r#"{}\.Add\s*\(\s*"([^"]+)""#, prefix);
+            if let Ok(re) = regex::Regex::new(&single) {
+                for cap in re.captures_iter(content) {
+                    deps.push(cap[1].to_string());
+                }
+            }
+
+            deps
+        };
+
+        let public = extract("PublicDependencyModuleNames");
+        let private = extract("PrivateDependencyModuleNames");
+        (public, private)
+    }
+}
+
+/// Get the default set of dependency scanners.
+fn default_scanners() -> Vec<Box<dyn DependencyScanner>> {
+    vec![
+        Box::new(CargoTomlScanner),
+        Box::new(PackageJsonScanner),
+        Box::new(GoModScanner),
+        Box::new(CmakeScanner),
+        Box::new(CsharpBuildScanner),
+    ]
+}
+
+/// Scan for dependency manifest files and extract module dependencies.
 pub fn scan_deps(config: &ScanConfig) -> BTreeMap<String, DepEntry> {
     let scanners = default_scanners();
 

@@ -23,7 +23,7 @@ export interface InteractionState {
 interface InteractionCallbacks {
   onTooltip: (tooltip: { x: number; y: number; name: string; category: string; depCount: number } | null) => void;
   onSelectNode: (nodeId: string | null) => void;
-  getProps: () => { deps: DepGraph; onNavigateModule: (id: string) => void };
+  getProps: () => { deps: DepGraph; onNavigateModule: (id: string) => void; onSelectModule: (moduleId: string) => void };
 }
 
 export function createInteraction(
@@ -130,11 +130,9 @@ export function createInteraction(
       startFlyTo(new THREE.Vector3(node.x, node.y, node.z), node.radius);
       callbacks.onSelectNode(node.id);
 
+      // Select this module + its dependency neighborhood
       const props = callbacks.getProps();
-      const entry = props.deps[node.id];
-      if (entry?.categoryPath) {
-        props.onNavigateModule(entry.categoryPath);
-      }
+      props.onSelectModule(node.id);
     } else {
       callbacks.onSelectNode(null);
     }

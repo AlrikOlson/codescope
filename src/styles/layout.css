@@ -205,6 +205,39 @@
 .topbar-spacer { flex: 1; }
 
 /* ============================================
+   View Mode Switcher (in topbar)
+   ============================================ */
+.view-switcher {
+  display: flex;
+  background: var(--surface);
+  border-radius: var(--r-md);
+  padding: 2px;
+  gap: 1px;
+}
+
+.view-switcher-btn {
+  padding: 3px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text3);
+  font-size: 11px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  transition: all var(--fast) var(--ease);
+}
+
+.view-switcher-btn:hover {
+  color: var(--text);
+}
+
+.view-switcher-btn.active {
+  background: var(--hover-accent-mid);
+  color: var(--neon-cyan);
+}
+
+/* ============================================
    Breadcrumb Navigation
    ============================================ */
 .breadcrumb {
@@ -282,28 +315,26 @@
 }
 
 /* ============================================
-   Layout — CSS Grid (Activity Bar + Sidebar + Main)
+   Layout — Flex (Activity Bar + Sidebar + Main)
    ============================================ */
 .layout {
-  display: grid;
-  grid-template-columns: 48px var(--sidebar-w, 0px) 1fr;
+  display: flex;
   flex: 1;
   overflow: hidden;
   position: relative;
   z-index: 6;
-  transition: grid-template-columns var(--slow) var(--ease);
 }
 
 /* ============================================
    Sidebar Panel
    ============================================ */
 .sidebar-panel {
+  width: 260px;
+  flex-shrink: 0;
   overflow: hidden;
-  flex: 1 1 auto;
-  min-height: 0;
+  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  transition: width var(--normal) var(--ease);
 }
 
 /* ============================================
@@ -311,32 +342,13 @@
    ============================================ */
 .main-content {
   flex: 1;
+  min-width: 0;
   display: flex;
   overflow: hidden;
   position: relative;
-  z-index: 6;
   background: var(--bg);
 }
 
-/* ============================================
-   Resize Handle
-   ============================================ */
-.resize-handle {
-  width: var(--border-width);
-  cursor: col-resize;
-  background: var(--border);
-  flex-shrink: 0;
-  transition: all var(--normal) var(--ease);
-  position: relative;
-}
-.resize-handle:hover {
-  background: color-mix(in oklch, var(--neon-cyan) 30%, transparent);
-  box-shadow: 0 0 6px color-mix(in oklch, var(--neon-cyan) 12%, transparent);
-}
-.resize-handle:active, .resize-handle.dragging {
-  background: var(--neon-cyan);
-  box-shadow: 0 0 12px color-mix(in oklch, var(--neon-cyan) 25%, transparent);
-}
 
 /* ============================================
    List Content Wrapper
@@ -348,121 +360,5 @@
   min-width: 0;
 }
 
-/* Preview resize handle */
-.preview-resize-handle {
-  width: var(--border-width);
-  cursor: col-resize;
-  background: var(--border);
-  flex-shrink: 0;
-  transition: all var(--normal) var(--ease);
-}
-.preview-resize-handle:hover {
-  background: color-mix(in oklch, var(--neon-cyan) 30%, transparent);
-  box-shadow: 0 0 6px color-mix(in oklch, var(--neon-cyan) 12%, transparent);
-}
-.preview-resize-handle.dragging {
-  background: var(--neon-cyan);
-  box-shadow: 0 0 12px color-mix(in oklch, var(--neon-cyan) 25%, transparent);
-}
 
-/* ============================================
-   Context Panel — Pinned Right Sidebar (wide screens)
-   ============================================ */
-.context-right-sidebar {
-  border-left: 1px solid var(--border);
-  overflow: hidden;
-}
 
-/* Wide screens: 4-column grid with pinned context */
-@media (min-width: 1920px) {
-  .layout.context-pinned {
-    grid-template-columns: 48px var(--sidebar-w, 300px) 1fr 340px;
-  }
-}
-
-/* ============================================
-   Compact Mode: Activity bar at bottom, sidebar as drawer
-   ============================================ */
-@media (max-width: 1365px) {
-  .layout {
-    grid-template-columns: 1fr;
-    grid-template-rows: 1fr 48px;
-  }
-
-  .layout .activity-bar {
-    grid-row: 2;
-    width: 100%;
-    height: 48px;
-    flex-direction: row;
-    justify-content: center;
-    border-right: none;
-    border-top: 1px solid var(--border);
-    padding: 0 8px;
-  }
-
-  .layout .activity-bar .activity-bar-spacer { display: none; }
-  .layout .activity-bar .activity-bar-bottom {
-    flex-direction: row;
-    border-top: none;
-    border-left: 1px solid var(--border);
-    margin-top: 0;
-    margin-left: 4px;
-    padding-top: 0;
-    padding-left: 8px;
-  }
-
-  .sidebar-panel-wrapper {
-    position: fixed;
-    top: 40px;
-    left: 0;
-    bottom: 48px;
-    width: 320px !important;
-    z-index: 100;
-    transform: translateX(-100%);
-    transition: transform var(--normal) var(--ease);
-    box-shadow: var(--shadow-lg);
-    background: var(--bg);
-  }
-
-  .layout:not(.sidebar-hidden) .sidebar-panel-wrapper {
-    transform: translateX(0);
-  }
-
-  .sidebar-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.5);
-    z-index: 99;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity var(--normal) var(--ease);
-  }
-
-  .sidebar-backdrop.visible {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  /* Hide resize handle in compact mode */
-  .layout .resize-handle {
-    display: none;
-  }
-}
-
-/* ============================================
-   View Transitions
-   ============================================ */
-.list-content,
-.codemap,
-.depgraph,
-.stats-dashboard {
-  view-transition-name: main-content;
-}
-::view-transition-old(main-content) {
-  animation: vtFadeOut var(--normal) var(--ease);
-}
-::view-transition-new(main-content) {
-  animation: vtFadeIn var(--normal) var(--ease);
-}
-@keyframes vtFadeOut { to { opacity: 0; transform: translateY(-8px); } }
-@keyframes vtFadeIn { from { opacity: 0; transform: translateY(8px); } }

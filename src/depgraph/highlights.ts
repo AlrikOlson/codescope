@@ -95,10 +95,8 @@ export function computeEdgeAlphaTargets(
       const ti = nodeMap.get(edges[i].target);
       if (si !== undefined && ti !== undefined && state.highlightSet.has(si) && state.highlightSet.has(ti)) {
         target = 0.55;
-      } else if (si !== undefined && ti !== undefined && (state.highlightSet.has(si) || state.highlightSet.has(ti))) {
-        target = 0.15;
       } else {
-        target = 0.02;
+        target = 0; // Hide edges not connecting two selected modules
       }
     } else if (state.hasSearch && !state.hasFocus && !state.hasSelection) {
       const si = nodeMap.get(edges[i].source);
@@ -136,16 +134,23 @@ export function applyNodeHighlights(
     let instancesChanged = false;
 
     if (state.effectiveHighlight) {
+      // When selection is active (not just hover/focus), hide non-selected nodes entirely
+      const hideUnselected = state.hasSelection && !state.hasFocus;
       const shouldDim = !entry.indices.some(i => state.highlightSet.has(i));
-      entry.baseMat.emissiveIntensity = shouldDim ? 0.05 : 0.5;
-      entry.baseMat.opacity = shouldDim ? 0.3 : 1;
+      entry.baseMat.emissiveIntensity = shouldDim ? (hideUnselected ? 0 : 0.05) : 0.5;
+      entry.baseMat.opacity = shouldDim ? (hideUnselected ? 0 : 0.3) : 1;
       entry.baseMat.transparent = shouldDim;
 
       for (let ii = 0; ii < entry.indices.length; ii++) {
         const ni = entry.indices[ii];
         const node = nodes[ni];
         const isHighlighted = state.highlightSet.has(ni);
-        let s = node.radius * (isHighlighted ? 1.4 : 0.7);
+        let s: number;
+        if (!isHighlighted && hideUnselected) {
+          s = 0; // Completely hide non-selected nodes
+        } else {
+          s = node.radius * (isHighlighted ? 1.4 : 0.7);
+        }
         if (ni === clickPulseNodeIdx && clickPulseT < 1) {
           s *= 1 + 0.3 * Math.sin(clickPulseT * Math.PI);
         }

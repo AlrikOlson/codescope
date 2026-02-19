@@ -25,14 +25,24 @@ export function initPositions(nodes: GraphNode[], _w: number, _h: number): void 
   }
 }
 
-// 3D spatial hash
-function buildGrid(nodes: GraphNode[]) {
-  const grid = new Map<string, number[]>();
+// 3D spatial hash — integer keys avoid string allocation overhead
+function hashKey(x: number, y: number, z: number): number {
+  // Bijective pairing with signed coords: offset to positive, then combine
+  const a = (x >= 0 ? x * 2 : -x * 2 - 1) | 0;
+  const b = (y >= 0 ? y * 2 : -y * 2 - 1) | 0;
+  const c = (z >= 0 ? z * 2 : -z * 2 - 1) | 0;
+  // Szudzik pairing extended to 3D — unique for reasonable coordinate ranges
+  const ab = a >= b ? a * a + a + b : b * b + a;
+  return ab >= c ? ab * ab + ab + c : c * c + ab;
+}
+
+function buildGrid(nodes: GraphNode[], cellSize: number) {
+  const grid = new Map<number, number[]>();
   for (let i = 0; i < nodes.length; i++) {
-    const gx = Math.floor(nodes[i].x / CELL_SIZE);
-    const gy = Math.floor(nodes[i].y / CELL_SIZE);
-    const gz = Math.floor(nodes[i].z / CELL_SIZE);
-    const key = `${gx},${gy},${gz}`;
+    const gx = Math.floor(nodes[i].x / cellSize);
+    const gy = Math.floor(nodes[i].y / cellSize);
+    const gz = Math.floor(nodes[i].z / cellSize);
+    const key = hashKey(gx, gy, gz);
     let cell = grid.get(key);
     if (!cell) { cell = []; grid.set(key, cell); }
     cell.push(i);
@@ -71,15 +81,32 @@ export function tick(
     a.vz += -a.z * GLOBAL_GRAVITY * alpha;
   }
 
-  // Repulsion via 3D spatial grid
-  const grid = buildGrid(nodes);
-  for (const [key, cell] of grid) {
-    const parts = key.split(',');
-    const gx = +parts[0], gy = +parts[1], gz = +parts[2];
+  // Repulsion via 3D spatial grid — cell size scales with node count
+  const cellSize = n > 500 ? 120 : CELL_SIZE;
+  const cutoffSq = cellSize * cellSize * 4;
+  const grid = buildGrid(nodes, cellSize);
+
+  // Build a coord lookup so we can iterate neighbors by integer key
+  const cellCoords: { key: number; gx: number; gy: number; gz: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const gx = Math.floor(nodes[i].x / cellSize);
+    const gy = Math.floor(nodes[i].y / cellSize);
+    const gz = Math.floor(nodes[i].z / cellSize);
+    cellCoords.push({ key: hashKey(gx, gy, gz), gx, gy, gz });
+  }
+
+  // Deduplicate cells we've already visited
+  const visited = new Set<number>();
+  for (const { key, gx, gy, gz } of cellCoords) {
+    if (visited.has(key)) continue;
+    visited.add(key);
+    const cell = grid.get(key);
+    if (!cell) continue;
+
     for (let dx = -1; dx <= 1; dx++) {
       for (let dy = -1; dy <= 1; dy++) {
         for (let dz = -1; dz <= 1; dz++) {
-          const nk = `${gx + dx},${gy + dy},${gz + dz}`;
+          const nk = hashKey(gx + dx, gy + dy, gz + dz);
           const neighbor = grid.get(nk);
           if (!neighbor) continue;
           const isSelf = dx === 0 && dy === 0 && dz === 0;
@@ -95,7 +122,7 @@ export function tick(
               const ddy = b.y - a.y;
               const ddz = b.z - a.z;
               const distSq = ddx * ddx + ddy * ddy + ddz * ddz;
-              if (distSq > CELL_SIZE * CELL_SIZE * 4) continue;
+              if (distSq > cutoffSq) continue;
               const dist = Math.max(1, Math.sqrt(distSq));
               const force = Math.min(MAX_FORCE, REPULSION / (dist * dist)) * alpha;
               const fx = (ddx / dist) * force;

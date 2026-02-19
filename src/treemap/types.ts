@@ -1,7 +1,8 @@
 export interface TreemapNode {
   id: string;
   name: string;
-  value: number;
+  value: number;       // layout weight (dampened for balanced proportions)
+  fileCount: number;   // true file count for display
   children: TreemapNode[];
   extBreakdown: Record<string, number>;
   depth: number;

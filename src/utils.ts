@@ -1,3 +1,17 @@
+import type { Manifest } from './types';
+
+/** Get all file paths belonging to a module (including child modules). */
+export function getFilesForModule(moduleId: string, manifest: Manifest): string[] {
+  const prefix = moduleId + ' > ';
+  const result: string[] = [];
+  for (const [cat, files] of Object.entries(manifest)) {
+    if (cat === moduleId || cat.startsWith(prefix)) {
+      for (const f of files) result.push(f.path);
+    }
+  }
+  return result;
+}
+
 export function getFilename(p: string): string {
   const i = p.lastIndexOf('/');
   return i >= 0 ? p.slice(i + 1) : p;

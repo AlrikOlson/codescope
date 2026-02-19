@@ -7,7 +7,7 @@
             "request": "launch",
             "runtimeExecutable": "${workspaceFolder}/server/target/release/codescope-server",
             "runtimeArgs": [
-                "--root", "/path/to/your/project",
+                "--root", ".",
                 "--dist", "${workspaceFolder}/dist"
             ],
             "cwd": "${workspaceFolder}",

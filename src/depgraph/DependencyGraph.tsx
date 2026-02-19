@@ -21,13 +21,27 @@ interface Props {
   selected: Set<string>;
   manifest: Manifest;
   onNavigateModule: (id: string) => void;
+  onSelectModule: (moduleId: string) => void;
 }
 
-export default function DependencyGraph({ deps, activeCategory, searchTerm, globalSearch, selected, manifest, onNavigateModule }: Props) {
+export default function DependencyGraph({ deps, activeCategory, searchTerm, globalSearch, selected, manifest, onNavigateModule, onSelectModule }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [tooltip, setTooltip] = useState<DepGraphTooltip | null>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [inspectDepth, setInspectDepth] = useState(2);
+
+  // Build a reverse lookup: categoryPath → dep module name(s)
+  const catToMods = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const [mod, entry] of Object.entries(deps)) {
+      const cp = entry.categoryPath;
+      if (!cp) continue;
+      let arr = map.get(cp);
+      if (!arr) { arr = []; map.set(cp, arr); }
+      arr.push(mod);
+    }
+    return map;
+  }, [deps]);
 
   const selectedModules = useMemo(() => {
     if (selected.size === 0) return new Set<string>();
@@ -35,17 +49,20 @@ export default function DependencyGraph({ deps, activeCategory, searchTerm, glob
     for (const [catPath, files] of Object.entries(manifest)) {
       const hasSelected = files.some(f => selected.has(f.path));
       if (!hasSelected) continue;
-      for (const [mod, entry] of Object.entries(deps)) {
-        if (entry.categoryPath === catPath) { mods.add(mod); break; }
+      // Use reverse lookup (fast) instead of scanning all deps
+      const mapped = catToMods.get(catPath);
+      if (mapped) {
+        for (const m of mapped) mods.add(m);
       }
+      // Also try last segment as direct dep key
       const lastSeg = catPath.split(' > ').pop() || '';
-      if (deps[lastSeg]) mods.add(lastSeg);
+      if (lastSeg && deps[lastSeg]) mods.add(lastSeg);
     }
     return mods;
-  }, [selected, manifest, deps]);
+  }, [selected, manifest, deps, catToMods]);
 
-  const propsRef = useRef({ activeCategory, deps, onNavigateModule, searchTerm, globalSearch, selectedModules });
-  propsRef.current = { activeCategory, deps, onNavigateModule, searchTerm, globalSearch, selectedModules };
+  const propsRef = useRef({ activeCategory, deps, onNavigateModule, onSelectModule, searchTerm, globalSearch, selectedModules });
+  propsRef.current = { activeCategory, deps, onNavigateModule, onSelectModule, searchTerm, globalSearch, selectedModules };
   const resetCameraRef = useRef<() => void>(() => {});
   const flyToNodeRef = useRef<(nodeId: string) => void>(() => {});
 
@@ -57,93 +74,113 @@ export default function DependencyGraph({ deps, activeCategory, searchTerm, glob
 
     const { nodes, edges, nodeMap, adjacency } = graphData;
     let cancelled = false;
+    let cleanupFn: (() => void) | null = null;
 
-    const { context, resizeObserver } = createScene(container);
-    const { renderer, scene, camera, composer, controls, labelRenderer } = context;
-    const rect = container.getBoundingClientRect();
-
-    // Simulation warm-up
-    initPositions(nodes, rect.width, rect.height);
-    const maxTicks = 800;
-    for (let i = 0; i < 200; i++) {
-      tick(nodes, edges, nodeMap, rect.width, rect.height, 1 - i / maxTicks);
-    }
-    let tickCount = 200;
-    let simRunning = true;
-
-    // Subsystems
-    const nodeSys = createNodeSystem(scene, nodes);
-    const edgeSys = createEdgeSystem(scene, edges, nodes, nodeMap);
-    const nebulaSys = createNebulaSystem(scene, nodes, nodeSys.groups);
-    const interaction = createInteraction(
-      renderer, camera, controls,
-      nodeSys.instancedMeshes, nodes, nodeMap,
-      { onTooltip: setTooltip, onSelectNode: setSelectedNode, getProps: () => propsRef.current },
-    );
-    resetCameraRef.current = interaction.resetCamera;
-    flyToNodeRef.current = interaction.flyToNode;
-
-    // Animation loop
-    let nebulaUpdateTimer = 0;
-    renderer.setAnimationLoop(() => {
+    // Defer init to next frame so the browser resolves the grid layout first
+    const raf = requestAnimationFrame(() => {
       if (cancelled) return;
-      const time = performance.now() * 0.001;
 
-      if (simRunning) {
-        const iters = tickCount < 400 ? 3 : 1;
-        for (let i = 0; i < iters; i++) {
-          tick(nodes, edges, nodeMap, rect.width, rect.height, Math.max(0.01, 1 - tickCount / maxTicks));
+      const rect = container.getBoundingClientRect();
+      const simSize = { width: rect.width, height: rect.height };
+
+      const { context, resizeObserver } = createScene(container, simSize);
+      const { renderer, scene, camera, composer, controls, labelRenderer } = context;
+
+      // Simulation warm-up — scale with graph size to avoid UI blocking
+      initPositions(nodes, simSize.width, simSize.height);
+      const n = nodes.length;
+      const maxTicks = n > 500 ? 300 : n > 200 ? 500 : 800;
+      const warmupTicks = n > 500 ? 60 : n > 200 ? 100 : 200;
+      for (let i = 0; i < warmupTicks; i++) {
+        tick(nodes, edges, nodeMap, simSize.width, simSize.height, 1 - i / maxTicks);
+      }
+      let tickCount = warmupTicks;
+      let simRunning = true;
+
+      // Subsystems
+      const nodeSys = createNodeSystem(scene, nodes);
+      const edgeSys = createEdgeSystem(scene, edges, nodes, nodeMap);
+      const nebulaSys = createNebulaSystem(scene, nodes, nodeSys.groups);
+      const interaction = createInteraction(
+        renderer, camera, controls,
+        nodeSys.instancedMeshes, nodes, nodeMap,
+        { onTooltip: setTooltip, onSelectNode: setSelectedNode, getProps: () => propsRef.current },
+      );
+      resetCameraRef.current = interaction.resetCamera;
+      flyToNodeRef.current = interaction.flyToNode;
+
+      // Animation loop — dirty-flag highlights to avoid per-frame O(n) scans
+      let nebulaUpdateTimer = 0;
+      let prevHlKey = '';
+      let cachedHlState: ReturnType<typeof computeHighlightState> | null = null;
+
+      renderer.setAnimationLoop(() => {
+        if (cancelled) return;
+        const time = performance.now() * 0.001;
+
+        if (simRunning) {
+          tick(nodes, edges, nodeMap, simSize.width, simSize.height, Math.max(0.01, 1 - tickCount / maxTicks));
           tickCount++;
+          nodeSys.updateInstances();
+          edgeSys.updateEdgePositions();
+          nebulaUpdateTimer++;
+          if (nebulaUpdateTimer % 30 === 0) nebulaSys.updateNebulas();
+          if (tickCount > maxTicks) simRunning = false;
         }
-        nodeSys.updateInstances();
-        edgeSys.updateEdgePositions();
-        nebulaUpdateTimer++;
-        if (nebulaUpdateTimer % 30 === 0) nebulaSys.updateNebulas();
-        if (tickCount > maxTicks) simRunning = false;
-      }
 
-      // Camera fly-to
-      const ft = interaction.state.flyTo;
-      if (ft?.active) {
-        ft.t = Math.min(1, ft.t + 0.025);
-        const ease = 1 - Math.pow(1 - ft.t, 3);
-        camera.position.lerpVectors(ft.from, ft.to, ease);
-        controls.target.lerpVectors(ft.lookFrom, ft.lookTo, ease);
-        if (ft.t >= 1) ft.active = false;
-      }
+        // Camera fly-to
+        const ft = interaction.state.flyTo;
+        if (ft?.active) {
+          ft.t = Math.min(1, ft.t + 0.025);
+          const ease = 1 - Math.pow(1 - ft.t, 3);
+          camera.position.lerpVectors(ft.from, ft.to, ease);
+          controls.target.lerpVectors(ft.lookFrom, ft.lookTo, ease);
+          if (ft.t >= 1) ft.active = false;
+        }
 
-      // Highlights
-      const hlState = computeHighlightState({
-        activeCategory: propsRef.current.activeCategory,
-        deps: propsRef.current.deps,
-        searchTerm: propsRef.current.searchTerm,
-        globalSearch: propsRef.current.globalSearch,
-        selectedModules: propsRef.current.selectedModules,
-        hoveredNodeIdx: interaction.state.hoveredNodeIdx,
-      }, nodes, nodeMap, adjacency);
-      computeEdgeAlphaTargets(hlState, edges, nodeMap, adjacency, edgeSys.edgeAlphaTargets);
-      lerpEdgeAlphas(edgeSys.edgeAlphas, edgeSys.edgeAlphaTargets);
-      edgeSys.edgeGeo.attributes.alpha.needsUpdate = true;
-      applyNodeHighlights(hlState, nodeSys.instancedMeshes, nodes, nodeSys.dummy, interaction.state.clickPulseNodeIdx, interaction.state.clickPulseT, simRunning, time);
+        // Highlights — only recompute when inputs change
+        const p = propsRef.current;
+        const hlKey = `${p.activeCategory}|${p.searchTerm}|${p.globalSearch}|${[...p.selectedModules].sort().join(',')}|${interaction.state.hoveredNodeIdx}`;
+        if (hlKey !== prevHlKey || !cachedHlState) {
+          prevHlKey = hlKey;
+          cachedHlState = computeHighlightState({
+            activeCategory: p.activeCategory,
+            deps: p.deps,
+            searchTerm: p.searchTerm,
+            globalSearch: p.globalSearch,
+            selectedModules: p.selectedModules,
+            hoveredNodeIdx: interaction.state.hoveredNodeIdx,
+          }, nodes, nodeMap, adjacency);
+          computeEdgeAlphaTargets(cachedHlState, edges, nodeMap, adjacency, edgeSys.edgeAlphaTargets);
+        }
+        lerpEdgeAlphas(edgeSys.edgeAlphas, edgeSys.edgeAlphaTargets);
+        edgeSys.edgeGeo.attributes.alpha.needsUpdate = true;
+        applyNodeHighlights(cachedHlState, nodeSys.instancedMeshes, nodes, nodeSys.dummy, interaction.state.clickPulseNodeIdx, interaction.state.clickPulseT, simRunning, time);
 
-      if (interaction.state.clickPulseT < 1) {
-        interaction.state.clickPulseT += 0.04;
-      }
+        if (interaction.state.clickPulseT < 1) {
+          interaction.state.clickPulseT += 0.04;
+        }
 
-      if (!simRunning) nebulaSys.driftNebulas(time);
+        if (!simRunning) nebulaSys.driftNebulas(time);
 
-      controls.update();
-      composer.render();
-      labelRenderer.render(scene, camera);
+        controls.update();
+        composer.render();
+        labelRenderer.render(scene, camera);
+      });
+
+      cleanupFn = () => {
+        interaction.dispose();
+        nodeSys.dispose();
+        edgeSys.dispose();
+        nebulaSys.dispose();
+        disposeScene(context, container, resizeObserver);
+      };
     });
 
     return () => {
       cancelled = true;
-      interaction.dispose();
-      nodeSys.dispose();
-      edgeSys.dispose();
-      nebulaSys.dispose();
-      disposeScene(context, container, resizeObserver);
+      cancelAnimationFrame(raf);
+      cleanupFn?.();
     };
   }, [graphData]);
 

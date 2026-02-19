@@ -4,16 +4,17 @@
 .stats-dashboard {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
+  padding: 16px;
   scrollbar-width: thin;
   scrollbar-color: color-mix(in oklch, var(--neon-cyan) 20%, transparent) transparent;
 }
 
 .stats-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
   gap: 20px;
-  max-width: 1200px;
+  max-width: 1400px;
+  margin: 0 auto;
 }
 
 /* Section wrappers */

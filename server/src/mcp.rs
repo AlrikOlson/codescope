@@ -617,7 +617,7 @@ fn handle_tool_call(
 
             let truncate = |line: &str| -> String {
                 if line.len() > 200 {
-                    format!("{}...", &line[..200])
+                    format!("{}...", &line[..line.floor_char_boundary(200)])
                 } else {
                     line.to_string()
                 }
@@ -1131,7 +1131,7 @@ fn handle_tool_call(
                                 if line_term_count > best_snippet_term_count {
                                     best_snippet_term_count = line_term_count;
                                     let trimmed = if line.len() > 120 {
-                                        format!("{}...", &line[..120])
+                                        format!("{}...", &line[..line.floor_char_boundary(120)])
                                     } else {
                                         line.to_string()
                                     };

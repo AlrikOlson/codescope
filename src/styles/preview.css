@@ -164,25 +164,6 @@
   padding-right: 16px;
 }
 
-/* ============================================
-   Preview Resize Handle
-   ============================================ */
-.preview-resize-handle {
-  width: var(--border-width);
-  cursor: col-resize;
-  background: var(--border);
-  flex-shrink: 0;
-  transition: all var(--normal) var(--ease);
-  position: relative;
-}
-.preview-resize-handle:hover {
-  background: color-mix(in oklch, var(--neon-cyan) 30%, transparent);
-  box-shadow: 0 0 6px color-mix(in oklch, var(--neon-cyan) 12%, transparent);
-}
-.preview-resize-handle:active, .preview-resize-handle.dragging {
-  background: var(--neon-cyan);
-  box-shadow: 0 0 12px color-mix(in oklch, var(--neon-cyan) 25%, transparent);
-}
 
 /* ============================================
    Syntax Highlighting (keep Catppuccin colors)

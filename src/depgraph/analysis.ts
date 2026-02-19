@@ -2,6 +2,14 @@ import { getCategoryColor } from '../colors';
 import type { DepGraph, Manifest } from '../types';
 import type { GraphNode, GraphEdge, GraphData, DepNode, DepLevel, DepTree, MultiConnection, MultiInspectData } from './types';
 
+/** Sqrt for small counts, transitions to log for large counts to prevent hub nodes
+ *  from visually overwhelming everything else. Crossover at ~25 connections. */
+function dampenRadius(count: number): number {
+  if (count <= 25) return Math.sqrt(count) * 0.8;
+  // log scaling above threshold, continuous at crossover point
+  return Math.sqrt(25) * 0.8 + Math.log2(count / 25) * 1.5;
+}
+
 export function buildGraphData(deps: DepGraph): GraphData {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
@@ -33,7 +41,7 @@ export function buildGraphData(deps: DepGraph): GraphData {
     nodes.push({
       id: mod,
       x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0,
-      radius: Math.max(1.5, Math.sqrt(count) * 0.8),
+      radius: Math.max(1.5, dampenRadius(count)),
       color: getCategoryColor(group),
       depCount: count,
       categoryPath: catPath,

@@ -14,7 +14,7 @@ export interface SceneContext {
   controls: OrbitControls;
 }
 
-export function createScene(container: HTMLDivElement): { context: SceneContext; resizeObserver: ResizeObserver } {
+export function createScene(container: HTMLDivElement, simSize?: { width: number; height: number }): { context: SceneContext; resizeObserver: ResizeObserver } {
   const rect = container.getBoundingClientRect();
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
@@ -62,6 +62,7 @@ export function createScene(container: HTMLDivElement): { context: SceneContext;
   const resizeObserver = new ResizeObserver((entries) => {
     const cr = entries[0]?.contentRect;
     if (!cr || cr.width === 0 || cr.height === 0) return;
+    if (simSize) { simSize.width = cr.width; simSize.height = cr.height; }
     camera.aspect = cr.width / cr.height;
     camera.updateProjectionMatrix();
     renderer.setSize(cr.width, cr.height);

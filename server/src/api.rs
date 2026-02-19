@@ -285,7 +285,7 @@ pub async fn api_grep(
                         }
                         if file_matches.len() < max_per_file {
                             let trimmed = if line.len() > 200 {
-                                format!("{}...", &line[..200])
+                                format!("{}...", &line[..line.floor_char_boundary(200)])
                             } else {
                                 line.to_string()
                             };
@@ -586,7 +586,7 @@ pub async fn api_find(
                                 if line_term_count > best_snippet_term_count {
                                     best_snippet_term_count = line_term_count;
                                     let trimmed = if line.len() > 120 {
-                                        format!("{}...", &line[..120])
+                                        format!("{}...", &line[..line.floor_char_boundary(120)])
                                     } else {
                                         line.to_string()
                                     };

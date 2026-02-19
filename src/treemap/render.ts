@@ -7,7 +7,7 @@ const LABEL_COLOR = '#cdd6f4';
 const LABEL_SHADOW = 'rgba(0,0,0,0.7)';
 
 export function getMaxDepth(scale: number): number {
-  return Math.max(1, Math.min(10, Math.floor(Math.log2(Math.max(1, scale))) + 2));
+  return Math.max(2, Math.min(10, Math.floor(Math.log2(Math.max(1, scale))) + 3));
 }
 
 export function renderTreemap(
@@ -111,7 +111,7 @@ function drawNode(
         const countSize = Math.max(7, fontSize * 0.7);
         ctx.font = `400 ${countSize}px -apple-system, 'Segoe UI', system-ui, sans-serif`;
         ctx.fillStyle = 'rgba(205,214,244,0.5)';
-        ctx.fillText(`${node.value.toLocaleString()}`, sx + sw / 2, sy + sh / 2 + fontSize * 0.8);
+        ctx.fillText(`${node.fileCount.toLocaleString()}`, sx + sw / 2, sy + sh / 2 + fontSize * 0.8);
       }
     }
   } else {

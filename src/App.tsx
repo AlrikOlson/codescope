@@ -3,7 +3,6 @@ import TreeSidebar from './TreeSidebar';
 import FileList from './FileList';
 import CodebaseMap from './treemap/CodebaseMap';
 import DependencyGraph from './depgraph/DependencyGraph';
-import ContextPanel from './ContextPanel';
 import SearchSidebar from './SearchSidebar';
 import FilePreview from './FilePreview';
 import StatsDashboard from './StatsDashboard';
@@ -11,17 +10,21 @@ import ActivityBar from './ActivityBar';
 import type { ActivityPanel } from './ActivityBar';
 import SidebarPanel from './SidebarPanel';
 import { useDataFetch } from './hooks/useDataFetch';
-import { useSidebarResize } from './hooks/useSidebarResize';
-import { usePreviewResize } from './hooks/usePreviewResize';
-import { useBreakpoint } from './hooks/useBreakpoint';
+import { toggleModule, selectWithDeps, resolveCategoryPath } from './selectionActions';
 import './styles/layout.css';
+
+type ViewMode = 'list' | 'map' | 'graph' | 'stats';
+
+const VIEW_LABELS: Record<ViewMode, string> = {
+  list: 'Files',
+  map: 'Map',
+  graph: 'Graph',
+  stats: 'Stats',
+};
 
 export default function App() {
   const { tree, manifest, deps, loading } = useDataFetch();
-  const { sidebarWidth, startResize, isDragging } = useSidebarResize(300);
-  const { previewWidth, startResize: startPreviewResize, isDragging: isPreviewDragging } = usePreviewResize(480);
   const appRef = useRef<HTMLDivElement>(null);
-  const breakpoint = useBreakpoint();
 
   // Navigation state
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -31,7 +34,7 @@ export default function App() {
   const [globalSearchPaths, setGlobalSearchPaths] = useState<Map<string, number> | null>(null);
 
   // View state
-  const [viewMode, setViewMode] = useState<'list' | 'map' | 'graph' | 'stats'>('list');
+  const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<ActivityPanel | null>('tree');
 
@@ -56,33 +59,10 @@ export default function App() {
     setTheme(t => t === 'dark' ? 'light' : t === 'light' ? 'system' : 'dark');
   }, []);
 
-  const handleViewChange = useCallback((mode: typeof viewMode) => {
-    if ((document as any).startViewTransition) {
-      (document as any).startViewTransition(() => setViewMode(mode));
-    } else {
-      setViewMode(mode);
-    }
-  }, []);
-
-  // Activity bar panel selection — also switches view mode for stats/graph/map
+  // Activity bar panel selection — just toggles sidebar, no view mode change
   const handlePanelSelect = useCallback((panel: ActivityPanel) => {
-    if (panel === 'stats') {
-      handleViewChange('stats');
-      setActivePanel('stats');
-    } else if (panel === 'graph') {
-      handleViewChange('graph');
-      setActivePanel('graph');
-    } else if (panel === 'map') {
-      handleViewChange('map');
-      setActivePanel('map');
-    } else {
-      // Switch to list view when selecting search/tree/context
-      if (viewMode === 'stats' || viewMode === 'graph' || viewMode === 'map') {
-        handleViewChange('list');
-      }
-      setActivePanel(prev => prev === panel ? null : panel);
-    }
-  }, [handleViewChange, viewMode]);
+    setActivePanel(prev => prev === panel ? null : panel);
+  }, []);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -97,18 +77,10 @@ export default function App() {
         e.preventDefault();
         setActivePanel(prev => prev ? null : 'tree');
       }
-      if (mod && e.key >= '1' && e.key <= '6') {
-        e.preventDefault();
-        const panels: ActivityPanel[] = ['search', 'tree', 'map', 'context', 'stats', 'graph'];
-        handlePanelSelect(panels[parseInt(e.key) - 1]);
-      }
-      if (e.key === 'Escape' && breakpoint === 'compact' && activePanel) {
-        setActivePanel(null);
-      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [breakpoint, activePanel, handlePanelSelect]);
+  }, []);
 
   // Mouse-reactive ambient glow
   useEffect(() => {
@@ -162,14 +134,9 @@ export default function App() {
       return next;
     });
     setActiveCategory(id);
-    // Switch to tree view to show the navigation
-    if (activePanel === 'search' || activePanel === 'map') {
-      setActivePanel('tree');
-    }
-    if (viewMode !== 'list') {
-      handleViewChange('list');
-    }
-  }, [activePanel, viewMode, handleViewChange]);
+    setActivePanel('tree');
+    setViewMode('list');
+  }, []);
 
   // File selection handlers
   const handleToggleFile = useCallback((path: string) => {
@@ -196,6 +163,32 @@ export default function App() {
     });
   }, []);
 
+  // Sidebar checkboxes — toggle one module's files
+  const handleToggleModule = useCallback((moduleId: string) => {
+    setSelected(prev => toggleModule(moduleId, manifest, prev));
+  }, [manifest]);
+
+  // Graph/treemap clicks — select module + deps, expand tree, highlight, scroll
+  const handleSelectModule = useCallback((id: string) => {
+    if (!deps) return;
+    setSelected(prev => selectWithDeps(id, deps, manifest, prev));
+    const catPath = resolveCategoryPath(id, deps);
+    if (catPath) {
+      const parts = catPath.split(' > ');
+      setExpanded(prev => {
+        const next = new Set(prev);
+        let path = '';
+        for (const part of parts) {
+          path = path ? `${path} > ${part}` : part;
+          next.add(path);
+        }
+        return next;
+      });
+      setActiveCategory(catPath);
+    }
+    setActivePanel('tree');
+  }, [deps, manifest]);
+
   const handleClear = useCallback(() => setSelected(new Set()), []);
   const handleCollapseAll = useCallback(() => setExpanded(new Set()), []);
 
@@ -212,13 +205,6 @@ export default function App() {
     setPreviewPath(prev => prev === path ? null : path);
   }, []);
 
-  const handleRemoveFile = useCallback((path: string) => {
-    setSelected(prev => {
-      const next = new Set(prev);
-      next.delete(path);
-      return next;
-    });
-  }, []);
 
   // Breadcrumb segments from activeCategory
   const breadcrumbs = useMemo(() => {
@@ -229,16 +215,6 @@ export default function App() {
       id: parts.slice(0, i + 1).join(' > '),
     }));
   }, [activeCategory]);
-
-  // Determine if context panel should be pinned (wide screens, only when preview is closed)
-  const contextPinned = breakpoint === 'wide' && selected.size > 0 && !previewPath;
-
-  // Layout CSS classes
-  const layoutClasses = [
-    'layout',
-    !activePanel ? 'sidebar-hidden' : '',
-    contextPinned ? 'context-pinned' : '',
-  ].filter(Boolean).join(' ');
 
   if (loading) {
     return (
@@ -276,6 +252,17 @@ export default function App() {
             ))}
           </nav>
         )}
+        <div className="view-switcher">
+          {(['list', 'map', 'graph', 'stats'] as const).map(mode => (
+            <button
+              key={mode}
+              className={`view-switcher-btn${viewMode === mode ? ' active' : ''}`}
+              onClick={() => setViewMode(mode)}
+            >
+              {VIEW_LABELS[mode]}
+            </button>
+          ))}
+        </div>
         <button className="search-trigger" onClick={() => setActivePanel('search')}>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
@@ -286,15 +273,7 @@ export default function App() {
         <div className="topbar-spacer" />
       </header>
 
-      {/* Compact mode backdrop — outside grid to avoid taking a grid cell */}
-      {breakpoint === 'compact' && activePanel && (
-        <div
-          className={`sidebar-backdrop${activePanel ? ' visible' : ''}`}
-          onClick={() => setActivePanel(null)}
-        />
-      )}
-
-      <div className={layoutClasses} style={{ '--sidebar-w': activePanel ? `${sidebarWidth + 2}px` : '0px' } as React.CSSProperties}>
+      <div className="layout">
         <ActivityBar
           active={activePanel}
           onSelect={handlePanelSelect}
@@ -322,30 +301,21 @@ export default function App() {
                 expanded={expanded}
                 activeCategory={activeCategory}
                 selected={selected}
+                globalSearch={globalSearch}
                 onToggle={handleToggle}
                 onSelect={handleSelect}
                 onToggleFile={handleToggleFile}
+                onToggleModule={handleToggleModule}
+                onClear={handleClear}
                 onCollapseAll={handleCollapseAll}
                 onExpandAll={handleExpandAll}
               />
             ),
-            context: !contextPinned ? (
-              <ContextPanel
-                selected={selected}
-                manifest={manifest}
-                searchQuery={globalSearch}
-                onClear={handleClear}
-                onRemoveFile={handleRemoveFile}
-              />
-            ) : undefined,
           }}
-          width={sidebarWidth}
-          onResizeStart={startResize}
-          isDragging={isDragging}
         />
 
         <div className="main-content">
-          {(viewMode === 'list' || (viewMode !== 'map' && viewMode !== 'graph' && viewMode !== 'stats')) && (
+          {viewMode === 'list' && (
             <div className="list-content">
               <FileList
                 manifest={manifest}
@@ -360,23 +330,17 @@ export default function App() {
                 onPreview={handlePreview}
               />
               {previewPath && (
-                <>
-                  <div
-                    className={`preview-resize-handle${isPreviewDragging ? ' dragging' : ''}`}
-                    onMouseDown={startPreviewResize}
+                <div style={{ width: 400, flexShrink: 0, borderLeft: '1px solid var(--border)' }}>
+                  <FilePreview
+                    path={previewPath}
+                    manifest={manifest}
+                    selected={selected}
+                    onClose={() => setPreviewPath(null)}
+                    onToggleFile={handleToggleFile}
+                    isMaximized={false}
+                    onToggleMaximize={() => {}}
                   />
-                  <div style={{ width: previewWidth, flexShrink: 0 }}>
-                    <FilePreview
-                      path={previewPath}
-                      manifest={manifest}
-                      selected={selected}
-                      onClose={() => setPreviewPath(null)}
-                      onToggleFile={handleToggleFile}
-                      isMaximized={false}
-                      onToggleMaximize={() => {}}
-                    />
-                  </div>
-                </>
+                </div>
               )}
             </div>
           )}
@@ -388,6 +352,7 @@ export default function App() {
               selected={selected}
               onNavigateModule={handleNavigateModule}
               onToggleFile={handleToggleFile}
+              onSelectModule={handleSelectModule}
             />
           )}
           {viewMode === 'graph' && deps && (
@@ -399,6 +364,7 @@ export default function App() {
               selected={selected}
               manifest={manifest}
               onNavigateModule={handleNavigateModule}
+              onSelectModule={handleSelectModule}
             />
           )}
           {viewMode === 'stats' && (
@@ -408,19 +374,6 @@ export default function App() {
             />
           )}
         </div>
-
-        {/* Pinned context panel on wide screens */}
-        {contextPinned && (
-          <div className="context-right-sidebar">
-            <ContextPanel
-              selected={selected}
-              manifest={manifest}
-              searchQuery={globalSearch}
-              onClear={handleClear}
-              onRemoveFile={handleRemoveFile}
-            />
-          </div>
-        )}
       </div>
     </div>
   );
