@@ -2,14 +2,106 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [master]
 
 permissions:
   contents: write
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      new_tag: ${{ steps.bump.outputs.new_tag }}
+      skip: ${{ steps.bump.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine version bump
+        id: bump
+        run: |
+          # Get latest v* tag, default to v0.0.0 if none exist
+          LAST_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "v0.0.0")
+          echo "Last tag: $LAST_TAG"
+
+          # If HEAD is already tagged, skip (prevents infinite loop from version commit)
+          HEAD_TAGS=$(git tag --points-at HEAD | grep '^v' || true)
+          if [ -n "$HEAD_TAGS" ]; then
+            echo "HEAD already tagged ($HEAD_TAGS) — skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "new_tag=$HEAD_TAGS" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Analyze commits since last tag for conventional commit prefixes
+          if [ "$LAST_TAG" = "v0.0.0" ]; then
+            COMMITS=$(git log --pretty=format:"%s" -20)
+          else
+            COMMITS=$(git log "$LAST_TAG"..HEAD --pretty=format:"%s")
+          fi
+
+          if [ -z "$COMMITS" ]; then
+            echo "No new commits since $LAST_TAG — skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "new_tag=$LAST_TAG" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Commits since $LAST_TAG:"
+          echo "$COMMITS"
+
+          BUMP="patch"
+          while IFS= read -r msg; do
+            # Breaking change: type!: or BREAKING CHANGE in body
+            if echo "$msg" | grep -qE '^[a-z]+(\(.+\))?!:'; then
+              BUMP="major"
+              break
+            elif echo "$msg" | grep -q 'BREAKING CHANGE'; then
+              BUMP="major"
+              break
+            # Feature: feat: or feat(scope):
+            elif echo "$msg" | grep -qE '^feat(\(.+\))?:'; then
+              BUMP="minor"
+            fi
+          done <<< "$COMMITS"
+
+          # Parse version from last tag
+          VERSION="${LAST_TAG#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+
+          case "$BUMP" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "Bump: $BUMP ($LAST_TAG → $NEW_TAG)"
+          echo "new_tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Update Cargo.toml and tag
+        if: steps.bump.outputs.skip != 'true'
+        run: |
+          NEW_TAG="${{ steps.bump.outputs.new_tag }}"
+          VERSION="${NEW_TAG#v}"
+
+          # Update version in Cargo.toml
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" server/Cargo.toml
+          echo "Updated server/Cargo.toml to $VERSION"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add server/Cargo.toml
+          git diff --cached --quiet || git commit -m "release: $NEW_TAG"
+          git tag "$NEW_TAG"
+          git push origin master --tags
+
   build:
+    needs: version
+    if: needs.version.outputs.skip != 'true'
     strategy:
       matrix:
         include:
@@ -61,6 +153,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.new_tag }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -109,7 +203,8 @@ jobs:
           path: ${{ matrix.archive }}
 
   release:
-    needs: build
+    needs: [version, build]
+    if: needs.version.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -123,5 +218,6 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.version.outputs.new_tag }}
           generate_release_notes: true
           files: artifacts/*.tar.gz
