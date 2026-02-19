@@ -26,7 +26,7 @@ Usage:
   bash setup.sh [options] [/path/to/project]
 
 Options:
-  --with-semantic   Enable ML-powered semantic search (requires compiling from source)
+  --with-semantic   Enable ML-powered semantic search
   --from-source     Force compilation from source instead of downloading a binary
   --help, -h        Show this help
 
@@ -37,7 +37,7 @@ Examples:
   # Install and set up a project in one step
   bash setup.sh /path/to/my/project
 
-  # Install with semantic search (compiles from source, ~5 minutes)
+  # Install with semantic search (downloads pre-built binary with ML support)
   bash setup.sh --with-semantic
 EOF
 }
@@ -100,7 +100,11 @@ download_binary() {
         return 1
     fi
 
-    local archive="codescope-server-${platform}.tar.gz"
+    local suffix=""
+    if [ "$WITH_SEMANTIC" = "1" ]; then
+        suffix="-semantic"
+    fi
+    local archive="codescope-server-${platform}${suffix}.tar.gz"
     local url="https://github.com/$REPO/releases/download/$tag/$archive"
 
     info "Downloading CodeScope $tag ($platform)..."
@@ -285,10 +289,7 @@ info "Installing CodeScope..."
 echo ""
 
 # Decide install method
-if [ "$WITH_SEMANTIC" = "1" ] || [ "$FROM_SOURCE" = "1" ]; then
-    if [ "$WITH_SEMANTIC" = "1" ]; then
-        info "Semantic search requires compiling from source."
-    fi
+if [ "$FROM_SOURCE" = "1" ]; then
     install_from_source "$SCRIPT_DIR"
 else
     platform="$(detect_platform 2>/dev/null)" || platform=""

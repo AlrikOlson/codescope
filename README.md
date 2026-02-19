@@ -66,13 +66,13 @@ curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/s
 
 ## Semantic Search (Optional)
 
-ML-powered search that finds code by meaning, not just keywords. Requires compiling from source (~5 minutes, one-time):
+ML-powered search that finds code by meaning, not just keywords:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --with-semantic
 ```
 
-Uses a BERT model (`all-MiniLM-L6-v2`, ~90MB, downloaded on first use) for vector similarity search. When enabled, `codescope-server init` automatically configures your project to use it.
+Downloads a pre-built binary with semantic search included. Uses a BERT model (`all-MiniLM-L6-v2`, ~90MB, downloaded on first use) for vector similarity search. When enabled, `codescope-server init` automatically configures your project to use it.
 
 ## Web UI
 
@@ -167,7 +167,7 @@ source ~/.bashrc    # or: source ~/.zshrc
 
 ### Semantic search not working
 
-The standard install does not include semantic search. Reinstall with:
+The standard install does not include semantic search. Install the semantic version:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --with-semantic
