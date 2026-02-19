@@ -109,48 +109,22 @@ jobs:
     strategy:
       matrix:
         include:
-          # Standard builds
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             archive: codescope-server-linux-x86_64.tar.gz
             use_cross: true
-            features: ""
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             archive: codescope-server-linux-aarch64.tar.gz
             use_cross: true
-            features: ""
           - target: x86_64-apple-darwin
             os: macos-latest
             archive: codescope-server-macos-x86_64.tar.gz
             use_cross: false
-            features: ""
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: codescope-server-macos-aarch64.tar.gz
             use_cross: false
-            features: ""
-          # Semantic search builds
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            archive: codescope-server-linux-x86_64-semantic.tar.gz
-            use_cross: true
-            features: semantic
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
-            archive: codescope-server-linux-aarch64-semantic.tar.gz
-            use_cross: true
-            features: semantic
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            archive: codescope-server-macos-x86_64-semantic.tar.gz
-            use_cross: false
-            features: semantic
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            archive: codescope-server-macos-aarch64-semantic.tar.gz
-            use_cross: false
-            features: semantic
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -177,9 +151,7 @@ jobs:
         run: |
           BUILD_CMD="cargo"
           if [ "${{ matrix.use_cross }}" = "true" ]; then BUILD_CMD="cross"; fi
-          FEATURES_FLAG=""
-          if [ -n "${{ matrix.features }}" ]; then FEATURES_FLAG="--features ${{ matrix.features }}"; fi
-          $BUILD_CMD build --release --manifest-path server/Cargo.toml --target ${{ matrix.target }} $FEATURES_FLAG
+          $BUILD_CMD build --release --manifest-path server/Cargo.toml --target ${{ matrix.target }} --features semantic
 
       - name: Package tarball
         run: |
