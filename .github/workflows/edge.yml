@@ -1,7 +1,9 @@
 name: Edge Release
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Integration Tests"]
+    types: [completed]
     branches: [master]
 
 permissions:
@@ -9,6 +11,7 @@ permissions:
 
 jobs:
   build:
+    if: github.event.workflow_run.conclusion == 'success'
     strategy:
       matrix:
         include:
@@ -60,6 +63,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -112,6 +117,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -127,8 +134,8 @@ jobs:
           body: |
             Bleeding-edge build from the latest commit on `master`.
 
-            **Commit:** ${{ github.sha }}
-            **Updated:** ${{ github.event.head_commit.timestamp }}
+            **Commit:** ${{ github.event.workflow_run.head_sha }}
+            **Updated:** ${{ github.event.workflow_run.updated_at }}
 
             Install: `curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --edge`
           prerelease: true
