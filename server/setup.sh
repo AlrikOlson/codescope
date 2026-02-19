@@ -27,6 +27,7 @@ Usage:
 
 Options:
   --edge            Install bleeding-edge build from latest master commit
+  --dev             Install development build from latest dev branch commit
   --with-semantic   Enable ML-powered semantic search
   --from-source     Force compilation from source instead of downloading a binary
   --help, -h        Show this help
@@ -41,6 +42,9 @@ Examples:
   # Install bleeding-edge build (latest master commit)
   bash setup.sh --edge
 
+  # Install development build (latest dev branch commit)
+  bash setup.sh --dev
+
   # Install with semantic search (downloads pre-built binary with ML support)
   bash setup.sh --with-semantic
 EOF
@@ -50,12 +54,14 @@ EOF
 WITH_SEMANTIC=0
 FROM_SOURCE=0
 EDGE=0
+DEV=0
 PROJECT_PATH=""
 for arg in "$@"; do
     case "$arg" in
         --with-semantic) WITH_SEMANTIC=1 ;;
         --from-source)   FROM_SOURCE=1 ;;
         --edge)          EDGE=1 ;;
+        --dev)           DEV=1 ;;
         --help|-h)       usage; exit 0 ;;
         --)              ;; # ignore -- separator from curl pipe
         -*)              err "Unknown flag: $arg"; usage; exit 1 ;;
@@ -90,15 +96,17 @@ detect_platform() {
 # --- Download pre-built binary ---
 download_binary() {
     local platform="$1"
-    local api_url
-    if [ "$EDGE" = "1" ]; then
+    local api_url channel
+    if [ "$DEV" = "1" ]; then
+        api_url="https://api.github.com/repos/$REPO/releases/tags/dev"
+        channel="dev"
+    elif [ "$EDGE" = "1" ]; then
         api_url="https://api.github.com/repos/$REPO/releases/tags/edge"
+        channel="edge"
     else
         api_url="https://api.github.com/repos/$REPO/releases/latest"
+        channel="stable"
     fi
-
-    local channel="stable"
-    [ "$EDGE" = "1" ] && channel="edge"
     info "Checking for latest $channel release..."
     local release_json
     if ! release_json="$(curl -fsSL --connect-timeout 10 --max-time 30 "$api_url" 2>/dev/null)"; then
@@ -342,7 +350,10 @@ echo "       codescope-server init"
 echo ""
 echo "    2. Open Claude Code in that directory — CodeScope is ready to use."
 echo ""
-if [ "$EDGE" = "1" ]; then
+if [ "$DEV" = "1" ]; then
+    ok "Dev channel — built from latest dev branch commit"
+    echo ""
+elif [ "$EDGE" = "1" ]; then
     ok "Edge channel — built from latest master commit"
     echo ""
 fi
@@ -353,8 +364,8 @@ else
     echo "  Optional: re-run with --with-semantic for ML-powered search"
     echo ""
 fi
-if [ "$EDGE" = "0" ]; then
-    echo "  Optional: re-run with --edge for bleeding-edge builds"
+if [ "$EDGE" = "0" ] && [ "$DEV" = "0" ]; then
+    echo "  Optional: re-run with --edge or --dev for pre-release builds"
     echo ""
 fi
 if ! command -v codescope-server >/dev/null 2>&1; then

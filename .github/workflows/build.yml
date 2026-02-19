@@ -1,0 +1,103 @@
+name: Build Binaries
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Git ref to checkout (SHA, tag, or branch)"
+        required: true
+        type: string
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          # Standard builds
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: codescope-server-linux-x86_64.tar.gz
+            use_cross: true
+            features: ""
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: codescope-server-linux-aarch64.tar.gz
+            use_cross: true
+            features: ""
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: codescope-server-macos-x86_64.tar.gz
+            use_cross: false
+            features: ""
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: codescope-server-macos-aarch64.tar.gz
+            use_cross: false
+            features: ""
+          # Semantic search builds
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: codescope-server-linux-x86_64-semantic.tar.gz
+            use_cross: true
+            features: semantic
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: codescope-server-linux-aarch64-semantic.tar.gz
+            use_cross: true
+            features: semantic
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: codescope-server-macos-x86_64-semantic.tar.gz
+            use_cross: false
+            features: semantic
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: codescope-server-macos-aarch64-semantic.tar.gz
+            use_cross: false
+            features: semantic
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build binary
+        run: |
+          BUILD_CMD="cargo"
+          if [ "${{ matrix.use_cross }}" = "true" ]; then BUILD_CMD="cross"; fi
+          FEATURES_FLAG=""
+          if [ -n "${{ matrix.features }}" ]; then FEATURES_FLAG="--features ${{ matrix.features }}"; fi
+          $BUILD_CMD build --release --manifest-path server/Cargo.toml --target ${{ matrix.target }} $FEATURES_FLAG
+
+      - name: Package tarball
+        run: |
+          mkdir -p staging
+          cp server/target/${{ matrix.target }}/release/codescope-server staging/
+          cp server/codescope-init staging/
+          cp server/codescope-web staging/
+          chmod +x staging/codescope-init staging/codescope-web
+          cp LICENSE README.md staging/
+          tar czf ${{ matrix.archive }} -C staging .
+
+      - name: Verify tarball contents
+        run: |
+          tar tzf ${{ matrix.archive }} | grep -q codescope-server
+          tar tzf ${{ matrix.archive }} | grep -q codescope-init
+          tar tzf ${{ matrix.archive }} | grep -q codescope-web
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}

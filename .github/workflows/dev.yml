@@ -1,10 +1,10 @@
-name: Edge Release
+name: Dev Release
 
 on:
   workflow_run:
     workflows: ["Integration Tests"]
     types: [completed]
-    branches: [master]
+    branches: [dev]
 
 permissions:
   contents: write
@@ -27,18 +27,18 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Create/update edge release
+      - name: Create/update dev release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: edge
-          name: "Edge (latest master)"
+          tag_name: dev
+          name: "Dev (latest dev branch)"
           body: |
-            Bleeding-edge build from the latest commit on `master`.
+            Development build from the latest commit on `dev`.
 
             **Commit:** ${{ github.event.workflow_run.head_sha }}
             **Updated:** ${{ github.event.workflow_run.updated_at }}
 
-            Install: `curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --edge`
+            Install: `curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --dev`
           prerelease: true
           make_latest: false
           files: artifacts/*.tar.gz
