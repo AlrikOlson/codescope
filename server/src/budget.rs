@@ -680,24 +680,24 @@ fn build_context_response(
 
         let mut ord = 0u32;
         // Top third (highest importance) first
-        for i in 0..top_end {
-            order_map[i] = ord;
+        for slot in order_map.iter_mut().take(top_end) {
+            *slot = ord;
             ord += 1;
         }
         // Bottom third (lowest importance) next
-        for i in mid_end..n {
-            order_map[i] = ord;
+        for slot in order_map.iter_mut().take(n).skip(mid_end) {
+            *slot = ord;
             ord += 1;
         }
         // Middle third last (lost in the middle)
-        for i in top_end..mid_end {
-            order_map[i] = ord;
+        for slot in order_map.iter_mut().take(mid_end).skip(top_end) {
+            *slot = ord;
             ord += 1;
         }
     } else {
         // Default: sequential order matching importance sort
-        for i in 0..n {
-            order_map[i] = i as u32;
+        for (i, slot) in order_map.iter_mut().enumerate().take(n) {
+            *slot = i as u32;
         }
     }
 

@@ -46,8 +46,7 @@ pub struct HotFile {
 fn format_git_time(time: Time) -> String {
     let secs = time.seconds();
     // Format as ISO-ish date: YYYY-MM-DD HH:MM
-    let dt = chrono_from_epoch(secs, time.offset_minutes());
-    dt
+    chrono_from_epoch(secs, time.offset_minutes())
 }
 
 /// Simple epoch -> date string without pulling in chrono.
