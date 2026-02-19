@@ -17,7 +17,7 @@ Built in Rust. Indexes 200K+ files in under 2 seconds. Understands module struct
 ## Quick Start
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash
+curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s --
 ```
 
 Or clone and build manually:
@@ -30,11 +30,30 @@ cd codescope/server
 
 This installs the Rust toolchain (if needed), builds the server, and if Node.js is available, builds the web UI too. Everything goes into `~/.local/bin/`.
 
-Then, in any project you want to index:
+### Enable Semantic Search
+
+For ML-powered semantic code search (searches by intent, not just keywords):
+
+```bash
+# Via pipe
+curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --with-semantic
+
+# Or locally
+./setup.sh --with-semantic
+```
+
+This compiles with the `semantic` feature, which uses a BERT model (`all-MiniLM-L6-v2`, ~90MB, downloaded on first use) for vector similarity search. When enabled, `codescope-init` automatically configures your MCP server to use it.
+
+### Set Up a Project
+
+In any project you want to index:
 
 ```bash
 # Auto-detect project type and generate .mcp.json + .codescope.toml
 codescope-server init
+
+# Or use the quick helper (generates .mcp.json only)
+codescope-init
 
 # Web UI (standalone browser)
 codescope-web /path/to/your/project
@@ -80,6 +99,7 @@ You can also add repos dynamically at runtime using the `cs_add_repo` tool.
 | `cs_find` | Combined filename + content search (start here) |
 | `cs_grep` | Regex content search with context lines |
 | `cs_search` | Fuzzy filename and module search |
+| `cs_semantic_search` | Search by intent using ML embeddings (requires `--with-semantic`) |
 | **Read** | |
 | `cs_read_file` | Read a file -- full content or structural stubs only |
 | `cs_read_files` | Batch read up to 50 files |
@@ -206,7 +226,7 @@ npm run dev
 cd server
 cargo build --release
 
-# Server with semantic search (experimental)
+# Server with semantic search
 cargo build --release --features semantic
 
 # Web UI
@@ -215,6 +235,9 @@ npm run build
 
 # Both (via setup script)
 cd server && ./setup.sh
+
+# Both with semantic search
+cd server && ./setup.sh --with-semantic
 ```
 
 Binary lands at `server/target/release/codescope-server`. Web UI builds to `dist/`.
@@ -243,9 +266,9 @@ server/src/
 ├── fuzzy.rs       -- FZF v2 fuzzy matching (Smith-Waterman with bitmask pre-filter)
 ├── budget.rs      -- Token budget allocation (water-fill algorithm across files)
 ├── tokenizer.rs   -- Token counting (bytes-estimate or tiktoken)
-├── types.rs       -- Shared types: RepoState, ServerState, scoring helpers
+├── types.rs       -- Shared types: RepoState, ServerState, IDF index, scoring helpers
 ├── init.rs        -- CLI subcommands: init, doctor
-└── semantic.rs    -- Semantic code search (feature-gated, optional)
+└── semantic.rs    -- Semantic code search via BERT embeddings (feature-gated, optional)
 
 src/               -- React 18 frontend (Vite + TypeScript)
 ├── App.tsx        -- Main app shell, panels, keyboard shortcuts
