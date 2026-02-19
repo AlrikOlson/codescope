@@ -544,6 +544,7 @@ pub async fn api_find(
 
                 let idf_weights: Vec<f64> =
                     terms_lower.iter().map(|t| repo.term_doc_freq.idf(t)).collect();
+                #[allow(clippy::type_complexity)]
                 let grep_results: Vec<(
                     String,
                     f64,

@@ -283,6 +283,7 @@ pub fn is_definition_file(ext: &str) -> bool {
 
 /// BM25-lite relevance score for grep results with IDF weighting.
 /// Shared by HTTP API and MCP grep/find handlers.
+#[allow(clippy::too_many_arguments)]
 pub fn grep_relevance_score(
     match_count: usize,
     total_lines: usize,
