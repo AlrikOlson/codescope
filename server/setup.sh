@@ -7,10 +7,11 @@ set -euo pipefail
 # Usage:
 #   git clone https://github.com/AlrikOlson/codescope.git
 #   cd codescope/server
-#   ./setup.sh
+#   ./setup.sh [--with-semantic]
 #
 # Or directly:
-#   curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/main/server/setup.sh | bash
+#   curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/main/server/setup.sh | bash -s --
+#   curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/main/server/setup.sh | bash -s -- --with-semantic
 
 INSTALL_DIR="$HOME/.local/bin"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
