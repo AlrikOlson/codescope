@@ -23,14 +23,36 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Claude Agent SDK
+        run: npm install @anthropic-ai/claude-code
+
+      - name: Install CodeScope
+        run: |
+          curl -fsSL -o /tmp/codescope.tar.gz \
+            "https://github.com/AlrikOlson/codescope/releases/latest/download/codescope-server-linux-x86_64.tar.gz"
+          mkdir -p /tmp/codescope-extract
+          tar xzf /tmp/codescope.tar.gz -C /tmp/codescope-extract
+          cp /tmp/codescope-extract/codescope-server /usr/local/bin/codescope-server
+          chmod +x /usr/local/bin/codescope-server
+
+      - name: Initialize CodeScope index
+        run: codescope-server init .
+
       - name: Determine version bump
         id: bump
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        shell: bash
         run: |
-          # Get latest v* tag, default to v0.0.0 if none exist
+          set -euo pipefail
+
           LAST_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "v0.0.0")
           echo "Last tag: $LAST_TAG"
 
-          # If HEAD is already tagged, skip (prevents infinite loop from version commit)
           HEAD_TAGS=$(git tag --points-at HEAD | grep '^v' || true)
           if [ -n "$HEAD_TAGS" ]; then
             echo "HEAD already tagged ($HEAD_TAGS) — skipping"
@@ -39,11 +61,10 @@ jobs:
             exit 0
           fi
 
-          # Analyze commits since last tag for conventional commit prefixes
           if [ "$LAST_TAG" = "v0.0.0" ]; then
-            COMMITS=$(git log --pretty=format:"%s" -20)
+            COMMITS=$(git log --pretty=format:"%h %s" -20)
           else
-            COMMITS=$(git log "$LAST_TAG"..HEAD --pretty=format:"%s")
+            COMMITS=$(git log "$LAST_TAG"..HEAD --pretty=format:"%h %s")
           fi
 
           if [ -z "$COMMITS" ]; then
@@ -55,23 +76,17 @@ jobs:
 
           echo "Commits since $LAST_TAG:"
           echo "$COMMITS"
+          echo "---"
 
-          BUMP="patch"
-          while IFS= read -r msg; do
-            # Breaking change: type!: or BREAKING CHANGE in body
-            if echo "$msg" | grep -qE '^[a-z]+(\(.+\))?!:'; then
-              BUMP="major"
-              break
-            elif echo "$msg" | grep -q 'BREAKING CHANGE'; then
-              BUMP="major"
-              break
-            # Feature: feat: or feat(scope):
-            elif echo "$msg" | grep -qE '^feat(\(.+\))?:'; then
-              BUMP="minor"
-            fi
-          done <<< "$COMMITS"
+          # Run the AI version bump agent
+          BUMP=$(node .github/scripts/ai-version-bump.mjs "$LAST_TAG" 2>&1 | tee /dev/stderr | tail -1)
 
-          # Parse version from last tag
+          # Validate
+          case "$BUMP" in
+            major|minor|patch) ;;
+            *) echo "Invalid bump '$BUMP' — defaulting to patch"; BUMP="patch" ;;
+          esac
+
           VERSION="${LAST_TAG#v}"
           IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
 
@@ -82,7 +97,7 @@ jobs:
           esac
 
           NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
-          echo "Bump: $BUMP ($LAST_TAG → $NEW_TAG)"
+          echo "AI Bump: $BUMP ($LAST_TAG -> $NEW_TAG)"
           echo "new_tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
           echo "skip=false" >> "$GITHUB_OUTPUT"
 
@@ -92,7 +107,6 @@ jobs:
           NEW_TAG="${{ steps.bump.outputs.new_tag }}"
           VERSION="${NEW_TAG#v}"
 
-          # Update version in Cargo.toml
           sed -i "s/^version = \".*\"/version = \"$VERSION\"/" server/Cargo.toml
           echo "Updated server/Cargo.toml to $VERSION"
 
@@ -109,7 +123,6 @@ jobs:
     strategy:
       matrix:
         include:
-          # Standard builds
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             archive: codescope-server-linux-x86_64.tar.gz
@@ -130,7 +143,6 @@ jobs:
             archive: codescope-server-macos-aarch64.tar.gz
             use_cross: false
             features: ""
-          # Semantic search builds
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             archive: codescope-server-linux-x86_64-semantic.tar.gz
