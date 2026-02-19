@@ -18,6 +18,12 @@ if ! command -v codescope-server >/dev/null 2>&1; then
     exit 1
 fi
 
+# Detect if binary was built with semantic search support
+HAS_SEMANTIC=0
+if codescope-server --help 2>&1 | grep -q -- '--semantic'; then
+    HAS_SEMANTIC=1
+fi
+
 # Check for existing .mcp.json
 if [ -f "$MCP_FILE" ]; then
     # Check if codescope is already configured
@@ -37,16 +43,20 @@ if [ -f "$MCP_FILE" ]; then
     # Merge into existing .mcp.json — add codescope to mcpServers
     # Use a simple Python/node one-liner if available, otherwise warn
     if command -v python3 >/dev/null 2>&1; then
-        MCP_FILE="$MCP_FILE" TARGET="$TARGET" python3 -c "
+        MCP_FILE="$MCP_FILE" TARGET="$TARGET" HAS_SEMANTIC="$HAS_SEMANTIC" python3 -c "
 import json, os
 mcp_file = os.environ['MCP_FILE']
 target = os.environ['TARGET']
+has_semantic = os.environ.get('HAS_SEMANTIC', '0') == '1'
 with open(mcp_file) as f:
     data = json.load(f)
+args = ['--mcp', '--root', target]
+if has_semantic:
+    args.insert(1, '--semantic')
 data.setdefault('mcpServers', {})['codescope'] = {
     'type': 'stdio',
     'command': 'codescope-server',
-    'args': ['--mcp', '--root', target]
+    'args': args
 }
 with open(mcp_file, 'w') as f:
     json.dump(data, f, indent=2)
@@ -66,7 +76,20 @@ with open(mcp_file, 'w') as f:
     fi
 else
     # Create new .mcp.json
-    cat > "$MCP_FILE" <<EOF
+    if [ "$HAS_SEMANTIC" = "1" ]; then
+        cat > "$MCP_FILE" <<EOF
+{
+  "mcpServers": {
+    "codescope": {
+      "type": "stdio",
+      "command": "codescope-server",
+      "args": ["--mcp", "--semantic", "--root", "$TARGET"]
+    }
+  }
+}
+EOF
+    else
+        cat > "$MCP_FILE" <<EOF
 {
   "mcpServers": {
     "codescope": {
@@ -77,8 +100,13 @@ else
   }
 }
 EOF
+    fi
     echo "Created $MCP_FILE"
 fi
 
 echo ""
-echo "Open Claude Code in $TARGET — CodeScope tools are now available."
+if [ "$HAS_SEMANTIC" = "1" ]; then
+    echo "Open Claude Code in $TARGET — CodeScope tools are now available (with semantic search)."
+else
+    echo "Open Claude Code in $TARGET — CodeScope tools are now available."
+fi

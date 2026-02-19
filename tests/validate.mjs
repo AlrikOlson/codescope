@@ -126,6 +126,63 @@ try {
   failed++;
 }
 
+// Test 8: Find endpoint (combined search)
+try {
+  const find = await api('/api/find?q=main&limit=10');
+  test('Find returns results', () => assert(
+    find.results?.length > 0,
+    'expected find results for "main"'
+  ));
+  test('Find has scoring', () => assert(
+    find.results?.[0]?.combinedScore > 0,
+    'expected non-zero combined score on first result'
+  ));
+} catch (e) {
+  console.error(`  x Find: ${e.message}`);
+  failed++;
+}
+
+// Test 9: Multi-term grep
+try {
+  const multi = await api('/api/grep?q=parse+error&limit=20');
+  test('Multi-term grep works', () => assert(multi !== null, 'multi-term grep returns data'));
+} catch (e) {
+  console.error(`  x Multi-term grep: ${e.message}`);
+  failed++;
+}
+
+// Test 10: Search ranking — language-specific relevance checks
+try {
+  if (lang === 'rust') {
+    // ripgrep: searching "main" should surface main.rs in top results
+    const search = await api('/api/search?q=main&fileLimit=10');
+    const topFiles = (search.files || []).map(f => f.filename);
+    test('Rust: "main" ranks main.rs high', () => assert(
+      topFiles.some(f => f === 'main.rs'),
+      `expected main.rs in top results, got: ${topFiles.slice(0, 5).join(', ')}`
+    ));
+  } else if (lang === 'javascript') {
+    // fastify: searching "fastify" should surface fastify.js
+    const search = await api('/api/search?q=fastify&fileLimit=10');
+    const topFiles = (search.files || []).map(f => f.filename);
+    test('JS: "fastify" ranks fastify.js high', () => assert(
+      topFiles.some(f => f === 'fastify.js'),
+      `expected fastify.js in top results, got: ${topFiles.slice(0, 5).join(', ')}`
+    ));
+  } else if (lang === 'go') {
+    // cobra: searching "command" should surface command.go
+    const search = await api('/api/search?q=command&fileLimit=10');
+    const topFiles = (search.files || []).map(f => f.filename);
+    test('Go: "command" ranks command.go high', () => assert(
+      topFiles.some(f => f === 'command.go'),
+      `expected command.go in top results, got: ${topFiles.slice(0, 5).join(', ')}`
+    ));
+  }
+} catch (e) {
+  console.error(`  x Ranking: ${e.message}`);
+  failed++;
+}
+
 // Summary
 console.log(`  -- ${name}: ${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

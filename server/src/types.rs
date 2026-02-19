@@ -1,6 +1,6 @@
 use dashmap::DashMap;
 use serde::Serialize;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -182,6 +182,28 @@ pub struct ChunkMeta {
 // Per-repo state (one instance per indexed repository)
 // ---------------------------------------------------------------------------
 
+/// Per-term document frequency index for IDF-weighted search scoring.
+pub struct TermDocFreq {
+    pub total_docs: usize,
+    pub freq: HashMap<String, usize>,
+}
+
+impl TermDocFreq {
+    pub fn new() -> Self {
+        Self {
+            total_docs: 0,
+            freq: HashMap::new(),
+        }
+    }
+
+    /// IDF with Laplace smoothing: ln((N+1)/(df+1)) + 1.
+    /// Unknown terms default to df=total_docs (IDF ~1.0).
+    pub fn idf(&self, term: &str) -> f64 {
+        let df = self.freq.get(term).copied().unwrap_or(self.total_docs);
+        (((self.total_docs as f64 + 1.0) / (df as f64 + 1.0)).ln() + 1.0).max(1.0)
+    }
+}
+
 /// Complete indexed state for a single repository, including files, deps, search index, and caches.
 pub struct RepoState {
     pub name: String,
@@ -194,6 +216,7 @@ pub struct RepoState {
     pub search_modules: Vec<SearchModuleEntry>,
     pub import_graph: ImportGraph,
     pub stub_cache: DashMap<String, CachedStub>,
+    pub term_doc_freq: TermDocFreq,
     pub scan_time_ms: u64,
     #[cfg(feature = "semantic")]
     pub semantic_index: Option<SemanticIndex>,
@@ -267,7 +290,7 @@ pub fn is_definition_file(ext: &str) -> bool {
     matches!(ext, "h" | "hpp" | "hxx" | "d.ts" | "pyi")
 }
 
-/// BM25-lite relevance score for grep results.
+/// BM25-lite relevance score for grep results with IDF weighting.
 /// Shared by HTTP API and MCP grep/find handlers.
 pub fn grep_relevance_score(
     match_count: usize,
@@ -275,16 +298,50 @@ pub fn grep_relevance_score(
     filename_lower: &str,
     ext: &str,
     terms_lower: &[String],
+    terms_matched: usize,
+    first_match_line: usize,
+    idf_weights: &[f64],
 ) -> f64 {
     let tf = match_count as f64 / (match_count as f64 + 1.5);
-    let filename_bonus = if terms_lower.iter().any(|t| filename_lower.contains(t.as_str())) {
-        50.0
+
+    // Average IDF across query terms — rare terms score higher
+    let avg_idf = if idf_weights.is_empty() {
+        1.0
+    } else {
+        idf_weights.iter().sum::<f64>() / idf_weights.len() as f64
+    };
+
+    // Density: sqrt-normalized to reduce large-file penalty
+    let density = match_count as f64 / (total_lines as f64).sqrt().max(1.0);
+
+    // Filename bonus: reduced from 50 to 15 so content can compete
+    let filename_bonus = if terms_lower
+        .iter()
+        .any(|t| filename_lower.contains(t.as_str()))
+    {
+        15.0
     } else {
         0.0
     };
+
     let def_bonus = if is_definition_file(ext) { 5.0 } else { 0.0 };
-    let density = match_count as f64 / total_lines.max(1) as f64 * 10.0;
-    tf * 20.0 + filename_bonus + def_bonus + density
+
+    // AND bonus: reward files matching all query terms
+    let term_count = terms_lower.len().max(1);
+    let and_bonus = if terms_matched >= term_count {
+        10.0
+    } else {
+        5.0 * (terms_matched as f64 / term_count as f64)
+    };
+
+    // Position bonus: matches in first 30 lines (declarations) score higher
+    let position_bonus = if total_lines > 30 && first_match_line < 30 {
+        3.0 * (1.0 - first_match_line as f64 / 30.0)
+    } else {
+        0.0
+    };
+
+    tf * 15.0 * avg_idf + filename_bonus + def_bonus + density + and_bonus + position_bonus
 }
 
 // ---------------------------------------------------------------------------

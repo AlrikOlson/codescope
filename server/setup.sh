@@ -15,6 +15,14 @@ set -euo pipefail
 INSTALL_DIR="$HOME/.local/bin"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
+# Parse flags
+WITH_SEMANTIC=0
+for arg in "$@"; do
+    case "$arg" in
+        --with-semantic) WITH_SEMANTIC=1 ;;
+    esac
+done
+
 info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 ok()    { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
 err()   { printf '\033[1;31mERR\033[0m %s\n' "$*" >&2; }
@@ -48,9 +56,14 @@ else
 fi
 
 # --- Build server ---
-info "Building codescope-server (release mode)..."
 cd "$SCRIPT_DIR"
-cargo build --release
+if [ "$WITH_SEMANTIC" = "1" ]; then
+    info "Building codescope-server with semantic search (release mode)..."
+    cargo build --release --features semantic
+else
+    info "Building codescope-server (release mode)..."
+    cargo build --release
+fi
 
 # --- Install binaries ---
 mkdir -p "$INSTALL_DIR"
@@ -117,6 +130,13 @@ echo "  MCP server (for Claude Code):"
 echo "    cd /path/to/your/project"
 echo "    codescope-init"
 echo ""
+if [ "$WITH_SEMANTIC" = "1" ]; then
+    ok "Semantic search enabled — ML model downloads on first use (~90MB)"
+    echo ""
+else
+    echo "  Tip: re-run with --with-semantic to enable ML-powered semantic search"
+    echo ""
+fi
 if [ -d "$DIST_INSTALL" ]; then
     echo "  Web UI:"
     echo "    codescope-web /path/to/your/project"

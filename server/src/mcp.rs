@@ -447,6 +447,10 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
 
             for repo in &repos {
                 let config = &repo.config;
+                let idf_weights: Vec<f64> = terms_lower
+                    .iter()
+                    .map(|t| repo.term_doc_freq.idf(t))
+                    .collect();
                 let candidates: Vec<&ScannedFile> = repo
                     .all_files
                     .iter()
@@ -477,9 +481,20 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
 
                     let mut match_indices: Vec<usize> = Vec::new();
                     let mut total_match_count = 0usize;
+                    let mut first_match_line_idx = usize::MAX;
+                    let mut terms_seen = std::collections::HashSet::new();
                     for (i, line) in lines.iter().enumerate() {
                         if pattern.is_match(line) {
                             total_match_count += 1;
+                            if first_match_line_idx == usize::MAX {
+                                first_match_line_idx = i;
+                            }
+                            let line_lower = line.to_lowercase();
+                            for (ti, term) in terms_lower.iter().enumerate() {
+                                if line_lower.contains(term.as_str()) {
+                                    terms_seen.insert(ti);
+                                }
+                            }
                             if match_indices.len() < max_per_file {
                                 match_indices.push(i);
                             }
@@ -497,7 +512,14 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                         .unwrap_or(&file.rel_path)
                         .to_lowercase();
                     let score = grep_relevance_score(
-                        total_match_count, total_lines, &filename, &file.ext, &terms_lower,
+                        total_match_count,
+                        total_lines,
+                        &filename,
+                        &file.ext,
+                        &terms_lower,
+                        terms_seen.len(),
+                        if first_match_line_idx == usize::MAX { 0 } else { first_match_line_idx },
+                        &idf_weights,
                     );
 
                     file_hits.push(GrepFileHit {
@@ -1037,6 +1059,10 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
 
                 // 2. Content grep
                 if let Ok(ref pattern) = pattern {
+                    let idf_weights: Vec<f64> = terms_lower
+                        .iter()
+                        .map(|t| repo.term_doc_freq.idf(t))
+                        .collect();
                     let candidates: Vec<&ScannedFile> = repo
                         .all_files
                         .iter()
@@ -1066,16 +1092,25 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                         let total_lines = lines.len().max(1);
                         let mut match_count = 0usize;
                         let mut first_match: Option<String> = None;
-                        for line in &lines {
+                        let mut first_match_line_idx = usize::MAX;
+                        let mut terms_seen = std::collections::HashSet::new();
+                        for (i, line) in lines.iter().enumerate() {
                             if pattern.is_match(line) {
                                 match_count += 1;
                                 if first_match.is_none() {
+                                    first_match_line_idx = i;
                                     let trimmed = if line.len() > 120 {
                                         format!("{}...", &line[..120])
                                     } else {
                                         line.to_string()
                                     };
                                     first_match = Some(trimmed);
+                                }
+                                let line_lower = line.to_lowercase();
+                                for (ti, term) in terms_lower.iter().enumerate() {
+                                    if line_lower.contains(term.as_str()) {
+                                        terms_seen.insert(ti);
+                                    }
                                 }
                             }
                         }
@@ -1090,7 +1125,14 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                             .unwrap_or(&file.rel_path)
                             .to_lowercase();
                         let grep_score = grep_relevance_score(
-                            match_count, total_lines, &filename, &file.ext, &terms_lower,
+                            match_count,
+                            total_lines,
+                            &filename,
+                            &file.ext,
+                            &terms_lower,
+                            terms_seen.len(),
+                            if first_match_line_idx == usize::MAX { 0 } else { first_match_line_idx },
+                            &idf_weights,
                         );
 
                         let key = repo_path(repo, &file.rel_path, multi);
@@ -1111,11 +1153,12 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                 }
             }
 
-            // Unified scoring
+            // Unified scoring — adaptive weights based on query shape
+            let (name_w, grep_w) = if terms.len() > 1 { (0.4, 0.6) } else { (0.6, 0.4) };
             let mut ranked: Vec<FindResult> = merged.into_values().collect();
             ranked.sort_by(|a, b| {
-                let score_a = a.name_score * 0.6 + a.grep_score * 0.4;
-                let score_b = b.name_score * 0.6 + b.grep_score * 0.4;
+                let score_a = a.name_score * name_w + a.grep_score * grep_w;
+                let score_b = b.name_score * name_w + b.grep_score * grep_w;
                 score_b
                     .partial_cmp(&score_a)
                     .unwrap_or(std::cmp::Ordering::Equal)

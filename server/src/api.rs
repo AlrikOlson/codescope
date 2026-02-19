@@ -305,6 +305,10 @@ pub async fn api_grep(
 
         // Parallel grep: each file processed independently
         let terms_owned: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
+        let idf_weights: Vec<f64> = terms_owned
+            .iter()
+            .map(|t| repo.term_doc_freq.idf(t))
+            .collect();
         let mut file_results: Vec<(GrepFileResult, usize)> = candidates
             .par_iter()
             .filter_map(|file| {
@@ -312,9 +316,20 @@ pub async fn api_grep(
                 let total_lines = content.lines().count().max(1);
                 let mut file_matches = Vec::new();
                 let mut total_match_count = 0usize;
+                let mut first_match_line_idx = usize::MAX;
+                let mut terms_seen: HashSet<usize> = HashSet::new();
                 for (i, line) in content.lines().enumerate() {
                     if pattern.is_match(line) {
                         total_match_count += 1;
+                        if first_match_line_idx == usize::MAX {
+                            first_match_line_idx = i;
+                        }
+                        let line_lower = line.to_lowercase();
+                        for (ti, term) in terms_owned.iter().enumerate() {
+                            if line_lower.contains(term.as_str()) {
+                                terms_seen.insert(ti);
+                            }
+                        }
                         if file_matches.len() < max_per_file {
                             let trimmed = if line.len() > 200 {
                                 format!("{}...", &line[..200])
@@ -338,7 +353,14 @@ pub async fn api_grep(
                         .unwrap_or(&file.rel_path)
                         .to_lowercase();
                     let score = grep_relevance_score(
-                        total_match_count, total_lines, &filename, &file.ext, &terms_owned,
+                        total_match_count,
+                        total_lines,
+                        &filename,
+                        &file.ext,
+                        &terms_owned,
+                        terms_seen.len(),
+                        if first_match_line_idx == usize::MAX { 0 } else { first_match_line_idx },
+                        &idf_weights,
                     );
 
                     Some((
@@ -588,6 +610,10 @@ pub async fn api_find(
                     })
                     .collect();
 
+                let idf_weights: Vec<f64> = terms_lower
+                    .iter()
+                    .map(|t| repo.term_doc_freq.idf(t))
+                    .collect();
                 let grep_results: Vec<(String, f64, usize, Option<String>, Option<usize>, String, String, String, String)> = candidates
                     .par_iter()
                     .filter_map(|file| {
@@ -596,10 +622,13 @@ pub async fn api_find(
                         let mut match_count = 0usize;
                         let mut first_match: Option<String> = None;
                         let mut first_match_line: Option<usize> = None;
+                        let mut first_match_line_idx = usize::MAX;
+                        let mut terms_seen: HashSet<usize> = HashSet::new();
                         for (i, line) in content.lines().enumerate() {
                             if pattern.is_match(line) {
                                 match_count += 1;
                                 if first_match.is_none() {
+                                    first_match_line_idx = i;
                                     let trimmed = if line.len() > 120 {
                                         format!("{}...", &line[..120])
                                     } else {
@@ -607,6 +636,12 @@ pub async fn api_find(
                                     };
                                     first_match = Some(trimmed);
                                     first_match_line = Some(i + 1);
+                                }
+                                let line_lower = line.to_lowercase();
+                                for (ti, term) in terms_lower.iter().enumerate() {
+                                    if line_lower.contains(term.as_str()) {
+                                        terms_seen.insert(ti);
+                                    }
                                 }
                             }
                         }
@@ -621,7 +656,14 @@ pub async fn api_find(
                             .unwrap_or(&file.rel_path)
                             .to_lowercase();
                         let grep_score = grep_relevance_score(
-                            match_count, total_lines, &filename, &file.ext, &terms_lower,
+                            match_count,
+                            total_lines,
+                            &filename,
+                            &file.ext,
+                            &terms_lower,
+                            terms_seen.len(),
+                            if first_match_line_idx == usize::MAX { 0 } else { first_match_line_idx },
+                            &idf_weights,
                         );
 
                         let fname = file
@@ -675,11 +717,13 @@ pub async fn api_find(
             }
         }
 
-        // 3. Score, sort, truncate
+        // 3. Score, sort, truncate — adaptive weights based on query shape
+        let query_term_count = raw_query.split_whitespace().count();
+        let (name_w, grep_w) = if query_term_count > 1 { (0.4, 0.6) } else { (0.6, 0.4) };
         let mut ranked: Vec<MergedFind> = merged.into_values().collect();
         ranked.sort_by(|a, b| {
-            let score_a = a.name_score * 0.6 + a.grep_score * 0.4;
-            let score_b = b.name_score * 0.6 + b.grep_score * 0.4;
+            let score_a = a.name_score * name_w + a.grep_score * grep_w;
+            let score_b = b.name_score * name_w + b.grep_score * grep_w;
             score_b
                 .partial_cmp(&score_a)
                 .unwrap_or(std::cmp::Ordering::Equal)
@@ -692,7 +736,7 @@ pub async fn api_find(
         let results: Vec<FindResultEntry> = ranked
             .into_iter()
             .map(|r| {
-                let combined_score = r.name_score * 0.6 + r.grep_score * 0.4;
+                let combined_score = r.name_score * name_w + r.grep_score * grep_w;
                 let match_type = if r.name_score > 0.0 && r.grep_count > 0 {
                     "both".to_string()
                 } else if r.name_score > 0.0 {

@@ -655,6 +655,44 @@ pub fn build_search_index(
 }
 
 // ---------------------------------------------------------------------------
+// Term document frequency — for IDF-weighted search scoring
+// ---------------------------------------------------------------------------
+
+/// Build per-term document frequency index across all files in the repo.
+/// Used to compute IDF weights at query time for better search relevance.
+pub fn build_term_doc_freq(all_files: &[ScannedFile]) -> crate::types::TermDocFreq {
+    use std::collections::{HashMap, HashSet};
+
+    // Collect per-file unique terms in parallel
+    let per_file_terms: Vec<HashSet<String>> = all_files
+        .par_iter()
+        .filter_map(|f| {
+            // Skip large files (likely generated/binary)
+            if f.abs_path.metadata().map(|m| m.len()).unwrap_or(0) > 256 * 1024 {
+                return None;
+            }
+            let content = std::fs::read_to_string(&f.abs_path).ok()?;
+            let terms: HashSet<String> = content
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .filter(|s| s.len() >= 2)
+                .map(|s| s.to_lowercase())
+                .collect();
+            Some(terms)
+        })
+        .collect();
+
+    let total_docs = all_files.len();
+    let mut freq: HashMap<String, usize> = HashMap::new();
+    for terms in &per_file_terms {
+        for term in terms {
+            *freq.entry(term.clone()).or_insert(0) += 1;
+        }
+    }
+
+    crate::types::TermDocFreq { total_docs, freq }
+}
+
+// ---------------------------------------------------------------------------
 // Import graph — multi-language import/include resolution
 // ---------------------------------------------------------------------------
 

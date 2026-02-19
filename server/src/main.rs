@@ -119,6 +119,7 @@ pub fn scan_repo_with_options(
     let deps = scan_deps(&config);
     let (search_files, search_modules) = build_search_index(&manifest);
     let import_graph = scan_imports(&all_files);
+    let term_doc_freq = build_term_doc_freq(&all_files);
 
     #[cfg(feature = "semantic")]
     let semantic_index = if _enable_semantic {
@@ -156,6 +157,7 @@ pub fn scan_repo_with_options(
         search_modules,
         import_graph,
         stub_cache: dashmap::DashMap::new(),
+        term_doc_freq,
         scan_time_ms,
         #[cfg(feature = "semantic")]
         semantic_index,
