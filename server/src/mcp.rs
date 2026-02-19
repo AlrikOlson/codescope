@@ -400,28 +400,17 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
             let terms_lower: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
 
             let pattern = match match_mode {
-                "exact" => {
-                    RegexBuilder::new(&regex::escape(query))
-                        .case_insensitive(true)
-                        .build()
-                }
-                "regex" => {
-                    RegexBuilder::new(query)
-                        .case_insensitive(true)
-                        .build()
-                }
+                "exact" => RegexBuilder::new(&regex::escape(query)).case_insensitive(true).build(),
+                "regex" => RegexBuilder::new(query).case_insensitive(true).build(),
                 "any" => {
-                    let pattern_str = terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|");
-                    RegexBuilder::new(&pattern_str)
-                        .case_insensitive(true)
-                        .build()
+                    let pattern_str =
+                        terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|");
+                    RegexBuilder::new(&pattern_str).case_insensitive(true).build()
                 }
                 _ => {
                     // "all" mode (default): build a pattern that requires all terms
                     if terms.len() == 1 {
-                        RegexBuilder::new(&regex::escape(terms[0]))
-                            .case_insensitive(true)
-                            .build()
+                        RegexBuilder::new(&regex::escape(terms[0])).case_insensitive(true).build()
                     } else {
                         let lookaheads: String = terms
                             .iter()
@@ -429,9 +418,7 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                             .collect::<Vec<_>>()
                             .join("");
                         let pattern_str = format!("^{}", lookaheads);
-                        RegexBuilder::new(&pattern_str)
-                            .case_insensitive(true)
-                            .build()
+                        RegexBuilder::new(&pattern_str).case_insensitive(true).build()
                     }
                 }
             };
@@ -885,9 +872,9 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
             if raw_query.len() < 2 {
                 return ("Error: Query must be at least 2 characters".to_string(), true);
             }
-            let file_limit = args["fileLimit"].as_u64().unwrap_or(
-                args["limit"].as_u64().unwrap_or(30)
-            ).min(100) as usize;
+            let file_limit =
+                args["fileLimit"].as_u64().unwrap_or(args["limit"].as_u64().unwrap_or(30)).min(100)
+                    as usize;
             let module_limit = args["moduleLimit"].as_u64().unwrap_or(5).min(50) as usize;
             let ext_filter: Option<HashSet<String>> = args["ext"].as_str().map(|exts| {
                 exts.split(',').map(|e| e.trim().trim_start_matches('.').to_string()).collect()
@@ -904,27 +891,18 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
 
             let pattern = match match_mode {
                 "exact" => {
-                    RegexBuilder::new(&regex::escape(raw_query))
-                        .case_insensitive(true)
-                        .build()
+                    RegexBuilder::new(&regex::escape(raw_query)).case_insensitive(true).build()
                 }
-                "regex" => {
-                    RegexBuilder::new(raw_query)
-                        .case_insensitive(true)
-                        .build()
-                }
+                "regex" => RegexBuilder::new(raw_query).case_insensitive(true).build(),
                 "any" => {
-                    let pattern_str = terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|");
-                    RegexBuilder::new(&pattern_str)
-                        .case_insensitive(true)
-                        .build()
+                    let pattern_str =
+                        terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|");
+                    RegexBuilder::new(&pattern_str).case_insensitive(true).build()
                 }
                 _ => {
                     // "all" mode (default)
                     if terms.len() == 1 {
-                        RegexBuilder::new(&regex::escape(terms[0]))
-                            .case_insensitive(true)
-                            .build()
+                        RegexBuilder::new(&regex::escape(terms[0])).case_insensitive(true).build()
                     } else {
                         let lookaheads: String = terms
                             .iter()
@@ -932,9 +910,7 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                             .collect::<Vec<_>>()
                             .join("");
                         let pattern_str = format!("^{}", lookaheads);
-                        RegexBuilder::new(&pattern_str)
-                            .case_insensitive(true)
-                            .build()
+                        RegexBuilder::new(&pattern_str).case_insensitive(true).build()
                     }
                 }
             };
@@ -959,8 +935,13 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
 
                 // 1. Fuzzy filename search
                 let query = crate::fuzzy::preprocess_search_query(raw_query);
-                let search_resp =
-                    run_search(&repo.search_files, &repo.search_modules, &query, file_limit, module_limit);
+                let search_resp = run_search(
+                    &repo.search_files,
+                    &repo.search_modules,
+                    &query,
+                    file_limit,
+                    module_limit,
+                );
 
                 // Collect module results
                 for m in search_resp.modules {
@@ -1143,12 +1124,17 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
 
             // Module results
             if !all_modules.is_empty() {
-                all_modules.sort_by(|a, b| b.1.score.partial_cmp(&a.1.score).unwrap_or(std::cmp::Ordering::Equal));
+                all_modules.sort_by(|a, b| {
+                    b.1.score.partial_cmp(&a.1.score).unwrap_or(std::cmp::Ordering::Equal)
+                });
                 all_modules.truncate(module_limit);
                 out.push_str("Modules:\n");
                 for (repo, m) in &all_modules {
                     let prefix = if multi { format!("[{}] ", repo.name) } else { String::new() };
-                    out.push_str(&format!("  {prefix}{} ({} files, score {:.1})\n", m.id, m.file_count, m.score));
+                    out.push_str(&format!(
+                        "  {prefix}{} ({} files, score {:.1})\n",
+                        m.id, m.file_count, m.score
+                    ));
                 }
                 out.push('\n');
             }
