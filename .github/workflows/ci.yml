@@ -113,11 +113,10 @@ jobs:
           retention-days: 1
 
   # ──────────────────────────────────────────────
-  # Linux builds — Docker buildx with GHA cache
-  # Deps cached in Docker layers, rebuilds only
-  # what changed. QEMU for arm64 cross-compilation.
+  # Cross-platform builds — master/dev only
+  # Pre-built cross binary for Linux, native for macOS.
   # ──────────────────────────────────────────────
-  build-linux:
+  build:
     needs: [lint, test, version]
     if: |
       always() &&
@@ -127,78 +126,26 @@ jobs:
     strategy:
       matrix:
         include:
-          - platform: linux/amd64
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
             archive: codescope-server-linux-x86_64.tar.gz
-          - platform: linux/arm64
+            use_cross: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
             archive: codescope-server-linux-aarch64.tar.gz
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Determine build args
-        id: args
-        run: |
-          VERSION=""
-          if [[ "${{ needs.version.result }}" == "success" && "${{ needs.version.outputs.skip }}" != "true" ]]; then
-            VERSION="${{ needs.version.outputs.new_tag }}"
-            VERSION="${VERSION#v}"
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Build binary via Docker
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: server/Dockerfile
-          platforms: ${{ matrix.platform }}
-          build-args: VERSION=${{ steps.args.outputs.version }}
-          outputs: type=local,dest=./out
-          cache-from: type=gha,scope=build-${{ matrix.platform }}
-          cache-to: type=gha,scope=build-${{ matrix.platform }},mode=max
-
-      - name: Package tarball
-        run: |
-          mkdir -p staging
-          cp out/codescope-server staging/
-          chmod +x staging/codescope-server
-          cp server/codescope-init staging/
-          cp server/codescope-web staging/
-          chmod +x staging/codescope-init staging/codescope-web
-          cp LICENSE README.md staging/
-          tar czf ${{ matrix.archive }} -C staging .
-
-      - name: Verify tarball
-        run: tar tzf ${{ matrix.archive }} | grep -q codescope-server
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.archive }}
-          path: ${{ matrix.archive }}
-
-  # ──────────────────────────────────────────────
-  # macOS builds — native cargo (can't Docker-ize)
-  # ──────────────────────────────────────────────
-  build-macos:
-    needs: [lint, test, version]
-    if: |
-      always() &&
-      needs.lint.result == 'success' &&
-      needs.test.result == 'success' &&
-      (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/dev')
-    strategy:
-      matrix:
-        include:
+            use_cross: true
           - target: x86_64-apple-darwin
+            os: macos-latest
             archive: codescope-server-macos-x86_64.tar.gz
+            use_cross: false
           - target: aarch64-apple-darwin
+            os: macos-latest
             archive: codescope-server-macos-aarch64.tar.gz
-    runs-on: macos-latest
+            use_cross: false
+
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+
     steps:
       - uses: actions/checkout@v4
 
@@ -218,8 +165,15 @@ jobs:
           workspaces: server
           key: ${{ matrix.target }}
 
+      - name: Install cross
+        if: matrix.use_cross
+        uses: taiki-e/install-action@cross
+
       - name: Build binary
-        run: cargo build --release --manifest-path server/Cargo.toml --target ${{ matrix.target }} --features semantic
+        run: |
+          BUILD_CMD="cargo"
+          if [ "${{ matrix.use_cross }}" = "true" ]; then BUILD_CMD="cross"; fi
+          $BUILD_CMD build --release --manifest-path server/Cargo.toml --target ${{ matrix.target }} --features semantic
 
       - name: Package tarball
         run: |
@@ -244,12 +198,11 @@ jobs:
   # Stable release — master + new version only
   # ──────────────────────────────────────────────
   stable-release:
-    needs: [version, build-linux, build-macos]
+    needs: [version, build]
     if: |
       github.ref == 'refs/heads/master' &&
       needs.version.outputs.skip != 'true' &&
-      needs.build-linux.result == 'success' &&
-      needs.build-macos.result == 'success'
+      needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -331,11 +284,10 @@ jobs:
   # Channel release (edge/dev) — master/dev only
   # ──────────────────────────────────────────────
   channel-release:
-    needs: [build-linux, build-macos]
+    needs: build
     if: |
       always() &&
-      needs.build-linux.result == 'success' &&
-      needs.build-macos.result == 'success'
+      needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Determine channel config
