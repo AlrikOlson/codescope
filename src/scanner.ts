@@ -1,10 +1,30 @@
-import { Plugin } from 'vite';
+import { Plugin, UserConfig } from 'vite';
 import { spawn, execSync, ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import fs from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 
-const SERVER_PORT = 8433;
+const DEFAULT_BACKEND_PORT = 8433;
+
+function findFreePort(preferred: number): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.listen(preferred, '127.0.0.1', () => {
+      const port = (server.address() as net.AddressInfo).port;
+      server.close(() => resolve(port));
+    });
+    server.on('error', () => {
+      // Preferred port busy — ask OS for any free port
+      const fallback = net.createServer();
+      fallback.listen(0, '127.0.0.1', () => {
+        const port = (fallback.address() as net.AddressInfo).port;
+        fallback.close(() => resolve(port));
+      });
+      fallback.on('error', reject);
+    });
+  });
+}
 
 function waitForServer(port: number, timeoutMs = 60000): Promise<void> {
   const start = Date.now();
@@ -35,9 +55,25 @@ function waitForServer(port: number, timeoutMs = 60000): Promise<void> {
 
 export function codeScopeServer(): Plugin {
   let serverProcess: ChildProcess | null = null;
+  let backendPort = DEFAULT_BACKEND_PORT;
 
   return {
     name: 'codescope-server',
+
+    async config(): Promise<Partial<UserConfig>> {
+      backendPort = await findFreePort(DEFAULT_BACKEND_PORT);
+      return {
+        server: {
+          proxy: {
+            '/api': {
+              target: `http://localhost:${backendPort}`,
+              changeOrigin: true,
+            },
+          },
+        },
+      };
+    },
+
     configureServer(server) {
       const serverDir = path.resolve(server.config.root, 'server');
       const binaryName = process.platform === 'win32' ? 'codescope-server.exe' : 'codescope-server';
@@ -61,11 +97,11 @@ export function codeScopeServer(): Plugin {
         }
       }
 
-      // Spawn the Rust server
-      console.log(`\n  Starting CodeScope server on port ${SERVER_PORT}...`);
+      // Spawn the Rust server with the port we already confirmed is free
+      console.log(`\n  Starting CodeScope server on port ${backendPort}...`);
       serverProcess = spawn(binaryPath, ['--root', projectRoot], {
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, PORT: String(SERVER_PORT) },
+        env: { ...process.env, PORT: String(backendPort) },
       });
 
       serverProcess.stdout?.on('data', (data: Buffer) => {
@@ -87,9 +123,9 @@ export function codeScopeServer(): Plugin {
       });
 
       // Return a promise that resolves when the server is ready
-      return waitForServer(SERVER_PORT)
+      return waitForServer(backendPort)
         .then(() => {
-          console.log(`  ✓ CodeScope server ready\n`);
+          console.log(`  ✓ CodeScope server ready on :${backendPort}\n`);
         })
         .catch((err) => {
           console.error(`  ✗ ${err.message}\n`);

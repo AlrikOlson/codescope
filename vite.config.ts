@@ -20,6 +20,7 @@ export default defineConfig({
   },
   server: {
     port: 8432,
+    strictPort: false,
     warmup: {
       clientFiles: [
         './src/main.tsx',
@@ -33,11 +34,6 @@ export default defineConfig({
         './src/treemap/CodebaseMap.tsx',
       ],
     },
-    proxy: {
-      '/api': {
-        target: 'http://localhost:8433',
-        changeOrigin: true,
-      },
-    },
+    // proxy is injected dynamically by the codeScopeServer plugin
   },
 });

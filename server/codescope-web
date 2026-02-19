@@ -6,7 +6,7 @@ set -euo pipefail
 # Usage:
 #   codescope-web                    # browse current directory
 #   codescope-web /path/to/project   # browse a specific project
-#   PORT=9000 codescope-web          # custom port (default: 8432)
+#   PORT=9000 codescope-web          # custom port (auto-selects free port if unset)
 
 TARGET="${1:-.}"
 TARGET="$(cd "$TARGET" && pwd)"
@@ -25,21 +25,23 @@ if [ ! -d "$DIST_DIR" ] || [ ! -f "$DIST_DIR/index.html" ]; then
     exit 1
 fi
 
-PORT="${PORT:-8432}"
-
-# Open browser after a short delay
 open_browser() {
-    sleep 1
+    local url="$1"
     if command -v xdg-open >/dev/null 2>&1; then
-        xdg-open "http://localhost:$PORT" 2>/dev/null
+        xdg-open "$url" 2>/dev/null || true
     elif command -v open >/dev/null 2>&1; then
-        open "http://localhost:$PORT" 2>/dev/null
+        open "$url" 2>/dev/null || true
     fi
 }
-open_browser &
 
-echo "CodeScope web UI: http://localhost:$PORT"
 echo "Project: $TARGET"
-echo ""
 
-exec codescope-server --root "$TARGET" --dist "$DIST_DIR"
+# Start the server in the background, scanning stderr for the actual port.
+# The server prints CODESCOPE_PORT=<n> to stderr after binding.
+codescope-server --root "$TARGET" --dist "$DIST_DIR" 2>&1 | while IFS= read -r line; do
+    echo "$line" >&2
+    if [[ "$line" == CODESCOPE_PORT=* ]]; then
+        ACTUAL_PORT="${line#CODESCOPE_PORT=}"
+        open_browser "http://localhost:$ACTUAL_PORT" &
+    fi
+done

@@ -241,7 +241,7 @@ fn print_help() {
     eprintln!("  codescope-server --mcp --config ~/.codescope/repos.toml");
     eprintln!();
     eprintln!("ENVIRONMENT:");
-    eprintln!("  PORT                  HTTP server port (default: 8432)");
+    eprintln!("  PORT                  HTTP server port (default: auto-scan 8432-8441)");
 }
 
 // ---------------------------------------------------------------------------
@@ -482,20 +482,44 @@ async fn main() {
         .layer(CorsLayer::permissive())
         .with_state(ctx);
 
-    let port = std::env::var("PORT")
+    let explicit_port: Option<u16> = std::env::var("PORT")
         .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(8432);
+        .and_then(|p| p.parse().ok());
 
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
-        .await
-        .unwrap_or_else(|e| {
-            eprintln!("Error: Could not bind to port {port}: {e}");
-            eprintln!("  Is another instance already running? Try PORT={} codescope-server", port + 1);
+    let listener = if let Some(port) = explicit_port {
+        // User chose a port explicitly — fail hard if busy
+        tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
+            .await
+            .unwrap_or_else(|e| {
+                eprintln!("Error: Could not bind to port {port}: {e}");
+                eprintln!("  PORT={port} was set explicitly. Choose a different port.");
+                std::process::exit(1);
+            })
+    } else {
+        // Auto-scan: try 8432..=8441
+        const BASE: u16 = 8432;
+        const RANGE: u16 = 10;
+        let mut found = None;
+        for port in BASE..BASE + RANGE {
+            match tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await {
+                Ok(l) => {
+                    found = Some(l);
+                    break;
+                }
+                Err(_) => continue,
+            }
+        }
+        found.unwrap_or_else(|| {
+            eprintln!("Error: No free port found in {BASE}..{}", BASE + RANGE - 1);
+            eprintln!("  Try: PORT=<port> codescope-server");
             std::process::exit(1);
-        });
+        })
+    };
+
+    let port = listener.local_addr().unwrap().port();
 
     eprintln!("  Serving UI from {}", dist_dir.display());
-    eprintln!("  http://localhost:{port}\n");
+    eprintln!("  http://localhost:{port}");
+    eprintln!("CODESCOPE_PORT={port}");
     axum::serve(listener, app).await.unwrap();
 }
