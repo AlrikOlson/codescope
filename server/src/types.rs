@@ -154,7 +154,71 @@ pub struct CachedStub {
 }
 
 // ---------------------------------------------------------------------------
-// App state
+// Semantic search types (feature-gated)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "semantic")]
+pub struct SemanticIndex {
+    /// Flat embedding storage: `n_chunks * dim` floats for SIMD-friendly access.
+    pub embeddings: Vec<f32>,
+    /// Metadata for each chunk (parallel to embeddings).
+    pub chunk_meta: Vec<ChunkMeta>,
+    /// Embedding dimensionality (384 for all-MiniLM-L6-v2).
+    pub dim: usize,
+}
+
+#[cfg(feature = "semantic")]
+pub struct ChunkMeta {
+    pub file_path: String,
+    pub start_line: usize,
+    /// First 200 chars of the chunk for display.
+    pub snippet: String,
+}
+
+// ---------------------------------------------------------------------------
+// Per-repo state (one instance per indexed repository)
+// ---------------------------------------------------------------------------
+
+pub struct RepoState {
+    pub name: String,
+    pub root: PathBuf,
+    pub config: ScanConfig,
+    pub all_files: Vec<ScannedFile>,
+    pub manifest: BTreeMap<String, Vec<FileEntry>>,
+    pub deps: BTreeMap<String, DepEntry>,
+    pub search_files: Vec<SearchFileEntry>,
+    pub search_modules: Vec<SearchModuleEntry>,
+    pub import_graph: ImportGraph,
+    pub stub_cache: DashMap<String, CachedStub>,
+    pub scan_time_ms: u64,
+    #[cfg(feature = "semantic")]
+    pub semantic_index: Option<SemanticIndex>,
+}
+
+// ---------------------------------------------------------------------------
+// Cross-repo import edges
+// ---------------------------------------------------------------------------
+
+pub struct CrossRepoEdge {
+    pub from_repo: String,
+    pub from_file: String,
+    pub to_repo: String,
+    pub to_file: String,
+}
+
+// ---------------------------------------------------------------------------
+// MCP state (multi-repo)
+// ---------------------------------------------------------------------------
+
+pub struct McpState {
+    pub repos: BTreeMap<String, RepoState>,
+    pub default_repo: Option<String>,
+    pub cross_repo_edges: Vec<CrossRepoEdge>,
+    pub tokenizer: Arc<dyn crate::tokenizer::Tokenizer>,
+}
+
+// ---------------------------------------------------------------------------
+// App state (HTTP — kept for web UI, single-repo for now)
 // ---------------------------------------------------------------------------
 
 pub struct AppState {
@@ -169,19 +233,6 @@ pub struct AppState {
     pub search_modules: Vec<SearchModuleEntry>,
     pub import_graph: ImportGraph,
     /// Lazy cache: rel_path -> (raw content, tier1 stubs, fast token estimate)
-    pub stub_cache: DashMap<String, CachedStub>,
-    pub tokenizer: Arc<dyn crate::tokenizer::Tokenizer>,
-}
-
-pub struct McpState {
-    pub project_root: PathBuf,
-    pub config: ScanConfig,
-    pub all_files: Vec<ScannedFile>,
-    pub manifest: BTreeMap<String, Vec<FileEntry>>,
-    pub deps: BTreeMap<String, DepEntry>,
-    pub search_files: Vec<SearchFileEntry>,
-    pub search_modules: Vec<SearchModuleEntry>,
-    pub import_graph: ImportGraph,
     pub stub_cache: DashMap<String, CachedStub>,
     pub tokenizer: Arc<dyn crate::tokenizer::Tokenizer>,
 }

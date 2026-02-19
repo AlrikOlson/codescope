@@ -1,8 +1,11 @@
 mod api;
 mod budget;
 mod fuzzy;
+mod init;
 mod mcp;
 mod scan;
+#[cfg(feature = "semantic")]
+mod semantic;
 mod stubs;
 mod tokenizer;
 mod types;
@@ -11,8 +14,10 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use rayon::prelude::*;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
@@ -27,7 +32,7 @@ use types::*;
 // .codescope.toml config loading
 // ---------------------------------------------------------------------------
 
-fn load_codescope_config(project_root: &std::path::Path) -> ScanConfig {
+pub(crate) fn load_codescope_config(project_root: &std::path::Path) -> ScanConfig {
     let mut config = ScanConfig::new(project_root.to_path_buf());
     let config_path = project_root.join(".codescope.toml");
 
@@ -78,6 +83,130 @@ fn load_codescope_config(project_root: &std::path::Path) -> ScanConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Scan a single repo and return RepoState
+// ---------------------------------------------------------------------------
+
+pub fn scan_repo(name: &str, root: &std::path::Path, _tok: &Arc<dyn tokenizer::Tokenizer>) -> RepoState {
+    scan_repo_with_options(name, root, _tok, false)
+}
+
+pub fn scan_repo_with_options(
+    name: &str,
+    root: &std::path::Path,
+    _tok: &Arc<dyn tokenizer::Tokenizer>,
+    _enable_semantic: bool,
+) -> RepoState {
+    let config = load_codescope_config(root);
+
+    eprintln!(
+        "  [{name}] Scanning codebase at {}...",
+        root.display()
+    );
+    if !config.scan_dirs.is_empty() {
+        eprintln!("  [{name}] Scan dirs: {:?}", config.scan_dirs);
+    }
+    if !config.extensions.is_empty() {
+        eprintln!("  [{name}] Extensions: {:?}", config.extensions);
+    }
+
+    let start = Instant::now();
+
+    let (all_files, manifest) = scan_files(&config);
+    let file_count = all_files.len();
+    let module_count = manifest.len();
+    let deps = scan_deps(&config);
+    let (search_files, search_modules) = build_search_index(&manifest);
+    let import_graph = scan_imports(&all_files);
+
+    #[cfg(feature = "semantic")]
+    let semantic_index = if _enable_semantic {
+        eprintln!("  [{name}] Building semantic index...");
+        let sem_start = Instant::now();
+        let idx = semantic::build_semantic_index(&all_files);
+        if let Some(ref idx) = idx {
+            eprintln!(
+                "  [{name}] Semantic index: {} chunks ({}ms)",
+                idx.chunk_meta.len(),
+                sem_start.elapsed().as_millis()
+            );
+        }
+        idx
+    } else {
+        None
+    };
+
+    let scan_time_ms = start.elapsed().as_millis() as u64;
+
+    eprintln!(
+        "  [{name}] Scanned {file_count} files -> {module_count} modules, {} dep modules, {} import edges ({scan_time_ms}ms)",
+        deps.len(),
+        import_graph.imports.len(),
+    );
+
+    RepoState {
+        name: name.to_string(),
+        root: root.to_path_buf(),
+        config,
+        all_files,
+        manifest,
+        deps,
+        search_files,
+        search_modules,
+        import_graph,
+        stub_cache: dashmap::DashMap::new(),
+        scan_time_ms,
+        #[cfg(feature = "semantic")]
+        semantic_index,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Parse repos.toml config file
+// ---------------------------------------------------------------------------
+
+fn parse_repos_toml(path: &std::path::Path) -> Vec<(String, PathBuf)> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error: Could not read config file {}: {e}", path.display());
+            std::process::exit(1);
+        }
+    };
+    let table: toml::Table = match content.parse() {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("Error: Could not parse {}: {e}", path.display());
+            std::process::exit(1);
+        }
+    };
+
+    let repos_table = match table.get("repos").and_then(|v| v.as_table()) {
+        Some(t) => t,
+        None => {
+            eprintln!("Error: Config file missing [repos] section");
+            std::process::exit(1);
+        }
+    };
+
+    let mut repos = Vec::new();
+    for (name, value) in repos_table {
+        let root = value
+            .get("root")
+            .and_then(|v| v.as_str())
+            .unwrap_or_else(|| {
+                eprintln!("Error: repos.{name} missing 'root' field");
+                std::process::exit(1);
+            });
+        let root = PathBuf::from(root).canonicalize().unwrap_or_else(|e| {
+            eprintln!("Error: repos.{name} root '{}' not found: {e}", root);
+            std::process::exit(1);
+        });
+        repos.push((name.clone(), root));
+    }
+    repos
+}
+
+// ---------------------------------------------------------------------------
 // CLI help
 // ---------------------------------------------------------------------------
 
@@ -87,18 +216,30 @@ fn print_help() {
     eprintln!("Fast codebase indexer and search server");
     eprintln!();
     eprintln!("USAGE:");
-    eprintln!("  codescope-server [OPTIONS]");
+    eprintln!("  codescope-server [COMMAND] [OPTIONS]");
+    eprintln!();
+    eprintln!("COMMANDS:");
+    eprintln!("  init [PATH]           Initialize CodeScope in a project (generates config files)");
+    eprintln!("  doctor [PATH]         Check project setup and diagnose issues");
     eprintln!();
     eprintln!("OPTIONS:");
-    eprintln!("  --root <PATH>       Project root directory (default: current directory)");
-    eprintln!("  --mcp               Run as MCP stdio server (for Claude Code)");
-    eprintln!("  --dist <PATH>       Path to web UI dist directory");
-    eprintln!("  --tokenizer <NAME>  Token counter: bytes-estimate (default) or tiktoken");
-    eprintln!("  --help              Show this help message");
-    eprintln!("  --version           Show version");
+    eprintln!("  --root <PATH>         Project root directory (default: current directory)");
+    eprintln!("  --repo <NAME=PATH>    Named repository (repeatable for multi-repo)");
+    eprintln!("  --config <PATH>       Load repos from a TOML config file");
+    eprintln!("  --mcp                 Run as MCP stdio server (for Claude Code)");
+    eprintln!("  --dist <PATH>         Path to web UI dist directory");
+    eprintln!("  --tokenizer <NAME>    Token counter: bytes-estimate (default) or tiktoken");
+    #[cfg(feature = "semantic")]
+    eprintln!("  --semantic            Enable semantic code search (downloads ML model on first use)");
+    eprintln!("  --help                Show this help message");
+    eprintln!("  --version             Show version");
+    eprintln!();
+    eprintln!("MULTI-REPO:");
+    eprintln!("  codescope-server --mcp --repo engine=/path/to/engine --repo game=/path/to/game");
+    eprintln!("  codescope-server --mcp --config ~/.codescope/repos.toml");
     eprintln!();
     eprintln!("ENVIRONMENT:");
-    eprintln!("  PORT                HTTP server port (default: 8432)");
+    eprintln!("  PORT                  HTTP server port (default: 8432)");
 }
 
 // ---------------------------------------------------------------------------
@@ -119,25 +260,15 @@ async fn main() {
         return;
     }
 
+    // Check for subcommands before flag-based parsing
+    if args.get(1).map(|s| s.as_str()) == Some("init") {
+        std::process::exit(init::run_init(&args[1..]));
+    }
+    if args.get(1).map(|s| s.as_str()) == Some("doctor") {
+        std::process::exit(init::run_doctor(&args[1..]));
+    }
+
     let mcp_mode = args.iter().any(|a| a == "--mcp");
-
-    // Project root: --root flag or current directory
-    let project_root = if let Some(pos) = args.iter().position(|a| a == "--root") {
-        match args.get(pos + 1) {
-            Some(path) => PathBuf::from(path),
-            None => {
-                eprintln!("Error: --root requires a path argument");
-                std::process::exit(1);
-            }
-        }
-    } else {
-        std::env::current_dir().unwrap_or_else(|_| {
-            eprintln!("Error: Could not determine current directory. Use --root <path>");
-            std::process::exit(1);
-        })
-    };
-
-    let project_root = project_root.canonicalize().unwrap_or(project_root);
 
     // Tokenizer: --tokenizer flag or default bytes-estimate
     let tokenizer_name = args
@@ -149,75 +280,166 @@ async fn main() {
 
     let tok = tokenizer::create_tokenizer(tokenizer_name);
 
-    // Load config
-    let config = load_codescope_config(&project_root);
+    eprintln!("\n  Tokenizer: {}", tok.name());
 
-    eprintln!(
-        "\n  Scanning codebase at {}...",
-        project_root.display()
-    );
-    if !config.scan_dirs.is_empty() {
-        eprintln!("  Scan dirs: {:?}", config.scan_dirs);
+    // ---------------------------------------------------------------------------
+    // Determine repo list from CLI args
+    // ---------------------------------------------------------------------------
+
+    let mut repo_specs: Vec<(String, PathBuf)> = Vec::new();
+
+    // --repo name=/path flags (repeatable)
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--repo" {
+            if let Some(spec) = args.get(i + 1) {
+                if let Some((name, path)) = spec.split_once('=') {
+                    let root = PathBuf::from(path).canonicalize().unwrap_or_else(|e| {
+                        eprintln!("Error: --repo {name}={path} not found: {e}");
+                        std::process::exit(1);
+                    });
+                    repo_specs.push((name.to_string(), root));
+                } else {
+                    eprintln!("Error: --repo requires NAME=PATH format (e.g. --repo engine=/path/to/engine)");
+                    std::process::exit(1);
+                }
+                i += 2;
+            } else {
+                eprintln!("Error: --repo requires a NAME=PATH argument");
+                std::process::exit(1);
+            }
+        } else {
+            i += 1;
+        }
     }
-    if !config.extensions.is_empty() {
-        eprintln!("  Extensions: {:?}", config.extensions);
+
+    // --config file
+    if let Some(pos) = args.iter().position(|a| a == "--config") {
+        let config_path = args.get(pos + 1).unwrap_or_else(|| {
+            eprintln!("Error: --config requires a path argument");
+            std::process::exit(1);
+        });
+        let parsed = parse_repos_toml(std::path::Path::new(config_path));
+        repo_specs.extend(parsed);
     }
-    eprintln!("  Tokenizer: {}", tok.name());
 
-    let start = Instant::now();
+    // Fallback: --root or cwd (single repo, backwards compat)
+    if repo_specs.is_empty() {
+        let project_root = if let Some(pos) = args.iter().position(|a| a == "--root") {
+            match args.get(pos + 1) {
+                Some(path) => PathBuf::from(path),
+                None => {
+                    eprintln!("Error: --root requires a path argument");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            // Check global config fallback
+            let global_config = std::env::var("HOME")
+                .map(|h| PathBuf::from(h).join(".codescope/repos.toml"))
+                .unwrap_or_default();
+            if global_config.exists() && mcp_mode {
+                let parsed = parse_repos_toml(&global_config);
+                repo_specs.extend(parsed);
+                // Fall through — repo_specs now populated
+                PathBuf::new() // won't be used
+            } else {
+                std::env::current_dir().unwrap_or_else(|_| {
+                    eprintln!("Error: Could not determine current directory. Use --root <path>");
+                    std::process::exit(1);
+                })
+            }
+        };
 
-    let (all_files, manifest) = scan_files(&config);
-    let file_count = all_files.len();
-    let module_count = manifest.len();
-    let tree = build_tree(&manifest);
-    let deps = scan_deps(&config);
-    let (search_files, search_modules) = build_search_index(&manifest);
-    let import_graph = scan_imports(&all_files);
+        if repo_specs.is_empty() {
+            let project_root = project_root.canonicalize().unwrap_or(project_root);
+            let name = project_root
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("default")
+                .to_string();
+            repo_specs.push((name, project_root));
+        }
+    }
 
-    let elapsed = start.elapsed();
+    // ---------------------------------------------------------------------------
+    // Semantic search: opt-in at runtime via --semantic flag
+    // ---------------------------------------------------------------------------
+
+    #[cfg(feature = "semantic")]
+    let enable_semantic = args.iter().any(|a| a == "--semantic");
+    #[cfg(not(feature = "semantic"))]
+    let enable_semantic = false;
+
+    if args.iter().any(|a| a == "--semantic") && !cfg!(feature = "semantic") {
+        eprintln!("  Warning: --semantic flag ignored (binary not compiled with 'semantic' feature)");
+        eprintln!("  Recompile with: cargo build --release --features semantic");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Scan all repos (parallel via rayon)
+    // ---------------------------------------------------------------------------
+
+    let tok_ref = &tok;
+    let repo_states: Vec<RepoState> = repo_specs
+        .par_iter()
+        .map(|(name, root)| scan_repo_with_options(name, root, tok_ref, enable_semantic))
+        .collect();
+
+    let mut repos = BTreeMap::new();
+    let default_repo = if repo_states.len() == 1 {
+        Some(repo_states[0].name.clone())
+    } else {
+        None
+    };
+    for repo in repo_states {
+        repos.insert(repo.name.clone(), repo);
+    }
+
+    // Build cross-repo import edges
+    let cross_repo_edges = scan::resolve_cross_repo_imports(&repos);
+
+    let total_files: usize = repos.values().map(|r| r.all_files.len()).sum();
+    let total_modules: usize = repos.values().map(|r| r.manifest.len()).sum();
     eprintln!(
-        "  Scanned {} files -> {} modules, {} dep modules, {} import edges ({:.0}ms)\n",
-        file_count,
-        module_count,
-        deps.len(),
-        import_graph.imports.len(),
-        elapsed.as_millis()
+        "\n  Total: {} files, {} modules across {} repo(s)\n",
+        total_files,
+        total_modules,
+        repos.len()
     );
 
     if mcp_mode {
         let mcp_state = McpState {
-            project_root,
-            config,
-            all_files,
-            manifest,
-            deps,
-            search_files,
-            search_modules,
-            import_graph,
-            stub_cache: dashmap::DashMap::new(),
+            repos,
+            default_repo,
+            cross_repo_edges,
             tokenizer: tok,
         };
-        run_mcp(mcp_state);
+        run_mcp(Arc::new(RwLock::new(mcp_state)));
         return;
     }
 
-    // HTTP server mode
+    // HTTP server mode — use first repo for backwards compat
+    let first_repo_name = repo_specs[0].0.clone();
+    let first_repo = repos.remove(&first_repo_name).unwrap();
+
+    let tree = build_tree(&first_repo.manifest);
     let tree_json = serde_json::to_string(&tree).unwrap();
-    let manifest_json = serde_json::to_string(&manifest).unwrap();
-    let deps_json = serde_json::to_string(&deps).unwrap();
+    let manifest_json = serde_json::to_string(&first_repo.manifest).unwrap();
+    let deps_json = serde_json::to_string(&first_repo.deps).unwrap();
 
     let state = Arc::new(AppState {
-        project_root,
-        config,
+        project_root: first_repo.root,
+        config: first_repo.config,
         tree_json,
         manifest_json,
         deps_json,
-        deps,
-        all_files,
-        search_files,
-        search_modules,
-        import_graph,
-        stub_cache: dashmap::DashMap::new(),
+        deps: first_repo.deps,
+        all_files: first_repo.all_files,
+        search_files: first_repo.search_files,
+        search_modules: first_repo.search_modules,
+        import_graph: first_repo.import_graph,
+        stub_cache: first_repo.stub_cache,
         tokenizer: tok,
     });
 

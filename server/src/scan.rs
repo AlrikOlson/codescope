@@ -981,3 +981,76 @@ pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
         imported_by,
     }
 }
+
+// ---------------------------------------------------------------------------
+// Cross-repo import resolution
+// ---------------------------------------------------------------------------
+
+/// Resolve imports that cross repository boundaries.
+/// For each repo, unresolved filenames are matched against other repos' files.
+pub fn resolve_cross_repo_imports(
+    repos: &std::collections::BTreeMap<String, crate::types::RepoState>,
+) -> Vec<crate::types::CrossRepoEdge> {
+    if repos.len() < 2 {
+        return Vec::new();
+    }
+
+    // Build per-repo filename lookup: stem -> (repo_name, rel_path)
+    let mut global_lookup: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    for repo in repos.values() {
+        for f in &repo.all_files {
+            let full_filename = f.rel_path.rsplit('/').next().unwrap_or(&f.rel_path);
+            let stem = full_filename
+                .rsplit_once('.')
+                .map(|(s, _)| s)
+                .unwrap_or(full_filename);
+            global_lookup
+                .entry(stem.to_string())
+                .or_default()
+                .push((repo.name.clone(), f.rel_path.clone()));
+        }
+    }
+
+    let mut edges = Vec::new();
+
+    for repo in repos.values() {
+        // Find imports that didn't resolve within the repo
+        // (files referenced in import directives but not in the repo's own import graph)
+        let local_files: HashSet<&str> = repo.all_files.iter().map(|f| f.rel_path.as_str()).collect();
+
+        for (file, imported_files) in &repo.import_graph.imports {
+            for imported in imported_files {
+                // Skip if it resolved within the repo
+                if local_files.contains(imported.as_str()) {
+                    continue;
+                }
+                // Try to find in other repos by filename stem
+                let stem = imported
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(imported)
+                    .rsplit_once('.')
+                    .map(|(s, _)| s)
+                    .unwrap_or(imported);
+                if let Some(candidates) = global_lookup.get(stem) {
+                    for (target_repo, target_path) in candidates {
+                        if target_repo != &repo.name {
+                            edges.push(crate::types::CrossRepoEdge {
+                                from_repo: repo.name.clone(),
+                                from_file: file.clone(),
+                                to_repo: target_repo.clone(),
+                                to_file: target_path.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !edges.is_empty() {
+        eprintln!("  Cross-repo: {} import edges resolved", edges.len());
+    }
+
+    edges
+}

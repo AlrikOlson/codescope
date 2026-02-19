@@ -4,16 +4,73 @@ use crate::scan::get_category_path;
 use crate::stubs::extract_stubs;
 use crate::types::*;
 use regex::RegexBuilder;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fs;
 use std::io::{self, BufRead, Write as IoWrite};
+use std::sync::{Arc, RwLock};
+
+// ---------------------------------------------------------------------------
+// Repo resolution helper
+// ---------------------------------------------------------------------------
+
+fn resolve_repo<'a>(
+    state: &'a McpState,
+    args: &serde_json::Value,
+) -> Result<&'a RepoState, String> {
+    match args.get("repo").and_then(|v| v.as_str()) {
+        Some(name) => state
+            .repos
+            .get(name)
+            .ok_or_else(|| {
+                let available: Vec<&str> = state.repos.keys().map(|k| k.as_str()).collect();
+                format!("Unknown repo '{name}'. Available: {}", available.join(", "))
+            }),
+        None if state.repos.len() == 1 => Ok(state.repos.values().next().unwrap()),
+        None if state.default_repo.is_some() => {
+            let name = state.default_repo.as_ref().unwrap();
+            Ok(state.repos.get(name).unwrap())
+        }
+        None => {
+            let available: Vec<&str> = state.repos.keys().map(|k| k.as_str()).collect();
+            Err(format!(
+                "Multiple repos indexed. Specify 'repo' parameter. Available: {}",
+                available.join(", ")
+            ))
+        }
+    }
+}
+
+/// For search tools: collect all repos when no specific repo is requested.
+fn resolve_repos_for_search<'a>(
+    state: &'a McpState,
+    args: &serde_json::Value,
+) -> Vec<&'a RepoState> {
+    match args.get("repo").and_then(|v| v.as_str()) {
+        Some(name) => match state.repos.get(name) {
+            Some(repo) => vec![repo],
+            None => vec![],
+        },
+        None if state.repos.len() == 1 => vec![state.repos.values().next().unwrap()],
+        None => state.repos.values().collect(),
+    }
+}
+
+/// Format a path with repo prefix when multiple repos exist.
+fn repo_path(repo: &RepoState, path: &str, multi: bool) -> String {
+    if multi {
+        format!("[{}] {}", repo.name, path)
+    } else {
+        path.to_string()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Tool definitions
 // ---------------------------------------------------------------------------
 
 fn tool_definitions() -> serde_json::Value {
-    serde_json::json!([
+    #[allow(unused_mut)]
+    let mut tools = serde_json::json!([
         {
             "name": "cs_read_file",
             "description": "Read a source file.\n\nModes:\n- stubs (recommended first): structural outline with class/function signatures, no bodies. Use to understand file structure.\n- full: complete content. For large files, use start_line/end_line to read specific sections.\n\nWorkflow: cs_grep -> find line number -> cs_read_file with start_line/end_line for details.",
@@ -23,7 +80,8 @@ fn tool_definitions() -> serde_json::Value {
                     "path": { "type": "string", "description": "Relative path from project root" },
                     "mode": { "type": "string", "enum": ["full", "stubs"], "description": "full = complete file, stubs = structural outline only. Default: full" },
                     "start_line": { "type": "integer", "description": "First line to return (1-based). Only applies to mode='full'." },
-                    "end_line": { "type": "integer", "description": "Last line to return (1-based, inclusive). Only applies to mode='full'." }
+                    "end_line": { "type": "integer", "description": "Last line to return (1-based, inclusive). Only applies to mode='full'." },
+                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
                 },
                 "required": ["path"]
             }
@@ -39,7 +97,8 @@ fn tool_definitions() -> serde_json::Value {
                         "items": { "type": "string" },
                         "description": "Array of relative paths from project root"
                     },
-                    "mode": { "type": "string", "enum": ["full", "stubs"], "description": "full = complete files, stubs = structural outlines. Default: full" }
+                    "mode": { "type": "string", "enum": ["full", "stubs"], "description": "full = complete files, stubs = structural outlines. Default: full" },
+                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
                 },
                 "required": ["paths"]
             }
@@ -54,7 +113,8 @@ fn tool_definitions() -> serde_json::Value {
                     "ext": { "type": "string", "description": "Comma-separated extensions to filter (e.g. 'h,cpp' or 'rs,go')" },
                     "category": { "type": "string", "description": "Module category prefix to filter" },
                     "limit": { "type": "integer", "description": "Max total matches to return. Default: 100" },
-                    "context": { "type": "integer", "description": "Lines of context before/after each match (0-10). Default: 2" }
+                    "context": { "type": "integer", "description": "Lines of context before/after each match (0-10). Default: 2" },
+                    "repo": { "type": "string", "description": "Repository name (searches all repos if omitted)" }
                 },
                 "required": ["query"]
             }
@@ -64,7 +124,9 @@ fn tool_definitions() -> serde_json::Value {
             "description": "List all modules/categories with file counts. Use to discover available modules before drilling into specific ones.",
             "inputSchema": {
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
+                },
                 "additionalProperties": false
             }
         },
@@ -74,7 +136,8 @@ fn tool_definitions() -> serde_json::Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "module": { "type": "string", "description": "Module category path (e.g. 'Runtime > Renderer > Nanite')" }
+                    "module": { "type": "string", "description": "Module category path (e.g. 'Runtime > Renderer > Nanite')" },
+                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
                 },
                 "required": ["module"]
             }
@@ -85,7 +148,8 @@ fn tool_definitions() -> serde_json::Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "module": { "type": "string", "description": "Module name (e.g. 'Renderer', 'Core', 'my-library')" }
+                    "module": { "type": "string", "description": "Module name (e.g. 'Renderer', 'Core', 'my-library')" },
+                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
                 },
                 "required": ["module"]
             }
@@ -98,7 +162,8 @@ fn tool_definitions() -> serde_json::Value {
                 "properties": {
                     "query": { "type": "string", "description": "Search query (e.g. 'config parser', 'FMeshBatch', 'main.rs')" },
                     "fileLimit": { "type": "integer", "description": "Max file results (default 20)" },
-                    "moduleLimit": { "type": "integer", "description": "Max module results (default 8)" }
+                    "moduleLimit": { "type": "integer", "description": "Max module results (default 8)" },
+                    "repo": { "type": "string", "description": "Repository name (searches all repos if omitted)" }
                 },
                 "required": ["query"]
             }
@@ -114,7 +179,8 @@ fn tool_definitions() -> serde_json::Value {
                         "items": { "type": "string" },
                         "description": "Array of relative paths from project root"
                     },
-                    "budget": { "type": "integer", "description": "Max token budget. Default: 50000" }
+                    "budget": { "type": "integer", "description": "Max token budget. Default: 50000" },
+                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
                 },
                 "required": ["paths"]
             }
@@ -126,7 +192,8 @@ fn tool_definitions() -> serde_json::Value {
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Relative path from project root" },
-                    "direction": { "type": "string", "enum": ["imports", "imported_by", "both"], "description": "Which direction to query. Default: both" }
+                    "direction": { "type": "string", "enum": ["imports", "imported_by", "both"], "description": "Which direction to query. Default: both" },
+                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
                 },
                 "required": ["path"]
             }
@@ -140,28 +207,97 @@ fn tool_definitions() -> serde_json::Value {
                     "query": { "type": "string", "description": "Search terms (e.g. 'VolumetricCloud', 'config parser')" },
                     "ext": { "type": "string", "description": "Comma-separated extensions to filter (e.g. 'h,cpp' or 'rs,ts')" },
                     "category": { "type": "string", "description": "Module category prefix to filter" },
-                    "limit": { "type": "integer", "description": "Max results to return. Default: 30" }
+                    "limit": { "type": "integer", "description": "Max results to return. Default: 30" },
+                    "repo": { "type": "string", "description": "Repository name (searches all repos if omitted)" }
                 },
                 "required": ["query"]
             }
+        },
+        // ---- New tools ----
+        {
+            "name": "cs_status",
+            "description": "Show indexed repositories, file counts, language breakdown, and scan time.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }
+        },
+        {
+            "name": "cs_rescan",
+            "description": "Re-index one or all repositories without restarting the server. Use after significant file changes.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "repo": { "type": "string", "description": "Specific repo to rescan (default: all)" }
+                }
+            }
+        },
+        {
+            "name": "cs_add_repo",
+            "description": "Dynamically add a new repository to the index at runtime.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Name/alias for the repository" },
+                    "root": { "type": "string", "description": "Absolute path to the repository root" }
+                },
+                "required": ["name", "root"]
+            }
+        },
+        {
+            "name": "cs_impact",
+            "description": "Impact analysis: given a file, find everything that depends on it (directly or transitively). Shows the full dependency chain with depth levels. Use to answer 'what breaks if I change this?'",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "File to analyze impact for" },
+                    "max_depth": { "type": "integer", "description": "Max traversal depth (default: 5)" },
+                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
+                },
+                "required": ["path"]
+            }
         }
-    ])
+    ]);
+
+    #[cfg(feature = "semantic")]
+    {
+        if let Some(arr) = tools.as_array_mut() {
+            arr.push(serde_json::json!({
+                "name": "cs_semantic_search",
+                "description": "Search code by intent using semantic embeddings. Finds conceptually similar code even without keyword overlap. Requires --semantic flag at startup.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Natural language description of what you're looking for" },
+                        "limit": { "type": "integer", "description": "Max results (default: 10)" },
+                        "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
+                    },
+                    "required": ["query"]
+                }
+            }));
+        }
+    }
+
+    tools
 }
 
 // ---------------------------------------------------------------------------
-// Tool call handler
+// Tool call handler (read-only, takes &McpState)
 // ---------------------------------------------------------------------------
 
 fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (String, bool) {
-    let config = &state.config;
-
     match name {
         "cs_read_file" => {
+            let repo = match resolve_repo(state, args) {
+                Ok(r) => r,
+                Err(e) => return (format!("Error: {e}"), true),
+            };
             let path = args["path"].as_str().unwrap_or("");
             let mode = args["mode"].as_str().unwrap_or("full");
             let start_line = args["start_line"].as_u64().map(|n| n.max(1) as usize);
             let end_line = args["end_line"].as_u64().map(|n| n as usize);
-            match validate_path(&state.project_root, path) {
+            match validate_path(&repo.root, path) {
                 Err(e) => (format!("Error: {e}"), true),
                 Ok(full_path) => match fs::read_to_string(&full_path) {
                     Err(_) => ("Error: Could not read file".to_string(), true),
@@ -217,6 +353,10 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
             }
         }
         "cs_read_files" => {
+            let repo = match resolve_repo(state, args) {
+                Ok(r) => r,
+                Err(e) => return (format!("Error: {e}"), true),
+            };
             let paths: Vec<&str> = args["paths"]
                 .as_array()
                 .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
@@ -229,7 +369,7 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
 
             let mut out = String::new();
             for p in &paths {
-                match validate_path(&state.project_root, p) {
+                match validate_path(&repo.root, p) {
                     Err(e) => {
                         out.push_str(&format!("# {p}\nError: {e}\n\n"));
                     }
@@ -252,6 +392,12 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
             (out, false)
         }
         "cs_grep" => {
+            let repos = resolve_repos_for_search(state, args);
+            if repos.is_empty() {
+                return ("Error: No matching repos found".to_string(), true);
+            }
+            let multi = repos.len() > 1;
+
             let query = args["query"].as_str().unwrap_or("");
             if query.len() < 2 {
                 return (
@@ -288,27 +434,8 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
 
             let start = std::time::Instant::now();
 
-            let candidates: Vec<&ScannedFile> = state
-                .all_files
-                .iter()
-                .filter(|f| {
-                    if let Some(ref exts) = ext_filter {
-                        if !exts.contains(&f.ext) {
-                            return false;
-                        }
-                    }
-                    if let Some(cat) = cat_filter {
-                        let file_cat = get_category_path(&f.rel_path, config).join(" > ");
-                        if !file_cat.starts_with(cat) {
-                            return false;
-                        }
-                    }
-                    true
-                })
-                .collect();
-
             struct GrepFileHit {
-                rel_path: String,
+                display_path: String,
                 desc: String,
                 match_indices: Vec<usize>,
                 total_match_count: usize,
@@ -318,48 +445,70 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
 
             let mut file_hits: Vec<GrepFileHit> = Vec::new();
 
-            for file in &candidates {
-                let content = match fs::read_to_string(&file.abs_path) {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
+            for repo in &repos {
+                let config = &repo.config;
+                let candidates: Vec<&ScannedFile> = repo
+                    .all_files
+                    .iter()
+                    .filter(|f| {
+                        if let Some(ref exts) = ext_filter {
+                            if !exts.contains(&f.ext) {
+                                return false;
+                            }
+                        }
+                        if let Some(cat) = cat_filter {
+                            let file_cat = get_category_path(&f.rel_path, config).join(" > ");
+                            if !file_cat.starts_with(cat) {
+                                return false;
+                            }
+                        }
+                        true
+                    })
+                    .collect();
 
-                let lines: Vec<&str> = content.lines().collect();
-                let total_lines = lines.len().max(1);
+                for file in &candidates {
+                    let content = match fs::read_to_string(&file.abs_path) {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
 
-                let mut match_indices: Vec<usize> = Vec::new();
-                let mut total_match_count = 0usize;
-                for (i, line) in lines.iter().enumerate() {
-                    if pattern.is_match(line) {
-                        total_match_count += 1;
-                        if match_indices.len() < max_per_file {
-                            match_indices.push(i);
+                    let lines: Vec<&str> = content.lines().collect();
+                    let total_lines = lines.len().max(1);
+
+                    let mut match_indices: Vec<usize> = Vec::new();
+                    let mut total_match_count = 0usize;
+                    for (i, line) in lines.iter().enumerate() {
+                        if pattern.is_match(line) {
+                            total_match_count += 1;
+                            if match_indices.len() < max_per_file {
+                                match_indices.push(i);
+                            }
                         }
                     }
+
+                    if match_indices.is_empty() {
+                        continue;
+                    }
+
+                    let filename = file
+                        .rel_path
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(&file.rel_path)
+                        .to_lowercase();
+                    let score = grep_relevance_score(
+                        total_match_count, total_lines, &filename, &file.ext, &terms_lower,
+                    );
+
+                    file_hits.push(GrepFileHit {
+                        display_path: repo_path(repo, &file.rel_path, multi),
+                        desc: file.desc.clone(),
+                        match_indices,
+                        total_match_count,
+                        lines: lines.iter().map(|l| l.to_string()).collect(),
+                        score,
+                    });
                 }
-
-                if match_indices.is_empty() {
-                    continue;
-                }
-
-                let filename = file
-                    .rel_path
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(&file.rel_path)
-                    .to_lowercase();
-                let score = grep_relevance_score(
-                    total_match_count, total_lines, &filename, &file.ext, &terms_lower,
-                );
-
-                file_hits.push(GrepFileHit {
-                    rel_path: file.rel_path.clone(),
-                    desc: file.desc.clone(),
-                    match_indices,
-                    total_match_count,
-                    lines: lines.iter().map(|l| l.to_string()).collect(),
-                    score,
-                });
             }
 
             // Sort by relevance score descending
@@ -395,7 +544,7 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
                         .collect();
                     results.push(format!(
                         "{}  ({}, score {:.0})\n{}",
-                        hit.rel_path,
+                        hit.display_path,
                         hit.desc,
                         hit.score,
                         file_lines.join("\n")
@@ -434,7 +583,7 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
                     }
                     results.push(format!(
                         "{}  ({}, score {:.0})\n{}",
-                        hit.rel_path,
+                        hit.display_path,
                         hit.desc,
                         hit.score,
                         file_output.join("\n")
@@ -451,21 +600,29 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
             (format!("{header}{}", results.join("\n\n")), false)
         }
         "cs_list_modules" => {
+            let repo = match resolve_repo(state, args) {
+                Ok(r) => r,
+                Err(e) => return (format!("Error: {e}"), true),
+            };
             let mut out = String::new();
-            for (cat, files) in &state.manifest {
+            for (cat, files) in &repo.manifest {
                 out.push_str(&format!("{cat}  ({} files)\n", files.len()));
             }
             (
-                format!("{} modules total\n\n{out}", state.manifest.len()),
+                format!("{} modules total\n\n{out}", repo.manifest.len()),
                 false,
             )
         }
         "cs_get_module_files" => {
+            let repo = match resolve_repo(state, args) {
+                Ok(r) => r,
+                Err(e) => return (format!("Error: {e}"), true),
+            };
             let module = args["module"].as_str().unwrap_or("");
             let prefix_dot = format!("{module} > ");
             let mut out = String::new();
             let mut count = 0;
-            for (cat, files) in &state.manifest {
+            for (cat, files) in &repo.manifest {
                 if cat != module && !cat.starts_with(&prefix_dot) {
                     continue;
                 }
@@ -481,8 +638,12 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
             }
         }
         "cs_get_deps" => {
+            let repo = match resolve_repo(state, args) {
+                Ok(r) => r,
+                Err(e) => return (format!("Error: {e}"), true),
+            };
             let module = args["module"].as_str().unwrap_or("");
-            match state.deps.get(module) {
+            match repo.deps.get(module) {
                 None => (
                     format!("No dependency info found for '{module}'"),
                     true,
@@ -507,45 +668,91 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
             }
         }
         "cs_search" => {
+            let repos = resolve_repos_for_search(state, args);
+            if repos.is_empty() {
+                return ("Error: No matching repos found".to_string(), true);
+            }
+            let multi = repos.len() > 1;
+
             let raw_query = args["query"].as_str().unwrap_or("");
             let query = crate::fuzzy::preprocess_search_query(raw_query);
             let file_limit = args["fileLimit"].as_u64().unwrap_or(20) as usize;
             let module_limit = args["moduleLimit"].as_u64().unwrap_or(8) as usize;
-            let resp = run_search(
-                &state.search_files,
-                &state.search_modules,
-                &query,
-                file_limit,
-                module_limit,
-            );
 
+            let mut all_modules = Vec::new();
+            let mut all_files = Vec::new();
+            let mut total_files = 0usize;
+            let mut total_modules = 0usize;
+
+            let start = std::time::Instant::now();
+
+            for repo in &repos {
+                let resp = run_search(
+                    &repo.search_files,
+                    &repo.search_modules,
+                    &query,
+                    file_limit,
+                    module_limit,
+                );
+                total_files += resp.total_files;
+                total_modules += resp.total_modules;
+
+                for m in resp.modules {
+                    all_modules.push((repo, m));
+                }
+                for f in resp.files {
+                    all_files.push((repo, f));
+                }
+            }
+
+            // Sort by score descending
+            all_modules.sort_by(|a, b| {
+                b.1.score
+                    .partial_cmp(&a.1.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            all_files.sort_by(|a, b| {
+                b.1.score
+                    .partial_cmp(&a.1.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            all_modules.truncate(module_limit);
+            all_files.truncate(file_limit);
+
+            let query_time = start.elapsed().as_secs_f64() * 1000.0;
             let mut out = String::new();
-            if !resp.modules.is_empty() {
+            if !all_modules.is_empty() {
                 out.push_str("Modules:\n");
-                for m in &resp.modules {
+                for (repo, m) in &all_modules {
+                    let prefix = if multi { format!("[{}] ", repo.name) } else { String::new() };
                     out.push_str(&format!(
-                        "  {} ({} files, score {:.1})\n",
+                        "  {prefix}{} ({} files, score {:.1})\n",
                         m.id, m.file_count, m.score
                     ));
                 }
                 out.push('\n');
             }
-            if !resp.files.is_empty() {
+            if !all_files.is_empty() {
                 out.push_str("Files:\n");
-                for f in &resp.files {
-                    out.push_str(&format!("  {} — {} (score {:.1})\n", f.path, f.desc, f.score));
+                for (repo, f) in &all_files {
+                    let prefix = if multi { format!("[{}] ", repo.name) } else { String::new() };
+                    out.push_str(&format!("  {prefix}{} — {} (score {:.1})\n", f.path, f.desc, f.score));
                 }
             }
-            if resp.modules.is_empty() && resp.files.is_empty() {
+            if all_modules.is_empty() && all_files.is_empty() {
                 out.push_str(&format!("No results for '{raw_query}'"));
             }
             out.push_str(&format!(
                 "\n({:.1}ms, searched {} files / {} modules)",
-                resp.query_time, resp.total_files, resp.total_modules
+                query_time, total_files, total_modules
             ));
             (out, false)
         }
         "cs_read_context" => {
+            let repo = match resolve_repo(state, args) {
+                Ok(r) => r,
+                Err(e) => return (format!("Error: {e}"), true),
+            };
             let paths: Vec<String> = args["paths"]
                 .as_array()
                 .map(|a| {
@@ -567,16 +774,16 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
 
             let query = args["query"].as_str();
             let resp = allocate_budget(
-                &state.project_root,
+                &repo.root,
                 &paths,
-                &state.all_files,
+                &repo.all_files,
                 budget,
                 &unit,
                 query,
-                &state.deps,
-                &state.stub_cache,
+                &repo.deps,
+                &repo.stub_cache,
                 &*state.tokenizer,
-                config,
+                &repo.config,
             );
 
             // Format as human-readable text for MCP
@@ -645,17 +852,23 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
             out.push_str("**Trace import dependencies:**\n");
             out.push_str("  cs_find_imports({ path: \"...\", direction: \"both\" })\n");
             out.push_str("  -> Shows what a file imports and what imports it. Essential for understanding coupling.\n\n");
+            out.push_str("**Impact analysis:**\n");
+            out.push_str("  cs_impact({ path: \"path/to/file.rs\" })\n");
+            out.push_str("  -> Find everything that depends on this file. Answers 'what breaks if I change this?'\n\n");
             out.push_str("**Typical workflow:** cs_find -> pick top files -> cs_read_file (stubs) -> cs_read_file (full, start_line/end_line) for the specific section you need -> cs_grep to find usages.\n");
 
             (out, false)
         }
         "cs_find_imports" => {
+            let repo = match resolve_repo(state, args) {
+                Ok(r) => r,
+                Err(e) => return (format!("Error: {e}"), true),
+            };
             let path = args["path"].as_str().unwrap_or("");
             let direction = args["direction"].as_str().unwrap_or("both");
 
-            let imports = if direction == "both" || direction == "imports" {
-                state
-                    .import_graph
+            let imports: Vec<String> = if direction == "both" || direction == "imports" {
+                repo.import_graph
                     .imports
                     .get(path)
                     .cloned()
@@ -663,9 +876,8 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
             } else {
                 vec![]
             };
-            let imported_by = if direction == "both" || direction == "imported_by" {
-                state
-                    .import_graph
+            let imported_by: Vec<String> = if direction == "both" || direction == "imported_by" {
+                repo.import_graph
                     .imported_by
                     .get(path)
                     .cloned()
@@ -674,7 +886,25 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
                 vec![]
             };
 
-            if imports.is_empty() && imported_by.is_empty() {
+            // Add cross-repo edges
+            let mut cross_imports = Vec::new();
+            let mut cross_imported_by = Vec::new();
+            for edge in &state.cross_repo_edges {
+                if edge.from_repo == repo.name && edge.from_file == path
+                    && (direction == "both" || direction == "imports")
+                {
+                    cross_imports.push(format!("[{}] {}", edge.to_repo, edge.to_file));
+                }
+                if edge.to_repo == repo.name && edge.to_file == path
+                    && (direction == "both" || direction == "imported_by")
+                {
+                    cross_imported_by.push(format!("[{}] {}", edge.from_repo, edge.from_file));
+                }
+            }
+
+            if imports.is_empty() && imported_by.is_empty()
+                && cross_imports.is_empty() && cross_imported_by.is_empty()
+            {
                 return (
                     format!("No import relationships found for '{path}'"),
                     false,
@@ -685,7 +915,7 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
             if !imports.is_empty() {
                 out.push_str(&format!("Imports ({} files):\n", imports.len()));
                 for inc in &imports {
-                    let desc = state
+                    let desc = repo
                         .all_files
                         .iter()
                         .find(|f| f.rel_path == *inc)
@@ -695,10 +925,17 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
                 }
                 out.push('\n');
             }
+            if !cross_imports.is_empty() {
+                out.push_str(&format!("Cross-repo imports ({} files):\n", cross_imports.len()));
+                for inc in &cross_imports {
+                    out.push_str(&format!("  {inc}\n"));
+                }
+                out.push('\n');
+            }
             if !imported_by.is_empty() {
                 out.push_str(&format!("Imported by ({} files):\n", imported_by.len()));
                 for inc in &imported_by {
-                    let desc = state
+                    let desc = repo
                         .all_files
                         .iter()
                         .find(|f| f.rel_path == *inc)
@@ -707,9 +944,21 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
                     out.push_str(&format!("  {inc}  ({desc})\n"));
                 }
             }
+            if !cross_imported_by.is_empty() {
+                out.push_str(&format!("Cross-repo imported by ({} files):\n", cross_imported_by.len()));
+                for inc in &cross_imported_by {
+                    out.push_str(&format!("  {inc}\n"));
+                }
+            }
             (out, false)
         }
         "cs_find" => {
+            let repos = resolve_repos_for_search(state, args);
+            if repos.is_empty() {
+                return ("Error: No matching repos found".to_string(), true);
+            }
+            let multi = repos.len() > 1;
+
             let raw_query = args["query"].as_str().unwrap_or("");
             if raw_query.len() < 2 {
                 return (
@@ -727,12 +976,7 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
 
             let start = std::time::Instant::now();
 
-            // 1. Fuzzy filename search
-            let query = crate::fuzzy::preprocess_search_query(raw_query);
-            let search_resp =
-                run_search(&state.search_files, &state.search_modules, &query, limit, 0);
-
-            // 2. Content grep
+            // Content grep pattern
             let terms: Vec<&str> = raw_query.split_whitespace().collect();
             let terms_lower: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
             let pattern_str = terms
@@ -744,9 +988,8 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
                 .case_insensitive(true)
                 .build();
 
-            // Merge results
             struct FindResult {
-                path: String,
+                display_path: String,
                 desc: String,
                 name_score: f64,
                 grep_score: f64,
@@ -757,103 +1000,114 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
             let mut merged: std::collections::HashMap<String, FindResult> =
                 std::collections::HashMap::new();
 
-            // Add fuzzy search results
-            for f in &search_resp.files {
-                if let Some(ref exts) = ext_filter {
-                    let ext = f.ext.trim_start_matches('.');
-                    if !exts.contains(ext) {
-                        continue;
-                    }
-                }
-                if let Some(ref cat) = cat_filter {
-                    if !f.category.starts_with(cat.as_str()) {
-                        continue;
-                    }
-                }
-                merged.insert(
-                    f.path.clone(),
-                    FindResult {
-                        path: f.path.clone(),
-                        desc: f.desc.clone(),
-                        name_score: f.score,
-                        grep_score: 0.0,
-                        grep_count: 0,
-                        top_match: None,
-                    },
-                );
-            }
+            for repo in &repos {
+                let config = &repo.config;
 
-            // Add grep results
-            if let Ok(pattern) = pattern {
-                let candidates: Vec<&ScannedFile> = state
-                    .all_files
-                    .iter()
-                    .filter(|f| {
-                        if let Some(ref exts) = ext_filter {
-                            if !exts.contains(&f.ext) {
-                                return false;
-                            }
-                        }
-                        if let Some(ref cat) = cat_filter {
-                            let file_cat =
-                                get_category_path(&f.rel_path, config).join(" > ");
-                            if !file_cat.starts_with(cat.as_str()) {
-                                return false;
-                            }
-                        }
-                        true
-                    })
-                    .collect();
+                // 1. Fuzzy filename search
+                let query = crate::fuzzy::preprocess_search_query(raw_query);
+                let search_resp =
+                    run_search(&repo.search_files, &repo.search_modules, &query, limit, 0);
 
-                for file in &candidates {
-                    let content = match fs::read_to_string(&file.abs_path) {
-                        Ok(c) => c,
-                        Err(_) => continue,
-                    };
-                    let lines: Vec<&str> = content.lines().collect();
-                    let total_lines = lines.len().max(1);
-                    let mut match_count = 0usize;
-                    let mut first_match: Option<String> = None;
-                    for line in &lines {
-                        if pattern.is_match(line) {
-                            match_count += 1;
-                            if first_match.is_none() {
-                                let trimmed = if line.len() > 120 {
-                                    format!("{}...", &line[..120])
-                                } else {
-                                    line.to_string()
-                                };
-                                first_match = Some(trimmed);
-                            }
+                // Add fuzzy search results
+                for f in &search_resp.files {
+                    if let Some(ref exts) = ext_filter {
+                        let ext = f.ext.trim_start_matches('.');
+                        if !exts.contains(ext) {
+                            continue;
                         }
                     }
-                    if match_count == 0 {
-                        continue;
+                    if let Some(ref cat) = cat_filter {
+                        if !f.category.starts_with(cat.as_str()) {
+                            continue;
+                        }
                     }
-
-                    let filename = file
-                        .rel_path
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(&file.rel_path)
-                        .to_lowercase();
-                    let grep_score = grep_relevance_score(
-                        match_count, total_lines, &filename, &file.ext, &terms_lower,
-                    );
-
-                    let entry = merged
-                        .entry(file.rel_path.clone())
-                        .or_insert_with(|| FindResult {
-                            path: file.rel_path.clone(),
-                            desc: file.desc.clone(),
-                            name_score: 0.0,
+                    let key = repo_path(repo, &f.path, multi);
+                    merged.insert(
+                        key.clone(),
+                        FindResult {
+                            display_path: key,
+                            desc: f.desc.clone(),
+                            name_score: f.score,
                             grep_score: 0.0,
                             grep_count: 0,
                             top_match: None,
-                        });
-                    entry.grep_score = grep_score;
-                    entry.grep_count = match_count;
-                    entry.top_match = first_match;
+                        },
+                    );
+                }
+
+                // 2. Content grep
+                if let Ok(ref pattern) = pattern {
+                    let candidates: Vec<&ScannedFile> = repo
+                        .all_files
+                        .iter()
+                        .filter(|f| {
+                            if let Some(ref exts) = ext_filter {
+                                if !exts.contains(&f.ext) {
+                                    return false;
+                                }
+                            }
+                            if let Some(ref cat) = cat_filter {
+                                let file_cat =
+                                    get_category_path(&f.rel_path, config).join(" > ");
+                                if !file_cat.starts_with(cat.as_str()) {
+                                    return false;
+                                }
+                            }
+                            true
+                        })
+                        .collect();
+
+                    for file in &candidates {
+                        let content = match fs::read_to_string(&file.abs_path) {
+                            Ok(c) => c,
+                            Err(_) => continue,
+                        };
+                        let lines: Vec<&str> = content.lines().collect();
+                        let total_lines = lines.len().max(1);
+                        let mut match_count = 0usize;
+                        let mut first_match: Option<String> = None;
+                        for line in &lines {
+                            if pattern.is_match(line) {
+                                match_count += 1;
+                                if first_match.is_none() {
+                                    let trimmed = if line.len() > 120 {
+                                        format!("{}...", &line[..120])
+                                    } else {
+                                        line.to_string()
+                                    };
+                                    first_match = Some(trimmed);
+                                }
+                            }
+                        }
+                        if match_count == 0 {
+                            continue;
+                        }
+
+                        let filename = file
+                            .rel_path
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or(&file.rel_path)
+                            .to_lowercase();
+                        let grep_score = grep_relevance_score(
+                            match_count, total_lines, &filename, &file.ext, &terms_lower,
+                        );
+
+                        let key = repo_path(repo, &file.rel_path, multi);
+                        let entry = merged
+                            .entry(key.clone())
+                            .or_insert_with(|| FindResult {
+                                display_path: key,
+                                desc: file.desc.clone(),
+                                name_score: 0.0,
+                                grep_score: 0.0,
+                                grep_count: 0,
+                                top_match: None,
+                            });
+                        entry.grep_score = grep_score;
+                        entry.grep_count = match_count;
+                        entry.top_match = first_match;
+                    }
                 }
             }
 
@@ -888,7 +1142,7 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
                 } else {
                     format!(" [{}]", tags.join(" + "))
                 };
-                out.push_str(&format!("  {} — {}{tag_str}\n", r.path, r.desc));
+                out.push_str(&format!("  {} — {}{tag_str}\n", r.display_path, r.desc));
                 if let Some(ref line) = r.top_match {
                     out.push_str(&format!("    > {}\n", line.trim()));
                 }
@@ -896,24 +1150,306 @@ fn handle_tool_call(state: &McpState, name: &str, args: &serde_json::Value) -> (
 
             (out, false)
         }
+
+        // =====================================================================
+        // New tools
+        // =====================================================================
+
+        "cs_status" => {
+            let version = env!("CARGO_PKG_VERSION");
+            let repo_count = state.repos.len();
+            let mut out = format!("CodeScope v{version} — {repo_count} repositor{} indexed\n\n",
+                if repo_count == 1 { "y" } else { "ies" });
+
+            let mut total_files = 0usize;
+            for repo in state.repos.values() {
+                let file_count = repo.all_files.len();
+                total_files += file_count;
+
+                out.push_str(&format!(
+                    "[{}] {}\n  Files: {} | Modules: {} | Import edges: {}\n",
+                    repo.name,
+                    repo.root.display(),
+                    file_count,
+                    repo.manifest.len(),
+                    repo.import_graph.imports.len(),
+                ));
+
+                // Language breakdown
+                let mut ext_counts: BTreeMap<String, usize> = BTreeMap::new();
+                for f in &repo.all_files {
+                    if !f.ext.is_empty() {
+                        *ext_counts.entry(f.ext.clone()).or_default() += 1;
+                    }
+                }
+                let mut sorted_exts: Vec<(String, usize)> = ext_counts.into_iter().collect();
+                sorted_exts.sort_by(|a, b| b.1.cmp(&a.1));
+                sorted_exts.truncate(8);
+
+                let lang_str: Vec<String> = sorted_exts
+                    .iter()
+                    .map(|(ext, count)| {
+                        if *count >= 1000 {
+                            format!("{ext}({:.0}K)", *count as f64 / 1000.0)
+                        } else {
+                            format!("{ext}({count})")
+                        }
+                    })
+                    .collect();
+                if !lang_str.is_empty() {
+                    out.push_str(&format!("  Languages: {}\n", lang_str.join(" ")));
+                }
+                out.push_str(&format!("  Last scan: {}ms\n\n", repo.scan_time_ms));
+            }
+
+            if !state.cross_repo_edges.is_empty() {
+                out.push_str(&format!(
+                    "Cross-repo: {} import edges\n\n",
+                    state.cross_repo_edges.len()
+                ));
+            }
+
+            out.push_str(&format!("Total: {} files across {} repo(s)", total_files, repo_count));
+            (out, false)
+        }
+
+        "cs_impact" => {
+            let repo = match resolve_repo(state, args) {
+                Ok(r) => r,
+                Err(e) => return (format!("Error: {e}"), true),
+            };
+            let path = args["path"].as_str().unwrap_or("");
+            let max_depth = args["max_depth"].as_u64().unwrap_or(5).min(20) as usize;
+
+            if path.is_empty() {
+                return ("Error: path is required".to_string(), true);
+            }
+
+            // BFS over imported_by graph
+            let mut visited: HashSet<String> = HashSet::new();
+            let mut queue: VecDeque<(String, usize)> = VecDeque::new();
+            let mut by_depth: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+
+            visited.insert(path.to_string());
+            queue.push_back((path.to_string(), 0));
+
+            while let Some((current, depth)) = queue.pop_front() {
+                if depth > 0 {
+                    by_depth.entry(depth).or_default().push(current.clone());
+                }
+                if depth >= max_depth {
+                    continue;
+                }
+                // Local imports
+                if let Some(dependents) = repo.import_graph.imported_by.get(&current) {
+                    for dep in dependents {
+                        if visited.insert(dep.clone()) {
+                            queue.push_back((dep.clone(), depth + 1));
+                        }
+                    }
+                }
+                // Cross-repo imports (files that import this file from other repos)
+                for edge in &state.cross_repo_edges {
+                    if edge.to_repo == repo.name && edge.to_file == current {
+                        let key = format!("[{}] {}", edge.from_repo, edge.from_file);
+                        if visited.insert(key.clone()) {
+                            by_depth.entry(depth + 1).or_default().push(key);
+                        }
+                    }
+                }
+            }
+
+            let total: usize = by_depth.values().map(|v| v.len()).sum();
+            if total == 0 {
+                return (
+                    format!("No dependents found for '{path}'. This file is not imported by any other file."),
+                    false,
+                );
+            }
+
+            let mut out = format!("Impact analysis for {path}\n\n");
+            let max_depth_found = *by_depth.keys().max().unwrap_or(&0);
+            for depth in 1..=max_depth_found {
+                if let Some(files) = by_depth.get(&depth) {
+                    let label = if depth == 1 { "direct dependents" } else { "" };
+                    out.push_str(&format!(
+                        "Depth {}{}: {} file{}\n",
+                        depth,
+                        if label.is_empty() { String::new() } else { format!(" ({label})") },
+                        files.len(),
+                        if files.len() == 1 { "" } else { "s" }
+                    ));
+                    for f in files {
+                        out.push_str(&format!("  {f}\n"));
+                    }
+                    out.push('\n');
+                }
+            }
+            out.push_str(&format!(
+                "Total: {} file{} affected across {} depth level{}",
+                total,
+                if total == 1 { "" } else { "s" },
+                max_depth_found,
+                if max_depth_found == 1 { "" } else { "s" }
+            ));
+            (out, false)
+        }
+
+        #[cfg(feature = "semantic")]
+        "cs_semantic_search" => {
+            let repo = match resolve_repo(state, args) {
+                Ok(r) => r,
+                Err(e) => return (format!("Error: {e}"), true),
+            };
+            let query = args["query"].as_str().unwrap_or("");
+            if query.is_empty() {
+                return ("Error: 'query' is required".to_string(), true);
+            }
+            let limit = args["limit"].as_u64().unwrap_or(10).min(50) as usize;
+
+            let index = match &repo.semantic_index {
+                Some(idx) => idx,
+                None => {
+                    return (
+                        "Error: Semantic index not available. Start the server with --semantic flag to enable.".to_string(),
+                        true,
+                    );
+                }
+            };
+
+            let start = std::time::Instant::now();
+            match crate::semantic::semantic_search(index, query, limit) {
+                Ok(results) => {
+                    let query_time = start.elapsed().as_millis();
+                    let mut out = format!(
+                        "Semantic search: {} results for \"{}\" ({}ms)\n\n",
+                        results.len(),
+                        query,
+                        query_time
+                    );
+                    for (i, r) in results.iter().enumerate() {
+                        out.push_str(&format!(
+                            "{}. {} (line ~{}, score {:.3})\n   {}\n\n",
+                            i + 1,
+                            r.file_path,
+                            r.start_line,
+                            r.score,
+                            r.snippet.replace('\n', "\n   ")
+                        ));
+                    }
+                    (out, false)
+                }
+                Err(e) => (format!("Error: Semantic search failed: {e}"), true),
+            }
+        }
+
         _ => (format!("Unknown tool: {name}"), true),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Mutating tool handlers (need write lock)
+// ---------------------------------------------------------------------------
+
+fn handle_rescan(
+    state: &mut McpState,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let target_repo = args.get("repo").and_then(|v| v.as_str());
+    let tok = state.tokenizer.clone();
+
+    let repos_to_scan: Vec<String> = match target_repo {
+        Some(name) => {
+            if state.repos.contains_key(name) {
+                vec![name.to_string()]
+            } else {
+                return (format!("Error: Unknown repo '{name}'"), true);
+            }
+        }
+        None => state.repos.keys().cloned().collect(),
+    };
+
+    let mut results = Vec::new();
+    for name in &repos_to_scan {
+        let root = state.repos[name].root.clone();
+        let new_state = crate::scan_repo(name, &root, &tok);
+        results.push(format!(
+            "[{name}] Rescanned: {} files, {} modules, {} import edges ({}ms)",
+            new_state.all_files.len(),
+            new_state.manifest.len(),
+            new_state.import_graph.imports.len(),
+            new_state.scan_time_ms,
+        ));
+        state.repos.insert(name.clone(), new_state);
+    }
+
+    // Rebuild cross-repo edges
+    state.cross_repo_edges = crate::scan::resolve_cross_repo_imports(&state.repos);
+
+    (results.join("\n"), false)
+}
+
+fn handle_add_repo(
+    state: &mut McpState,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let name = match args["name"].as_str() {
+        Some(n) => n.to_string(),
+        None => return ("Error: 'name' is required".to_string(), true),
+    };
+    let root_str = match args["root"].as_str() {
+        Some(r) => r,
+        None => return ("Error: 'root' is required".to_string(), true),
+    };
+    let root = match std::path::PathBuf::from(root_str).canonicalize() {
+        Ok(r) => r,
+        Err(e) => return (format!("Error: Path not found: {e}"), true),
+    };
+
+    if state.repos.contains_key(&name) {
+        return (format!("Error: Repo '{name}' already exists. Use cs_rescan to update it."), true);
+    }
+
+    let tok = state.tokenizer.clone();
+    let new_state = crate::scan_repo(&name, &root, &tok);
+    let summary = format!(
+        "Added [{name}] {}: {} files, {} modules, {} import edges ({}ms)",
+        root.display(),
+        new_state.all_files.len(),
+        new_state.manifest.len(),
+        new_state.import_graph.imports.len(),
+        new_state.scan_time_ms,
+    );
+    state.repos.insert(name, new_state);
+
+    // Rebuild cross-repo edges
+    state.cross_repo_edges = crate::scan::resolve_cross_repo_imports(&state.repos);
+
+    (summary, false)
 }
 
 // ---------------------------------------------------------------------------
 // MCP stdio server loop
 // ---------------------------------------------------------------------------
 
-pub fn run_mcp(state: McpState) {
+pub fn run_mcp(state: Arc<RwLock<McpState>>) {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let reader = stdin.lock();
 
-    eprintln!(
-        "MCP server ready ({} files, {} modules)",
-        state.all_files.len(),
-        state.manifest.len()
-    );
+    {
+        let s = state.read().unwrap();
+        let total_files: usize = s.repos.values().map(|r| r.all_files.len()).sum();
+        let total_modules: usize = s.repos.values().map(|r| r.manifest.len()).sum();
+        let repo_names: Vec<&str> = s.repos.keys().map(|k| k.as_str()).collect();
+        eprintln!(
+            "MCP server ready ({} files, {} modules, {} repo(s): {})",
+            total_files,
+            total_modules,
+            s.repos.len(),
+            repo_names.join(", ")
+        );
+    }
 
     for line in reader.lines() {
         let line = match line {
@@ -979,7 +1515,23 @@ pub fn run_mcp(state: McpState) {
                     .get("arguments")
                     .cloned()
                     .unwrap_or(serde_json::json!({}));
-                let (text, is_error) = handle_tool_call(&state, tool_name, &arguments);
+
+                // Mutating tools need write lock
+                let (text, is_error) = match tool_name {
+                    "cs_rescan" | "cs_add_repo" => {
+                        let mut s = state.write().unwrap();
+                        match tool_name {
+                            "cs_rescan" => handle_rescan(&mut s, &arguments),
+                            "cs_add_repo" => handle_add_repo(&mut s, &arguments),
+                            _ => unreachable!(),
+                        }
+                    }
+                    _ => {
+                        let s = state.read().unwrap();
+                        handle_tool_call(&s, tool_name, &arguments)
+                    }
+                };
+
                 serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": id,

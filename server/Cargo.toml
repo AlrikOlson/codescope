@@ -1,6 +1,6 @@
 [package]
 name = "codescope-server"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Fast codebase indexer and search server — MCP server for Claude Code and standalone web UI"
 repository = "https://github.com/AlrikOlson/codescope"
@@ -13,6 +13,7 @@ categories = ["command-line-utilities", "development-tools"]
 [features]
 default = []
 tiktoken = ["dep:tiktoken-rs"]
+semantic = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers", "dep:hf-hub"]
 
 [dependencies]
 axum = "0.8"
@@ -28,6 +29,13 @@ toml = "0.8"
 
 # Optional tokenizer backends
 tiktoken-rs = { version = "0.6", optional = true }
+
+# Optional semantic search dependencies
+candle-core = { version = "0.9", optional = true }
+candle-nn = { version = "0.9", optional = true }
+candle-transformers = { version = "0.9", optional = true }
+tokenizers = { version = "0.22", optional = true, default-features = false, features = ["onig"] }
+hf-hub = { version = "0.4", optional = true, default-features = false, features = ["ureq", "rustls-tls"] }
 
 [profile.release]
 opt-level = 3
