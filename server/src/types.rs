@@ -326,14 +326,6 @@ pub fn grep_relevance_score(
 
     let def_bonus = if is_definition_file(ext) { 5.0 } else { 0.0 };
 
-    // AND bonus: reward files matching all query terms
-    let term_count = terms_lower.len().max(1);
-    let and_bonus = if terms_matched >= term_count {
-        10.0
-    } else {
-        5.0 * (terms_matched as f64 / term_count as f64)
-    };
-
     // Position bonus: matches in first 30 lines (declarations) score higher
     let position_bonus = if total_lines > 30 && first_match_line < 30 {
         3.0 * (1.0 - first_match_line as f64 / 30.0)
@@ -341,7 +333,31 @@ pub fn grep_relevance_score(
         0.0
     };
 
-    tf * 15.0 * avg_idf + filename_bonus + def_bonus + density + and_bonus + position_bonus
+    let base = tf * 15.0 * avg_idf + filename_bonus + def_bonus + density + position_bonus;
+
+    // IDF-weighted coverage: missing a rare term is a massive penalty.
+    // For single-term queries, coverage is trivially 1.0 (no penalty).
+    let term_count = terms_lower.len();
+    if term_count <= 1 || idf_weights.is_empty() {
+        return base;
+    }
+
+    // Assume matched terms are the lowest-IDF (most common) ones.
+    // This penalizes missing rare terms hardest.
+    let mut sorted_idfs: Vec<f64> = idf_weights.to_vec();
+    sorted_idfs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let matched_idf_sum: f64 = sorted_idfs.iter().take(terms_matched).sum();
+    let total_idf_sum: f64 = sorted_idfs.iter().sum();
+
+    let coverage = if total_idf_sum > 0.0 {
+        matched_idf_sum / total_idf_sum
+    } else {
+        1.0
+    };
+    let coverage_factor = coverage * coverage;
+
+    // Floor of 0.3 keeps partial matches visible but far below full matches
+    base * (0.3 + 0.7 * coverage_factor)
 }
 
 // ---------------------------------------------------------------------------

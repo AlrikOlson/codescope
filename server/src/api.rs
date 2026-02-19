@@ -476,6 +476,10 @@ struct FindResultEntry {
     top_match_line: Option<usize>,
     #[serde(rename = "filenameIndices")]
     filename_indices: Vec<usize>,
+    #[serde(rename = "termsMatched")]
+    terms_matched: usize,
+    #[serde(rename = "totalTerms")]
+    total_terms: usize,
 }
 
 #[derive(Serialize)]
@@ -502,6 +506,8 @@ struct MergedFind {
     top_match: Option<String>,
     top_match_line: Option<usize>,
     filename_indices: Vec<usize>,
+    terms_matched: usize,
+    total_terms: usize,
 }
 
 pub async fn api_find(
@@ -572,6 +578,8 @@ pub async fn api_find(
                     top_match: None,
                     top_match_line: None,
                     filename_indices: f.filename_indices.clone(),
+                    terms_matched: 0,
+                    total_terms: 0,
                 },
             );
         }
@@ -614,34 +622,41 @@ pub async fn api_find(
                     .iter()
                     .map(|t| repo.term_doc_freq.idf(t))
                     .collect();
-                let grep_results: Vec<(String, f64, usize, Option<String>, Option<usize>, String, String, String, String)> = candidates
+                let grep_results: Vec<(String, f64, usize, Option<String>, Option<usize>, String, String, String, String, usize)> = candidates
                     .par_iter()
                     .filter_map(|file| {
                         let content = fs::read_to_string(&file.abs_path).ok()?;
                         let total_lines = content.lines().count().max(1);
                         let mut match_count = 0usize;
-                        let mut first_match: Option<String> = None;
-                        let mut first_match_line: Option<usize> = None;
+                        let mut best_snippet: Option<String> = None;
+                        let mut best_snippet_line: Option<usize> = None;
+                        let mut best_snippet_term_count: usize = 0;
                         let mut first_match_line_idx = usize::MAX;
                         let mut terms_seen: HashSet<usize> = HashSet::new();
                         for (i, line) in content.lines().enumerate() {
                             if pattern.is_match(line) {
                                 match_count += 1;
-                                if first_match.is_none() {
+                                if first_match_line_idx == usize::MAX {
                                     first_match_line_idx = i;
+                                }
+                                let line_lower = line.to_lowercase();
+                                let line_term_count = terms_lower.iter()
+                                    .filter(|t| line_lower.contains(t.as_str()))
+                                    .count();
+                                for (ti, term) in terms_lower.iter().enumerate() {
+                                    if line_lower.contains(term.as_str()) {
+                                        terms_seen.insert(ti);
+                                    }
+                                }
+                                if line_term_count > best_snippet_term_count {
+                                    best_snippet_term_count = line_term_count;
                                     let trimmed = if line.len() > 120 {
                                         format!("{}...", &line[..120])
                                     } else {
                                         line.to_string()
                                     };
-                                    first_match = Some(trimmed);
-                                    first_match_line = Some(i + 1);
-                                }
-                                let line_lower = line.to_lowercase();
-                                for (ti, term) in terms_lower.iter().enumerate() {
-                                    if line_lower.contains(term.as_str()) {
-                                        terms_seen.insert(ti);
-                                    }
+                                    best_snippet = Some(trimmed);
+                                    best_snippet_line = Some(i + 1);
                                 }
                             }
                         }
@@ -684,17 +699,18 @@ pub async fn api_find(
                             file.rel_path.clone(),
                             grep_score,
                             match_count,
-                            first_match,
-                            first_match_line,
+                            best_snippet,
+                            best_snippet_line,
                             fname,
                             dir,
                             ext,
                             category,
+                            terms_seen.len(),
                         ))
                     })
                     .collect();
 
-                for (path, grep_score, match_count, first_match, first_match_line, fname, dir, ext, category) in grep_results {
+                for (path, grep_score, match_count, best_snippet, best_snippet_line, fname, dir, ext, category, file_terms_matched) in grep_results {
                     let entry = merged.entry(path.clone()).or_insert_with(|| MergedFind {
                         path,
                         filename: fname,
@@ -708,24 +724,35 @@ pub async fn api_find(
                         top_match: None,
                         top_match_line: None,
                         filename_indices: Vec::new(),
+                        terms_matched: 0,
+                        total_terms: terms_lower.len(),
                     });
                     entry.grep_score = grep_score;
                     entry.grep_count = match_count;
-                    entry.top_match = first_match;
-                    entry.top_match_line = first_match_line;
+                    entry.top_match = best_snippet;
+                    entry.top_match_line = best_snippet_line;
+                    entry.terms_matched = file_terms_matched;
+                    entry.total_terms = terms_lower.len();
                 }
             }
         }
 
-        // 3. Score, sort, truncate — adaptive weights based on query shape
+        // 3. Score, sort, truncate — adaptive weights with score normalization
         let query_term_count = raw_query.split_whitespace().count();
         let (name_w, grep_w) = if query_term_count > 1 { (0.4, 0.6) } else { (0.6, 0.4) };
         let mut ranked: Vec<MergedFind> = merged.into_values().collect();
+
+        // Normalize scores to 0-1 range so weighting works correctly
+        let max_name = ranked.iter().map(|r| r.name_score).fold(0.0f64, f64::max).max(1.0);
+        let max_grep = ranked.iter().map(|r| r.grep_score).fold(0.0f64, f64::max).max(1.0);
+
         ranked.sort_by(|a, b| {
-            let score_a = a.name_score * name_w + a.grep_score * grep_w;
-            let score_b = b.name_score * name_w + b.grep_score * grep_w;
-            score_b
-                .partial_cmp(&score_a)
+            let norm_a = (a.name_score / max_name) * name_w + (a.grep_score / max_grep) * grep_w;
+            let norm_b = (b.name_score / max_name) * name_w + (b.grep_score / max_grep) * grep_w;
+            let boost_a = if a.name_score > 0.0 && a.grep_count > 0 { 1.25 } else { 1.0 };
+            let boost_b = if b.name_score > 0.0 && b.grep_count > 0 { 1.25 } else { 1.0 };
+            (norm_b * boost_b)
+                .partial_cmp(&(norm_a * boost_a))
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
         ranked.truncate(limit);
@@ -736,7 +763,9 @@ pub async fn api_find(
         let results: Vec<FindResultEntry> = ranked
             .into_iter()
             .map(|r| {
-                let combined_score = r.name_score * name_w + r.grep_score * grep_w;
+                let norm_score = (r.name_score / max_name) * name_w + (r.grep_score / max_grep) * grep_w;
+                let boost = if r.name_score > 0.0 && r.grep_count > 0 { 1.25 } else { 1.0 };
+                let combined_score = norm_score * boost;
                 let match_type = if r.name_score > 0.0 && r.grep_count > 0 {
                     "both".to_string()
                 } else if r.name_score > 0.0 {
@@ -765,6 +794,8 @@ pub async fn api_find(
                     top_match: r.top_match,
                     top_match_line: r.top_match_line,
                     filename_indices: r.filename_indices,
+                    terms_matched: r.terms_matched,
+                    total_terms: r.total_terms,
                 }
             })
             .collect();

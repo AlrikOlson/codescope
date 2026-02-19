@@ -441,6 +441,8 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                 total_match_count: usize,
                 lines: Vec<String>,
                 score: f64,
+                terms_matched: usize,
+                total_terms: usize,
             }
 
             let mut file_hits: Vec<GrepFileHit> = Vec::new();
@@ -529,6 +531,8 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                         total_match_count,
                         lines: lines.iter().map(|l| l.to_string()).collect(),
                         score,
+                        terms_matched: terms_seen.len(),
+                        total_terms: terms_lower.len(),
                     });
                 }
             }
@@ -558,6 +562,12 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                 }
                 total_matches += hit.total_match_count;
 
+                let term_info = if hit.total_terms > 1 {
+                    format!(", {}/{} terms", hit.terms_matched, hit.total_terms)
+                } else {
+                    String::new()
+                };
+
                 if context_lines == 0 {
                     let file_lines: Vec<String> = hit
                         .match_indices
@@ -565,10 +575,11 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                         .map(|&i| format!("  L{}: {}", i + 1, truncate(&hit.lines[i])))
                         .collect();
                     results.push(format!(
-                        "{}  ({}, score {:.0})\n{}",
+                        "{}  ({}, score {:.0}{})\n{}",
                         hit.display_path,
                         hit.desc,
                         hit.score,
+                        term_info,
                         file_lines.join("\n")
                     ));
                 } else {
@@ -604,10 +615,11 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                         }
                     }
                     results.push(format!(
-                        "{}  ({}, score {:.0})\n{}",
+                        "{}  ({}, score {:.0}{})\n{}",
                         hit.display_path,
                         hit.desc,
                         hit.score,
+                        term_info,
                         file_output.join("\n")
                     ));
                 }
@@ -1017,6 +1029,8 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                 grep_score: f64,
                 grep_count: usize,
                 top_match: Option<String>,
+                terms_matched: usize,
+                total_terms: usize,
             }
 
             let mut merged: std::collections::HashMap<String, FindResult> =
@@ -1053,6 +1067,8 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                             grep_score: 0.0,
                             grep_count: 0,
                             top_match: None,
+                            terms_matched: 0,
+                            total_terms: terms_lower.len(),
                         },
                     );
                 }
@@ -1091,26 +1107,33 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                         let lines: Vec<&str> = content.lines().collect();
                         let total_lines = lines.len().max(1);
                         let mut match_count = 0usize;
-                        let mut first_match: Option<String> = None;
+                        let mut best_snippet: Option<String> = None;
+                        let mut best_snippet_term_count: usize = 0;
                         let mut first_match_line_idx = usize::MAX;
                         let mut terms_seen = std::collections::HashSet::new();
                         for (i, line) in lines.iter().enumerate() {
                             if pattern.is_match(line) {
                                 match_count += 1;
-                                if first_match.is_none() {
+                                if first_match_line_idx == usize::MAX {
                                     first_match_line_idx = i;
+                                }
+                                let line_lower = line.to_lowercase();
+                                let line_term_count = terms_lower.iter()
+                                    .filter(|t| line_lower.contains(t.as_str()))
+                                    .count();
+                                for (ti, term) in terms_lower.iter().enumerate() {
+                                    if line_lower.contains(term.as_str()) {
+                                        terms_seen.insert(ti);
+                                    }
+                                }
+                                if line_term_count > best_snippet_term_count {
+                                    best_snippet_term_count = line_term_count;
                                     let trimmed = if line.len() > 120 {
                                         format!("{}...", &line[..120])
                                     } else {
                                         line.to_string()
                                     };
-                                    first_match = Some(trimmed);
-                                }
-                                let line_lower = line.to_lowercase();
-                                for (ti, term) in terms_lower.iter().enumerate() {
-                                    if line_lower.contains(term.as_str()) {
-                                        terms_seen.insert(ti);
-                                    }
+                                    best_snippet = Some(trimmed);
                                 }
                             }
                         }
@@ -1145,22 +1168,33 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                                 grep_score: 0.0,
                                 grep_count: 0,
                                 top_match: None,
+                                terms_matched: 0,
+                                total_terms: terms_lower.len(),
                             });
                         entry.grep_score = grep_score;
                         entry.grep_count = match_count;
-                        entry.top_match = first_match;
+                        entry.top_match = best_snippet;
+                        entry.terms_matched = terms_seen.len();
                     }
                 }
             }
 
-            // Unified scoring — adaptive weights based on query shape
+            // Unified scoring — adaptive weights with score normalization
             let (name_w, grep_w) = if terms.len() > 1 { (0.4, 0.6) } else { (0.6, 0.4) };
             let mut ranked: Vec<FindResult> = merged.into_values().collect();
+
+            // Normalize scores to 0-1 range so weighting works correctly
+            let max_name = ranked.iter().map(|r| r.name_score).fold(0.0f64, f64::max).max(1.0);
+            let max_grep = ranked.iter().map(|r| r.grep_score).fold(0.0f64, f64::max).max(1.0);
+
             ranked.sort_by(|a, b| {
-                let score_a = a.name_score * name_w + a.grep_score * grep_w;
-                let score_b = b.name_score * name_w + b.grep_score * grep_w;
-                score_b
-                    .partial_cmp(&score_a)
+                let norm_a = (a.name_score / max_name) * name_w + (a.grep_score / max_grep) * grep_w;
+                let norm_b = (b.name_score / max_name) * name_w + (b.grep_score / max_grep) * grep_w;
+                // Dual-match boost: files matching both name AND content get 1.25x
+                let boost_a = if a.name_score > 0.0 && a.grep_count > 0 { 1.25 } else { 1.0 };
+                let boost_b = if b.name_score > 0.0 && b.grep_count > 0 { 1.25 } else { 1.0 };
+                (norm_b * boost_b)
+                    .partial_cmp(&(norm_a * boost_a))
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
             ranked.truncate(limit);
@@ -1173,17 +1207,22 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
             );
 
             for r in &ranked {
-                let mut tags = Vec::new();
-                if r.name_score > 0.0 {
-                    tags.push("name match".to_string());
-                }
-                if r.grep_count > 0 {
-                    tags.push(format!("{} content matches", r.grep_count));
-                }
-                let tag_str = if tags.is_empty() {
+                let has_name = r.name_score > 0.0;
+                let has_content = r.grep_count > 0;
+                let source = match (has_name, has_content) {
+                    (true, true) => "name+content",
+                    (true, false) => "name",
+                    (false, true) => "content",
+                    (false, false) => "",
+                };
+                let tag_str = if source.is_empty() {
                     String::new()
+                } else if r.total_terms > 1 && has_content {
+                    format!(" [{}, {}/{} terms, {} lines]", source, r.terms_matched, r.total_terms, r.grep_count)
+                } else if has_content {
+                    format!(" [{}, {} lines]", source, r.grep_count)
                 } else {
-                    format!(" [{}]", tags.join(" + "))
+                    format!(" [{}]", source)
                 };
                 out.push_str(&format!("  {} — {}{tag_str}\n", r.display_path, r.desc));
                 if let Some(ref line) = r.top_match {
