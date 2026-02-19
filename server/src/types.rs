@@ -3,10 +3,33 @@ use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 // ---------------------------------------------------------------------------
-// Constants
+// Session state (per MCP connection, tracks what the agent has already read)
 // ---------------------------------------------------------------------------
+
+/// Tracks files read during an MCP session to avoid wasting tokens re-reading.
+pub struct SessionState {
+    pub files_read: HashMap<String, Instant>,
+    pub total_tokens_served: usize,
+    pub started_at: Instant,
+}
+
+impl SessionState {
+    pub fn new() -> Self {
+        Self { files_read: HashMap::new(), total_tokens_served: 0, started_at: Instant::now() }
+    }
+
+    pub fn record_read(&mut self, path: &str, tokens: usize) {
+        self.files_read.insert(path.to_string(), Instant::now());
+        self.total_tokens_served += tokens;
+    }
+
+    pub fn seen_paths(&self) -> HashSet<String> {
+        self.files_read.keys().cloned().collect()
+    }
+}
 
 /// Maximum file size (in bytes) that will be read into memory.
 pub const MAX_FILE_READ: usize = 512 * 1024;
@@ -27,6 +50,9 @@ pub struct ScanConfig {
     pub extensions: HashSet<String>,
     /// Directory names to collapse/strip from category paths.
     pub noise_dirs: HashSet<String>,
+    /// Embedding model name for semantic search (e.g. "minilm", "codebert", or a HuggingFace ID).
+    #[cfg(feature = "semantic")]
+    pub semantic_model: Option<String>,
 }
 
 impl ScanConfig {
@@ -52,6 +78,8 @@ impl ScanConfig {
                 .iter()
                 .map(|s| s.to_string())
                 .collect(),
+            #[cfg(feature = "semantic")]
+            semantic_model: None,
         }
     }
 }
@@ -163,8 +191,10 @@ pub struct SemanticIndex {
     pub embeddings: Vec<f32>,
     /// Metadata for each chunk (parallel to embeddings).
     pub chunk_meta: Vec<ChunkMeta>,
-    /// Embedding dimensionality (384 for all-MiniLM-L6-v2).
+    /// Embedding dimensionality.
     pub dim: usize,
+    /// Model name used for indexing (needed to load the same model at search time).
+    pub model_name: String,
 }
 
 #[cfg(feature = "semantic")]

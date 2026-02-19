@@ -813,6 +813,8 @@ pub async fn api_context(
             body.budget,
             &body.unit,
             body.query.as_deref(),
+            body.ordering.as_deref(),
+            None, // no session tracking in HTTP mode
             &repo.deps,
             &repo.stub_cache,
             &*s.tokenizer,

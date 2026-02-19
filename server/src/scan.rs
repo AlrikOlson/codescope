@@ -259,6 +259,100 @@ pub fn scan_files(config: &ScanConfig) -> (Vec<ScannedFile>, BTreeMap<String, Ve
 }
 
 // ---------------------------------------------------------------------------
+// Incremental update helpers (used by file watcher)
+// ---------------------------------------------------------------------------
+
+/// Process a single file into a ScannedFile. Returns None if the file is binary or doesn't match filters.
+pub fn process_single_file(
+    config: &ScanConfig,
+    abs_path: &Path,
+    rel_path: &str,
+) -> Option<ScannedFile> {
+    if !abs_path.is_file() {
+        return None;
+    }
+    let ext = abs_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_string();
+    if !config.extensions.is_empty() && !config.extensions.contains(&ext) {
+        return None;
+    }
+    if config.extensions.is_empty() && !is_text_file(abs_path) {
+        return None;
+    }
+    let desc = describe(rel_path);
+    Some(ScannedFile {
+        rel_path: rel_path.to_string(),
+        abs_path: abs_path.to_path_buf(),
+        desc,
+        ext,
+    })
+}
+
+/// Update the manifest for a single file: remove old entry, add new one in the correct category.
+pub fn update_manifest_entry(
+    manifest: &mut BTreeMap<String, Vec<FileEntry>>,
+    file: &ScannedFile,
+    config: &ScanConfig,
+) {
+    // Remove old entry with this path from any category
+    remove_manifest_entry(manifest, &file.rel_path);
+
+    // Add to correct category
+    let cat_key = get_category_path(&file.rel_path, config).join(" > ");
+    let size = fs::metadata(&file.abs_path).map(|m| m.len()).unwrap_or(0);
+    manifest.entry(cat_key).or_default().push(FileEntry {
+        path: file.rel_path.clone(),
+        desc: file.desc.clone(),
+        size,
+    });
+}
+
+/// Remove a file from the manifest by its relative path.
+pub fn remove_manifest_entry(manifest: &mut BTreeMap<String, Vec<FileEntry>>, rel_path: &str) {
+    let mut empty_cats = Vec::new();
+    for (cat, files) in manifest.iter_mut() {
+        files.retain(|f| f.path != rel_path);
+        if files.is_empty() {
+            empty_cats.push(cat.clone());
+        }
+    }
+    for cat in empty_cats {
+        manifest.remove(&cat);
+    }
+}
+
+/// Remove all import edges for a file and re-add them based on current content.
+pub fn update_import_edges_for_file(
+    graph: &mut ImportGraph,
+    file: &ScannedFile,
+    _all_files: &[ScannedFile],
+) {
+    let rel = &file.rel_path;
+
+    // Remove old outgoing edges
+    graph.imports.remove(rel);
+
+    // Remove old incoming edges (this file as an import target)
+    for (_src, targets) in graph.imported_by.iter_mut() {
+        targets.retain(|t| t != rel);
+    }
+    // Remove this file from imported_by as a source
+    graph.imported_by.remove(rel);
+
+    // Re-parse this file's imports and update both directions
+    // We re-scan just this one file by creating a temporary single-file slice
+    let single = [file.clone()];
+    let new_graph = scan_imports(&single);
+
+    // Merge new edges into existing graph
+    for (src, targets) in new_graph.imports {
+        graph.imports.insert(src.clone(), targets.clone());
+        for target in &targets {
+            graph.imported_by.entry(target.clone()).or_default().push(src.clone());
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tree and dependency building
 // ---------------------------------------------------------------------------
 

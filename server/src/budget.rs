@@ -100,6 +100,10 @@ pub struct ContextRequest {
     /// Original search query — used to rank results by relevance
     #[serde(default)]
     pub query: Option<String>,
+    /// Output ordering strategy: None or "importance" (default) = descending importance,
+    /// "attention" = primacy/recency optimized (high-importance at start and end, mid in middle)
+    #[serde(default)]
+    pub ordering: Option<String>,
 }
 
 fn default_budget() -> usize {
@@ -385,6 +389,8 @@ pub fn allocate_budget(
     budget: usize,
     unit: &BudgetUnit,
     query: Option<&str>,
+    ordering: Option<&str>,
+    seen_files: Option<&HashSet<String>>,
     deps: &BTreeMap<String, DepEntry>,
     stub_cache: &dashmap::DashMap<String, CachedStub>,
     tokenizer: &dyn Tokenizer,
@@ -557,10 +563,19 @@ pub fn allocate_budget(
         }
     }
 
+    // Phase 1c: Deprioritize already-seen files (session awareness)
+    if let Some(seen) = seen_files {
+        for file in files.iter_mut() {
+            if seen.contains(&file.path) {
+                file.importance *= 0.3;
+            }
+        }
+    }
+
     // Phase 2: Check budget — if T1 fits, we're done
     let mut total: usize = files.iter().map(|f| f.current_cost).sum();
     if total <= budget {
-        return build_context_response(files, errors, budget, unit, tokenizer);
+        return build_context_response(files, errors, budget, unit, ordering, tokenizer);
     }
 
     // Phase 3: Water-fill budget allocation — distribute tokens by importance
@@ -620,7 +635,7 @@ pub fn allocate_budget(
         }
     }
 
-    build_context_response(files, errors, budget, unit, tokenizer)
+    build_context_response(files, errors, budget, unit, ordering, tokenizer)
 }
 
 fn build_context_response(
@@ -628,6 +643,7 @@ fn build_context_response(
     errors: HashMap<String, ContextFileEntry>,
     budget: usize,
     unit: &BudgetUnit,
+    ordering: Option<&str>,
     tokenizer: &dyn Tokenizer,
 ) -> ContextResponse {
     // Demote files whose current content is empty to tier 4 (manifest line)
@@ -644,18 +660,58 @@ fn build_context_response(
         b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal)
     });
 
+    // Attention ordering: exploit primacy/recency bias by placing high-importance
+    // files at start and end, medium-importance in the middle.
+    // After the importance sort (descending), split into thirds by index:
+    //   top third (highest importance) → order 0,1,2...
+    //   bottom third (lowest importance) → order next sequence
+    //   middle third → order last sequence
+    // This puts the most important files first, least important next (end of context),
+    // and medium-importance in the "lost middle" zone.
+    let attention_ordering = ordering.map(|o| o == "attention").unwrap_or(false);
+
+    let n = files.len();
+    let mut order_map: Vec<u32> = vec![0; n];
+
+    if attention_ordering && n >= 3 {
+        let third = n / 3;
+        let top_end = third;
+        let mid_end = third * 2;
+
+        let mut ord = 0u32;
+        // Top third (highest importance) first
+        for i in 0..top_end {
+            order_map[i] = ord;
+            ord += 1;
+        }
+        // Bottom third (lowest importance) next
+        for i in mid_end..n {
+            order_map[i] = ord;
+            ord += 1;
+        }
+        // Middle third last (lost in the middle)
+        for i in top_end..mid_end {
+            order_map[i] = ord;
+            ord += 1;
+        }
+    } else {
+        // Default: sequential order matching importance sort
+        for i in 0..n {
+            order_map[i] = i as u32;
+        }
+    }
+
     let mut result_files: HashMap<String, ContextFileEntry> = HashMap::new();
     let mut tier_counts: HashMap<String, usize> = HashMap::new();
     let mut total_tokens = 0usize;
     let mut total_chars = 0usize;
-    let mut order = 0u32;
 
     for (path, mut entry) in errors {
         entry.order = u32::MAX;
         result_files.insert(path, entry);
     }
 
-    for file in files {
+    for (idx, file) in files.into_iter().enumerate() {
         let tier = file.current_tier;
         *tier_counts.entry(tier.to_string()).or_insert(0) += 1;
 
@@ -667,9 +723,38 @@ fn build_context_response(
 
         result_files.insert(
             file.path,
-            ContextFileEntry { content, tier, tokens: tok, importance: file.importance, order },
+            ContextFileEntry {
+                content,
+                tier,
+                tokens: tok,
+                importance: file.importance,
+                order: order_map[idx],
+            },
         );
-        order += 1;
+    }
+
+    // If attention ordering was applied, add a context map entry
+    if attention_ordering && n >= 3 {
+        let third = n / 3;
+        let map_text = format!(
+            "[context_map] ordering=attention | {} files: positions 0-{} = highest importance, {}-{} = lowest importance, {}-{} = medium importance",
+            n,
+            third.saturating_sub(1),
+            third,
+            third + (n - third * 2) - 1,
+            third + (n - third * 2),
+            n - 1,
+        );
+        result_files.insert(
+            "_context_map".to_string(),
+            ContextFileEntry {
+                content: map_text,
+                tier: 0,
+                tokens: 0,
+                importance: 0.0,
+                order: u32::MAX,
+            },
+        );
     }
 
     let unit_str = match unit {

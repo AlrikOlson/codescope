@@ -3,6 +3,7 @@
 mod api;
 mod budget;
 mod fuzzy;
+mod git;
 mod init;
 mod mcp;
 mod scan;
@@ -11,6 +12,7 @@ mod semantic;
 mod stubs;
 mod tokenizer;
 mod types;
+mod watch;
 
 use axum::{
     routing::{get, post},
@@ -70,6 +72,12 @@ pub(crate) fn load_codescope_config(project_root: &std::path::Path) -> ScanConfi
                             config.noise_dirs.insert(s.to_string());
                         }
                     }
+                }
+
+                // semantic_model
+                #[cfg(feature = "semantic")]
+                if let Some(model) = table.get("semantic_model").and_then(|v| v.as_str()) {
+                    config.semantic_model = Some(model.to_string());
                 }
             } else {
                 eprintln!("  Warning: Failed to parse .codescope.toml");
@@ -218,6 +226,9 @@ fn print_help() {
         eprintln!(
             "  --semantic            Enable semantic code search (downloads ML model on first use)"
         );
+        eprintln!(
+            "  --semantic-model <N>  Embedding model: minilm (default), codebert, starencoder"
+        );
         #[cfg(feature = "cuda")]
         eprintln!("                        (CUDA GPU acceleration enabled)");
     }
@@ -358,6 +369,15 @@ async fn main() {
     #[cfg(not(feature = "semantic"))]
     let enable_semantic = false;
 
+    #[cfg(feature = "semantic")]
+    let semantic_model: Option<String> = args
+        .iter()
+        .position(|a| a == "--semantic-model")
+        .and_then(|pos| args.get(pos + 1))
+        .map(|s| s.to_string());
+    #[cfg(not(feature = "semantic"))]
+    let _semantic_model: Option<String> = None;
+
     if args.iter().any(|a| a == "--semantic") && !cfg!(feature = "semantic") {
         eprintln!(
             "  Warning: --semantic flag ignored. This binary does not include semantic search."
@@ -402,6 +422,7 @@ async fn main() {
     #[cfg(feature = "semantic")]
     if enable_semantic {
         let state_bg = Arc::clone(&state);
+        let sem_model = semantic_model.clone();
         std::thread::spawn(move || {
             let s = state_bg.read().unwrap();
             // Collect (name, files, semantic_index_handle) for each repo
@@ -421,7 +442,7 @@ async fn main() {
             for (name, files, sem_handle) in work {
                 eprintln!("  [{name}] Building semantic index in background...");
                 let sem_start = std::time::Instant::now();
-                if let Some(idx) = semantic::build_semantic_index(&files) {
+                if let Some(idx) = semantic::build_semantic_index(&files, sem_model.as_deref()) {
                     eprintln!(
                         "  [{name}] Semantic index ready: {} chunks ({}ms)",
                         idx.chunk_meta.len(),
@@ -432,6 +453,9 @@ async fn main() {
             }
         });
     }
+
+    // Start file watcher for incremental live re-indexing
+    let _watcher = watch::start_watcher(Arc::clone(&state));
 
     if mcp_mode {
         run_mcp(state);

@@ -11,14 +11,43 @@ use candle_transformers::models::bert::{BertModel, Config as BertConfig};
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use tokenizers::Tokenizer;
 
-/// Maximum character length per chunk (~512 tokens).
-const MAX_CHUNK_CHARS: usize = 1500;
+// ---------------------------------------------------------------------------
+// Model configuration — presets and custom HuggingFace models
+// ---------------------------------------------------------------------------
 
-/// Model identifier on HuggingFace Hub.
-const MODEL_ID: &str = "sentence-transformers/all-MiniLM-L6-v2";
+/// Configuration for an embedding model.
+pub struct ModelConfig {
+    pub model_id: String,
+    pub dim: usize,
+    pub max_chunk_chars: usize,
+}
 
-/// Embedding dimensionality for all-MiniLM-L6-v2.
-const EMBEDDING_DIM: usize = 384;
+/// Resolve a model name to its configuration.
+///
+/// Accepts preset names ("minilm", "codebert", "starencoder"), returns the
+/// default (minilm) for `None`, or treats any other string as a custom
+/// HuggingFace model ID (defaults to dim=768, chunk=2000 — override dim
+/// in .codescope.toml for non-768 models).
+pub fn resolve_model(name: Option<&str>) -> ModelConfig {
+    match name {
+        None | Some("minilm") => ModelConfig {
+            model_id: "sentence-transformers/all-MiniLM-L6-v2".into(),
+            dim: 384,
+            max_chunk_chars: 1500,
+        },
+        Some("codebert") => ModelConfig {
+            model_id: "microsoft/codebert-base".into(),
+            dim: 768,
+            max_chunk_chars: 2000,
+        },
+        Some("starencoder") => {
+            ModelConfig { model_id: "bigcode/starencoder".into(), dim: 768, max_chunk_chars: 2000 }
+        }
+        Some(custom) => {
+            ModelConfig { model_id: custom.to_string(), dim: 768, max_chunk_chars: 2000 }
+        }
+    }
+}
 
 /// Select the best available device: CUDA GPU if available, otherwise CPU.
 fn select_device() -> Device {
@@ -48,7 +77,7 @@ struct Chunk {
 }
 
 /// Extract embeddable chunks from scanned files using structural stubs.
-fn extract_chunks(files: &[ScannedFile]) -> Vec<Chunk> {
+fn extract_chunks(files: &[ScannedFile], max_chunk_chars: usize) -> Vec<Chunk> {
     let mut chunks = Vec::new();
 
     for file in files {
@@ -82,7 +111,7 @@ fn extract_chunks(files: &[ScannedFile]) -> Vec<Chunk> {
                 current_chunk.clear();
                 chunk_start_line = line_num + 1;
             } else {
-                if current_chunk.len() + line.len() + 1 > MAX_CHUNK_CHARS
+                if current_chunk.len() + line.len() + 1 > max_chunk_chars
                     && !current_chunk.is_empty()
                 {
                     chunks.push(Chunk {
@@ -121,7 +150,8 @@ fn extract_chunks(files: &[ScannedFile]) -> Vec<Chunk> {
 /// Load the BERT model and tokenizer from HuggingFace Hub.
 /// Models are cached in `~/.cache/codescope/models/` via hf-hub defaults.
 /// Returns (model, tokenizer, device) so callers reuse the same device.
-fn load_model() -> Result<(BertModel, Tokenizer, Device), String> {
+fn load_model(config: &ModelConfig) -> Result<(BertModel, Tokenizer, Device), String> {
+    let model_id = &config.model_id;
     let device = select_device();
     let device_name = match &device {
         Device::Cpu => "CPU".to_string(),
@@ -134,9 +164,9 @@ fn load_model() -> Result<(BertModel, Tokenizer, Device), String> {
     let api = Api::new().map_err(|e| format!("Failed to create HF API: {e}"))?;
 
     let repo =
-        api.repo(Repo::with_revision(MODEL_ID.to_string(), RepoType::Model, "main".to_string()));
+        api.repo(Repo::with_revision(model_id.to_string(), RepoType::Model, "main".to_string()));
 
-    eprintln!("  [semantic] Loading model {MODEL_ID} on {device_name}...");
+    eprintln!("  [semantic] Loading model {model_id} on {device_name}...");
 
     let config_path =
         repo.get("config.json").map_err(|e| format!("Failed to get config.json: {e}"))?;
@@ -176,6 +206,7 @@ fn encode_batch(
     tokenizer: &Tokenizer,
     device: &Device,
     texts: &[&str],
+    dim: usize,
 ) -> Result<Vec<Vec<f32>>, String> {
     if texts.is_empty() {
         return Ok(Vec::new());
@@ -269,8 +300,8 @@ fn encode_batch(
 
     let mut result = Vec::with_capacity(batch_size);
     for i in 0..batch_size {
-        let start = i * EMBEDDING_DIM;
-        let end = start + EMBEDDING_DIM;
+        let start = i * dim;
+        let end = start + dim;
         result.push(flat[start..end].to_vec());
     }
 
@@ -284,8 +315,12 @@ fn encode_batch(
 /// Build a semantic index from scanned files.
 /// Uses parallel workers to saturate CPU cores during embedding.
 /// Returns `None` if model loading fails or no chunks found.
-pub fn build_semantic_index(files: &[ScannedFile]) -> Option<SemanticIndex> {
-    let chunks = extract_chunks(files);
+pub fn build_semantic_index(
+    files: &[ScannedFile],
+    model_name: Option<&str>,
+) -> Option<SemanticIndex> {
+    let model_config = resolve_model(model_name);
+    let chunks = extract_chunks(files, model_config.max_chunk_chars);
     if chunks.is_empty() {
         eprintln!("  [semantic] No chunks extracted, skipping semantic index");
         return None;
@@ -294,7 +329,7 @@ pub fn build_semantic_index(files: &[ScannedFile]) -> Option<SemanticIndex> {
     eprintln!("  [semantic] Extracted {} chunks from {} files", chunks.len(), files.len());
 
     // Pre-load model once to validate, warm the HF cache, and detect device
-    let use_gpu = match load_model() {
+    let use_gpu = match load_model(&model_config) {
         Ok((_, _, ref dev)) => !matches!(dev, Device::Cpu),
         Err(e) => {
             eprintln!("  [semantic] Failed to load model: {e}");
@@ -320,6 +355,7 @@ pub fn build_semantic_index(files: &[ScannedFile]) -> Option<SemanticIndex> {
     let groups: Vec<Vec<&[Chunk]>> = batches.chunks(group_size).map(|g| g.to_vec()).collect();
 
     let progress = std::sync::atomic::AtomicUsize::new(0);
+    let model_config = &model_config;
 
     // Each worker loads its own model instance and processes its batch group
     let results: Vec<Option<(Vec<f32>, Vec<ChunkMeta>)>> = std::thread::scope(|s| {
@@ -329,7 +365,7 @@ pub fn build_semantic_index(files: &[ScannedFile]) -> Option<SemanticIndex> {
             .map(|(worker_id, group)| {
                 let progress = &progress;
                 s.spawn(move || {
-                    let (model, tokenizer, device) = match load_model() {
+                    let (model, tokenizer, device) = match load_model(&model_config) {
                         Ok(m) => m,
                         Err(e) => {
                             eprintln!("  [semantic] Worker {worker_id} failed to load model: {e}");
@@ -342,7 +378,7 @@ pub fn build_semantic_index(files: &[ScannedFile]) -> Option<SemanticIndex> {
 
                     for batch in group {
                         let texts: Vec<&str> = batch.iter().map(|c| c.text.as_str()).collect();
-                        match encode_batch(&model, &tokenizer, &device, &texts) {
+                        match encode_batch(&model, &tokenizer, &device, &texts, model_config.dim) {
                             Ok(embeddings) => {
                                 for (i, emb) in embeddings.into_iter().enumerate() {
                                     embs.extend_from_slice(&emb);
@@ -384,7 +420,7 @@ pub fn build_semantic_index(files: &[ScannedFile]) -> Option<SemanticIndex> {
     });
 
     // Merge worker results
-    let mut all_embeddings: Vec<f32> = Vec::with_capacity(chunks.len() * EMBEDDING_DIM);
+    let mut all_embeddings: Vec<f32> = Vec::with_capacity(chunks.len() * model_config.dim);
     let mut chunk_meta: Vec<ChunkMeta> = Vec::with_capacity(chunks.len());
     for result in results.into_iter().flatten() {
         all_embeddings.extend(result.0);
@@ -402,7 +438,13 @@ pub fn build_semantic_index(files: &[ScannedFile]) -> Option<SemanticIndex> {
         all_embeddings.len()
     );
 
-    Some(SemanticIndex { embeddings: all_embeddings, chunk_meta, dim: EMBEDDING_DIM })
+    let stored_model_name = model_name.unwrap_or("minilm").to_string();
+    Some(SemanticIndex {
+        embeddings: all_embeddings,
+        chunk_meta,
+        dim: model_config.dim,
+        model_name: stored_model_name,
+    })
 }
 
 /// Get number of available CPU cores (capped at 8 to avoid memory explosion).
@@ -428,9 +470,10 @@ pub fn semantic_search(
     query: &str,
     limit: usize,
 ) -> Result<Vec<SemanticSearchResult>, String> {
-    let (model, tokenizer, device) = load_model()?;
+    let model_config = resolve_model(Some(&index.model_name));
+    let (model, tokenizer, device) = load_model(&model_config)?;
 
-    let query_embeddings = encode_batch(&model, &tokenizer, &device, &[query])?;
+    let query_embeddings = encode_batch(&model, &tokenizer, &device, &[query], model_config.dim)?;
     if query_embeddings.is_empty() {
         return Ok(Vec::new());
     }

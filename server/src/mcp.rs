@@ -167,6 +167,8 @@ fn tool_definitions() -> serde_json::Value {
                         "description": "Array of relative paths from project root"
                     },
                     "budget": { "type": "integer", "description": "Max token budget. Default: 50000" },
+                    "ordering": { "type": "string", "enum": ["importance", "attention"], "description": "Output ordering. 'importance' (default): descending by relevance. 'attention': primacy/recency optimized — high-importance at start and end, medium in middle, exploiting LLM attention patterns." },
+                    "include_seen": { "type": "boolean", "description": "If true, don't deprioritize files already read in this session. Default: false (previously-read files get lower priority to maximize new information)." },
                     "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
                 },
                 "required": ["paths"]
@@ -236,6 +238,66 @@ fn tool_definitions() -> serde_json::Value {
             }
         },
         {
+            "name": "cs_blame",
+            "description": "Git blame for a file. Shows who last modified each line, when, and in which commit. Optionally scope to a line range.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative path from project root" },
+                    "start_line": { "type": "integer", "description": "First line (1-based, optional)" },
+                    "end_line": { "type": "integer", "description": "Last line (1-based, inclusive, optional)" },
+                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
+                },
+                "required": ["path"]
+            }
+        },
+        {
+            "name": "cs_file_history",
+            "description": "Recent commits that touched a specific file. Shows commit hash, author, date, message, and which other files were changed in the same commit.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Relative path from project root" },
+                    "limit": { "type": "integer", "description": "Max commits to return (default: 10)" },
+                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
+                },
+                "required": ["path"]
+            }
+        },
+        {
+            "name": "cs_changed_since",
+            "description": "Files changed since a commit, branch, or tag. Use to see what changed between two points in history. Supports commit hashes (full or short), branch names (main, origin/main), and tags.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "since": { "type": "string", "description": "Commit hash, branch name, or tag to diff against HEAD" },
+                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
+                },
+                "required": ["since"]
+            }
+        },
+        {
+            "name": "cs_hot_files",
+            "description": "Most frequently changed files (churn ranking). Identifies code hotspots by counting how many commits touched each file within a time window. High-churn files often indicate areas needing refactoring or close review.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "integer", "description": "Max files to return (default: 20)" },
+                    "days": { "type": "integer", "description": "Look back N days (default: 90)" },
+                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
+                }
+            }
+        },
+        {
+            "name": "cs_session_info",
+            "description": "Show what files have been read in this MCP session. Useful for understanding context consumption and avoiding redundant reads.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }
+        },
+        {
             "name": "cs_impact",
             "description": "Impact analysis: given a file, find everything that depends on it (directly or transitively). Shows the full dependency chain with depth levels. Use to answer 'what breaks if I change this?'",
             "inputSchema": {
@@ -276,7 +338,12 @@ fn tool_definitions() -> serde_json::Value {
 // Tool call handler (read-only, takes &ServerState)
 // ---------------------------------------------------------------------------
 
-fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -> (String, bool) {
+fn handle_tool_call(
+    state: &ServerState,
+    name: &str,
+    args: &serde_json::Value,
+    session: &mut Option<SessionState>,
+) -> (String, bool) {
     match name {
         "cs_read_file" => {
             let repo = match resolve_repo(state, args) {
@@ -292,6 +359,11 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                 Ok(full_path) => match fs::read_to_string(&full_path) {
                     Err(_) => ("Error: Could not read file".to_string(), true),
                     Ok(raw) => {
+                        // Record read in session
+                        if let Some(ref mut s) = session {
+                            let approx_tokens = raw.len() / 4;
+                            s.record_read(path, approx_tokens);
+                        }
                         if mode == "stubs" {
                             let ext = path.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
                             let content = extract_stubs(&raw, ext);
@@ -359,6 +431,10 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                             out.push_str(&format!("# {p}\nError: Could not read file\n\n"));
                         }
                         Ok(raw) => {
+                            if let Some(ref mut s) = session {
+                                let approx_tokens = raw.len() / 4;
+                                s.record_read(p, approx_tokens);
+                            }
                             let content = if mode == "stubs" {
                                 let ext = p.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
                                 extract_stubs(&raw, ext)
@@ -710,6 +786,9 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
             }
 
             let query = args["query"].as_str();
+            let ordering = args["ordering"].as_str();
+            let include_seen = args["include_seen"].as_bool().unwrap_or(false);
+            let seen = if include_seen { None } else { session.as_ref().map(|s| s.seen_paths()) };
             let resp = allocate_budget(
                 &repo.root,
                 &paths,
@@ -717,11 +796,22 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                 budget,
                 &unit,
                 query,
+                ordering,
+                seen.as_ref(),
                 &repo.deps,
                 &repo.stub_cache,
                 &*state.tokenizer,
                 &repo.config,
             );
+
+            // Record reads in session
+            if let Some(ref mut s) = session {
+                for (path, entry) in &resp.files {
+                    if !path.starts_with('_') {
+                        s.record_read(path, entry.tokens);
+                    }
+                }
+            }
 
             // Format as human-readable text for MCP
             let tier_names = |t: u8| match t {
@@ -1171,7 +1261,182 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
         }
 
         // =====================================================================
-        // New tools
+        // Git-aware tools
+        // =====================================================================
+        "cs_blame" => {
+            let repo = match resolve_repo(state, args) {
+                Ok(r) => r,
+                Err(e) => return (format!("Error: {e}"), true),
+            };
+            let path = args["path"].as_str().unwrap_or("");
+            if path.is_empty() {
+                return ("Error: 'path' is required".to_string(), true);
+            }
+            let start_line = args["start_line"].as_u64().map(|n| n as usize);
+            let end_line = args["end_line"].as_u64().map(|n| n as usize);
+
+            match crate::git::blame(&repo.root, path, start_line, end_line) {
+                Ok(lines) => {
+                    if lines.is_empty() {
+                        return (format!("No blame data for '{path}'"), false);
+                    }
+                    let range_str = match (start_line, end_line) {
+                        (Some(s), Some(e)) => format!(" (lines {s}-{e})"),
+                        (Some(s), None) => format!(" (from line {s})"),
+                        (None, Some(e)) => format!(" (to line {e})"),
+                        _ => String::new(),
+                    };
+                    let mut out = format!("# {path}{range_str}\n\n");
+                    let width = lines.last().map(|l| format!("{}", l.line).len()).unwrap_or(1);
+                    for bl in &lines {
+                        out.push_str(&format!(
+                            "{:>w$}: {} | {} | {} | {}\n",
+                            bl.line,
+                            bl.commit,
+                            bl.author,
+                            bl.date,
+                            bl.content,
+                            w = width
+                        ));
+                    }
+                    out.push_str(&format!("\n{} lines", lines.len()));
+                    (out, false)
+                }
+                Err(e) => (format!("Error: {e}"), true),
+            }
+        }
+        "cs_file_history" => {
+            let repo = match resolve_repo(state, args) {
+                Ok(r) => r,
+                Err(e) => return (format!("Error: {e}"), true),
+            };
+            let path = args["path"].as_str().unwrap_or("");
+            if path.is_empty() {
+                return ("Error: 'path' is required".to_string(), true);
+            }
+            let limit = args["limit"].as_u64().unwrap_or(10).min(100) as usize;
+
+            match crate::git::file_history(&repo.root, path, limit) {
+                Ok(commits) => {
+                    if commits.is_empty() {
+                        return (format!("No commit history found for '{path}'"), false);
+                    }
+                    let mut out = format!("# {path} — {} recent commits\n\n", commits.len());
+                    for c in &commits {
+                        out.push_str(&format!(
+                            "{} | {} | {} | {}\n",
+                            c.hash, c.author, c.date, c.message
+                        ));
+                        if c.files_changed.len() > 1 {
+                            let others: Vec<&str> = c
+                                .files_changed
+                                .iter()
+                                .filter(|f| f.as_str() != path)
+                                .map(|f| f.as_str())
+                                .take(10)
+                                .collect();
+                            if !others.is_empty() {
+                                out.push_str(&format!("  also: {}\n", others.join(", ")));
+                            }
+                        }
+                    }
+                    (out, false)
+                }
+                Err(e) => (format!("Error: {e}"), true),
+            }
+        }
+        "cs_changed_since" => {
+            let repo = match resolve_repo(state, args) {
+                Ok(r) => r,
+                Err(e) => return (format!("Error: {e}"), true),
+            };
+            let since = args["since"].as_str().unwrap_or("");
+            if since.is_empty() {
+                return ("Error: 'since' is required".to_string(), true);
+            }
+
+            match crate::git::changed_since(&repo.root, since) {
+                Ok(files) => {
+                    if files.is_empty() {
+                        return (format!("No changes since '{since}'"), false);
+                    }
+                    let mut out = format!("Files changed since {since}: {}\n\n", files.len());
+                    // Group by status
+                    let mut by_status: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+                    for f in &files {
+                        by_status.entry(f.status.clone()).or_default().push(&f.path);
+                    }
+                    for (status, paths) in &by_status {
+                        out.push_str(&format!("{} ({}):\n", status, paths.len()));
+                        for p in paths {
+                            out.push_str(&format!("  {p}\n"));
+                        }
+                        out.push('\n');
+                    }
+                    (out, false)
+                }
+                Err(e) => (format!("Error: {e}"), true),
+            }
+        }
+        "cs_hot_files" => {
+            let repo = match resolve_repo(state, args) {
+                Ok(r) => r,
+                Err(e) => return (format!("Error: {e}"), true),
+            };
+            let limit = args["limit"].as_u64().unwrap_or(20).min(200) as usize;
+            let days = args["days"].as_u64().unwrap_or(90).min(365) as usize;
+
+            match crate::git::hot_files(&repo.root, limit, days) {
+                Ok(files) => {
+                    if files.is_empty() {
+                        return (format!("No file changes found in the last {days} days"), false);
+                    }
+                    let mut out = format!("Hot files (last {days} days, top {})\n\n", files.len());
+                    let max_commits = files.first().map(|f| f.commits).unwrap_or(1);
+                    let width = format!("{}", max_commits).len();
+                    for (i, f) in files.iter().enumerate() {
+                        out.push_str(&format!(
+                            "{:>3}. {:>w$} commits  {}\n",
+                            i + 1,
+                            f.commits,
+                            f.path,
+                            w = width
+                        ));
+                    }
+                    (out, false)
+                }
+                Err(e) => (format!("Error: {e}"), true),
+            }
+        }
+
+        "cs_session_info" => match session {
+            Some(ref s) => {
+                let elapsed = s.started_at.elapsed();
+                let mins = elapsed.as_secs() / 60;
+                let secs = elapsed.as_secs() % 60;
+                let mut out = format!(
+                    "Session: {}m {}s, {} files read, ~{} tokens served\n\n",
+                    mins,
+                    secs,
+                    s.files_read.len(),
+                    s.total_tokens_served
+                );
+                if !s.files_read.is_empty() {
+                    out.push_str("Files read:\n");
+                    let mut sorted: Vec<(&String, &std::time::Instant)> =
+                        s.files_read.iter().collect();
+                    sorted.sort_by_key(|(_, t)| *t);
+                    for (path, _) in sorted {
+                        out.push_str(&format!("  {path}\n"));
+                    }
+                }
+                (out, false)
+            }
+            None => ("Session tracking not available (HTTP mode)".to_string(), false),
+        },
+
+        // =====================================================================
+        // Status & management tools
         // =====================================================================
         "cs_status" => {
             let version = env!("CARGO_PKG_VERSION");
@@ -1451,6 +1716,7 @@ pub fn run_mcp(state: Arc<RwLock<ServerState>>) {
     let stdin = io::stdin();
     let stdout = io::stdout();
     let reader = stdin.lock();
+    let mut session = Some(SessionState::new());
 
     {
         let s = state.read().unwrap();
@@ -1541,7 +1807,7 @@ pub fn run_mcp(state: Arc<RwLock<ServerState>>) {
                     }
                     _ => {
                         let s = state.read().unwrap();
-                        handle_tool_call(&s, tool_name, &arguments)
+                        handle_tool_call(&s, tool_name, &arguments, &mut session)
                     }
                 };
 
