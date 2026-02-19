@@ -56,8 +56,17 @@ jobs:
         run: |
           mkdir -p staging
           cp server/target/${{ matrix.target }}/release/codescope-server staging/
+          cp server/codescope-init staging/
+          cp server/codescope-web staging/
+          chmod +x staging/codescope-init staging/codescope-web
           cp LICENSE README.md staging/
           tar czf ${{ matrix.archive }} -C staging .
+
+      - name: Verify tarball contents
+        run: |
+          tar tzf ${{ matrix.archive }} | grep -q codescope-server
+          tar tzf ${{ matrix.archive }} | grep -q codescope-init
+          tar tzf ${{ matrix.archive }} | grep -q codescope-web
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

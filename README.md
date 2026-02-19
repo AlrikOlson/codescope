@@ -5,7 +5,32 @@
 
 A fast codebase indexer and search server. Works as an [MCP](https://modelcontextprotocol.io/) server for Claude Code (and other MCP clients) or as a standalone HTTP server with a rich web UI.
 
-Built in Rust. Indexes 200K+ files in under 2 seconds. Understands module structure, import graphs, and file dependencies out of the box.
+Indexes 200K+ files in under 2 seconds. Understands module structure, import graphs, and file dependencies across 18+ languages out of the box.
+
+## Quick Start
+
+### 1. Install
+
+```bash
+curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash
+```
+
+Downloads a pre-built binary (~5MB). Takes about 10 seconds. No compilation needed.
+
+### 2. Set Up Your Project
+
+```bash
+cd /path/to/your/project
+codescope-server init
+```
+
+This generates config files for your project. Open Claude Code in that directory and CodeScope tools are available immediately.
+
+### Or do both in one command
+
+```bash
+curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- /path/to/project
+```
 
 ## Why CodeScope?
 
@@ -13,83 +38,6 @@ Built in Rust. Indexes 200K+ files in under 2 seconds. Understands module struct
 - **Token-budget reads** -- feed an LLM exactly what fits in its context window. The `cs_read_context` tool uses a water-fill algorithm to allocate tokens across files by importance.
 - **Impact analysis** -- answer "what breaks if I change this file?" by tracing the full import dependency chain, even across repository boundaries.
 - **One command to start** -- `codescope-server init` auto-detects your project type, generates config, and you're ready to go.
-
-## Quick Start
-
-```bash
-curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s --
-```
-
-Or clone and build manually:
-
-```bash
-git clone https://github.com/AlrikOlson/codescope.git
-cd codescope/server
-./setup.sh
-```
-
-This installs the Rust toolchain (if needed), builds the server, and if Node.js is available, builds the web UI too. Everything goes into `~/.local/bin/`.
-
-### Enable Semantic Search
-
-For ML-powered semantic code search (searches by intent, not just keywords):
-
-```bash
-# Via pipe
-curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --with-semantic
-
-# Or locally
-./setup.sh --with-semantic
-```
-
-This compiles with the `semantic` feature, which uses a BERT model (`all-MiniLM-L6-v2`, ~90MB, downloaded on first use) for vector similarity search. When enabled, `codescope-init` automatically configures your MCP server to use it.
-
-### Set Up a Project
-
-In any project you want to index:
-
-```bash
-# Auto-detect project type and generate .mcp.json + .codescope.toml
-codescope-server init
-
-# Or use the quick helper (generates .mcp.json only)
-codescope-init
-
-# Web UI (standalone browser)
-codescope-web /path/to/your/project
-```
-
-`codescope-server init` detects your project type and generates smart defaults. Claude Code picks up the `.mcp.json` automatically. `codescope-web` launches the browser UI at `http://localhost:8432`.
-
-## Multi-Repo Support
-
-Index multiple repositories simultaneously:
-
-```bash
-# Named repos via CLI
-codescope-server --mcp --repo engine=/path/to/engine --repo game=/path/to/game
-
-# Via config file
-codescope-server --mcp --config ~/.codescope/repos.toml
-
-# Single repo (unchanged, backwards compatible)
-codescope-server --mcp --root /path/to/project
-```
-
-Config file format (`repos.toml`):
-
-```toml
-[repos.backend]
-root = "/home/user/my-api"
-scan_dirs = ["src"]
-
-[repos.frontend]
-root = "/home/user/my-app"
-```
-
-All tools gain an optional `repo` parameter. When omitted with a single repo, it works exactly as before. With multiple repos, search tools automatically search across all repos with results tagged by repo name.
-
-You can also add repos dynamically at runtime using the `cs_add_repo` tool.
 
 ## MCP Tools
 
@@ -116,42 +64,19 @@ You can also add repos dynamically at runtime using the `cs_add_repo` tool.
 | `cs_rescan` | Re-index repos without restarting |
 | `cs_add_repo` | Dynamically add a repo at runtime |
 
-## Impact Analysis
+## Semantic Search (Optional)
 
-The `cs_impact` tool traces the import graph to answer "what breaks if I change this file?":
-
-```
-Impact analysis for src/types.rs
-
-Depth 1 (direct dependents): 6 files
-  src/api.rs
-  src/budget.rs
-  src/fuzzy.rs
-  src/main.rs
-  src/mcp.rs
-  src/scan.rs
-
-Total: 6 files affected across 1 depth level
-```
-
-Works across repo boundaries -- if repo B imports from repo A, `cs_impact` traces the full cross-repo dependency chain.
-
-## CLI Subcommands
+ML-powered search that finds code by meaning, not just keywords. Requires compiling from source (~5 minutes, one-time):
 
 ```bash
-# Auto-detect project type, generate .codescope.toml + .mcp.json
-codescope-server init [/path/to/project]
-
-# Add to global config instead of per-project
-codescope-server init --global
-
-# Diagnostics -- check config, test scan, validate setup
-codescope-server doctor [/path/to/project]
+curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --with-semantic
 ```
+
+Uses a BERT model (`all-MiniLM-L6-v2`, ~90MB, downloaded on first use) for vector similarity search. When enabled, `codescope-server init` automatically configures your project to use it.
 
 ## Web UI
 
-After running `setup.sh`, browse any project with:
+After installing, browse any project with:
 
 ```bash
 codescope-web /path/to/project
@@ -159,25 +84,43 @@ codescope-web /path/to/project
 
 Opens at `http://localhost:8432`. Set `PORT=9000` for a custom port.
 
-### Features
-
-- **File browser** -- tree view with syntax-highlighted source viewer
-- **Full-text search** -- regex-powered grep with ranked results
-- **Treemap visualization** -- file sizes by module, zoomable
-- **3D dependency graph** -- interactive force-directed graph of module dependencies
-- **Theme toggle** -- dark, light, and system modes
-
-### Keyboard Shortcuts
+Features: file browser with syntax highlighting, regex search, treemap visualization, 3D dependency graph, dark/light themes.
 
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl+K` | Focus search |
 | `Ctrl+B` | Toggle sidebar |
-| `Ctrl+1` through `Ctrl+5` | Switch panels (Files, Search, Modules, Deps, Treemap) |
+| `Ctrl+1` through `Ctrl+5` | Switch panels |
 
-Panels are drag-to-resize.
+The web UI requires Node.js at install time. If you installed without Node.js, re-run `setup.sh` after installing it.
 
-The web UI requires Node.js at install time (for building the React frontend). If you installed without Node.js, re-run `setup.sh` after installing it.
+## Multi-Repo Support
+
+Index multiple repositories simultaneously:
+
+```bash
+# Named repos via CLI
+codescope-server --mcp --repo engine=/path/to/engine --repo game=/path/to/game
+
+# Via config file
+codescope-server --mcp --config ~/.codescope/repos.toml
+
+# Single repo (default)
+codescope-server --mcp --root /path/to/project
+```
+
+Config file format (`repos.toml`):
+
+```toml
+[repos.backend]
+root = "/home/user/my-api"
+scan_dirs = ["src"]
+
+[repos.frontend]
+root = "/home/user/my-app"
+```
+
+All tools gain an optional `repo` parameter. With a single repo it works automatically. With multiple repos, search results are tagged by repo name. You can also add repos at runtime with `cs_add_repo`.
 
 ## Configuration
 
@@ -197,7 +140,56 @@ extensions = [".rs", ".ts", ".go", ".py"]
 noise_dirs = ["third_party"]
 ```
 
-Built-in defaults for `skip_dirs`: `node_modules`, `target`, `dist`, `.git`, `build`, `__pycache__`, `vendor`, and others. Built-in defaults for `noise_dirs`: `src`, `lib`, `Source`, `Include`, and similar common directory names that add noise to category paths.
+Built-in defaults for `skip_dirs`: `node_modules`, `target`, `dist`, `.git`, `build`, `__pycache__`, `vendor`, and others.
+
+## CLI Subcommands
+
+```bash
+# Auto-detect project type, generate .codescope.toml + .mcp.json
+codescope-server init [/path/to/project]
+
+# Add to global config instead of per-project
+codescope-server init --global
+
+# Diagnostics -- check config, test scan, validate setup
+codescope-server doctor [/path/to/project]
+```
+
+## Troubleshooting
+
+### "codescope-server: command not found"
+
+Restart your terminal, or run:
+
+```bash
+source ~/.bashrc    # or: source ~/.zshrc
+```
+
+### Semantic search not working
+
+The standard install does not include semantic search. Reinstall with:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --with-semantic
+```
+
+### Install fails behind a corporate proxy
+
+Use `--from-source` with the Rust toolchain already installed:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --from-source
+```
+
+### WSL (Windows Subsystem for Linux)
+
+Works the same as regular Linux. No special steps needed.
+
+### Claude Code doesn't see the tools
+
+Make sure you ran `codescope-server init` in your project directory, then restart Claude Code. Check that `.mcp.json` exists in your project root.
+
+---
 
 ## Development
 
@@ -234,7 +226,7 @@ npm install
 npm run build
 
 # Both (via setup script)
-cd server && ./setup.sh
+cd server && ./setup.sh --from-source
 
 # Both with semantic search
 cd server && ./setup.sh --with-semantic

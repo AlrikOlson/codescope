@@ -376,8 +376,8 @@ async fn main() {
     let enable_semantic = false;
 
     if args.iter().any(|a| a == "--semantic") && !cfg!(feature = "semantic") {
-        eprintln!("  Warning: --semantic flag ignored (binary not compiled with 'semantic' feature)");
-        eprintln!("  Recompile with: cargo build --release --features semantic");
+        eprintln!("  Warning: --semantic flag ignored. This binary does not include semantic search.");
+        eprintln!("  To enable it, reinstall with: curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --with-semantic");
     }
 
     // ---------------------------------------------------------------------------

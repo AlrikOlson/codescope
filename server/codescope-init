@@ -7,14 +7,21 @@ set -euo pipefail
 #   cd /path/to/project && codescope-init
 #   codescope-init /path/to/project
 
+info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
+ok()    { printf '\033[1;32m OK\033[0m %s\n' "$*"; }
+err()   { printf '\033[1;31mERR\033[0m %s\n' "$*" >&2; }
+
 TARGET="${1:-.}"
 TARGET="$(cd "$TARGET" && pwd)"
 MCP_FILE="$TARGET/.mcp.json"
 
 # Check if codescope-server is installed
 if ! command -v codescope-server >/dev/null 2>&1; then
-    echo "Error: codescope-server not found in PATH." >&2
-    echo "Run setup.sh first: https://github.com/AlrikOlson/codescope" >&2
+    err "codescope-server is not installed."
+    echo ""
+    echo "  Install it with:"
+    echo "    curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash"
+    echo ""
     exit 1
 fi
 
@@ -28,20 +35,19 @@ fi
 if [ -f "$MCP_FILE" ]; then
     # Check if codescope is already configured
     if grep -q '"codescope"' "$MCP_FILE" 2>/dev/null; then
-        echo "CodeScope already configured in $MCP_FILE"
+        ok "CodeScope already configured in $MCP_FILE"
         exit 0
     fi
 
-    echo ".mcp.json already exists at $MCP_FILE"
-    printf "Add codescope to existing config? [Y/n] "
+    info ".mcp.json already exists at $MCP_FILE"
+    printf "Add CodeScope to existing config? [Y/n] "
     read -r answer
     if [ "${answer:-Y}" != "${answer#[Nn]}" ]; then
         echo "Aborted."
         exit 0
     fi
 
-    # Merge into existing .mcp.json — add codescope to mcpServers
-    # Use a simple Python/node one-liner if available, otherwise warn
+    # Merge into existing .mcp.json
     if command -v python3 >/dev/null 2>&1; then
         MCP_FILE="$MCP_FILE" TARGET="$TARGET" HAS_SEMANTIC="$HAS_SEMANTIC" python3 -c "
 import json, os
@@ -62,10 +68,11 @@ with open(mcp_file, 'w') as f:
     json.dump(data, f, indent=2)
     f.write('\n')
 "
-        echo "Added codescope to $MCP_FILE"
+        ok "Added CodeScope to $MCP_FILE"
     else
-        echo "Cannot merge automatically (python3 not found)."
-        echo "Add this to your .mcp.json mcpServers manually:"
+        err "Cannot merge automatically (python3 not found)."
+        echo ""
+        echo "  Add this to your .mcp.json mcpServers manually:"
         echo ""
         echo '  "codescope": {'
         echo '    "type": "stdio",'
@@ -101,12 +108,17 @@ EOF
 }
 EOF
     fi
-    echo "Created $MCP_FILE"
+    ok "Created $MCP_FILE"
 fi
 
 echo ""
+ok "CodeScope is ready!"
+echo ""
 if [ "$HAS_SEMANTIC" = "1" ]; then
-    echo "Open Claude Code in $TARGET — CodeScope tools are now available (with semantic search)."
+    echo "  Open Claude Code in this directory — CodeScope tools are available (with semantic search)."
 else
-    echo "Open Claude Code in $TARGET — CodeScope tools are now available."
+    echo "  Open Claude Code in this directory — CodeScope tools are available."
 fi
+echo ""
+echo "  If Claude Code is already open here, restart it to pick up the new config."
+echo ""
