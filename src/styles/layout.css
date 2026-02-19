@@ -286,16 +286,12 @@
    ============================================ */
 .layout {
   display: grid;
-  grid-template-columns: 48px auto 1fr;
+  grid-template-columns: 48px var(--sidebar-w, 0px) 1fr;
   flex: 1;
   overflow: hidden;
   position: relative;
   z-index: 6;
   transition: grid-template-columns var(--slow) var(--ease);
-}
-
-.layout.sidebar-hidden {
-  grid-template-columns: 48px 0px 1fr;
 }
 
 /* ============================================
@@ -349,6 +345,7 @@
   flex: 1;
   display: flex;
   overflow: hidden;
+  min-width: 0;
 }
 
 /* Preview resize handle */
@@ -379,7 +376,7 @@
 /* Wide screens: 4-column grid with pinned context */
 @media (min-width: 1920px) {
   .layout.context-pinned {
-    grid-template-columns: 48px auto 1fr 340px;
+    grid-template-columns: 48px var(--sidebar-w, 300px) 1fr 340px;
   }
 }
 

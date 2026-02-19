@@ -1,6 +1,6 @@
 import './styles/activity-bar.css';
 
-export type ActivityPanel = 'search' | 'tree' | 'context' | 'stats' | 'graph';
+export type ActivityPanel = 'search' | 'tree' | 'map' | 'context' | 'stats' | 'graph';
 
 interface Props {
   active: ActivityPanel | null;
@@ -42,6 +42,20 @@ export default function ActivityBar({ active, onSelect, contextCount, theme, onC
       </button>
 
       <button
+        className={`activity-bar-item${active === 'map' ? ' active' : ''}`}
+        onClick={() => toggle('map')}
+        title="Codebase Map (Ctrl+2)"
+        role="tab"
+        aria-selected={active === 'map'}
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <rect x="3" y="3" width="8" height="8"/><rect x="13" y="3" width="8" height="4"/>
+          <rect x="13" y="9" width="8" height="5"/><rect x="3" y="13" width="8" height="8"/>
+          <rect x="13" y="16" width="8" height="5"/>
+        </svg>
+      </button>
+
+      <button
         className={`activity-bar-item${active === 'context' ? ' active' : ''}`}
         onClick={() => toggle('context')}
         title="Context Panel (Ctrl+3)"
@@ -62,7 +76,7 @@ export default function ActivityBar({ active, onSelect, contextCount, theme, onC
       <button
         className={`activity-bar-item${active === 'stats' ? ' active' : ''}`}
         onClick={() => toggle('stats')}
-        title="Stats Dashboard (Ctrl+4)"
+        title="Stats Dashboard (Ctrl+5)"
         role="tab"
         aria-selected={active === 'stats'}
       >
@@ -74,7 +88,7 @@ export default function ActivityBar({ active, onSelect, contextCount, theme, onC
       <button
         className={`activity-bar-item${active === 'graph' ? ' active' : ''}`}
         onClick={() => toggle('graph')}
-        title="Dependency Graph (Ctrl+5)"
+        title="Dependency Graph (Ctrl+6)"
         role="tab"
         aria-selected={active === 'graph'}
       >

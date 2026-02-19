@@ -64,7 +64,7 @@ export default function App() {
     }
   }, []);
 
-  // Activity bar panel selection — also switches view mode for stats/graph
+  // Activity bar panel selection — also switches view mode for stats/graph/map
   const handlePanelSelect = useCallback((panel: ActivityPanel) => {
     if (panel === 'stats') {
       handleViewChange('stats');
@@ -72,9 +72,12 @@ export default function App() {
     } else if (panel === 'graph') {
       handleViewChange('graph');
       setActivePanel('graph');
+    } else if (panel === 'map') {
+      handleViewChange('map');
+      setActivePanel('map');
     } else {
       // Switch to list view when selecting search/tree/context
-      if (viewMode === 'stats' || viewMode === 'graph') {
+      if (viewMode === 'stats' || viewMode === 'graph' || viewMode === 'map') {
         handleViewChange('list');
       }
       setActivePanel(prev => prev === panel ? null : panel);
@@ -94,9 +97,9 @@ export default function App() {
         e.preventDefault();
         setActivePanel(prev => prev ? null : 'tree');
       }
-      if (mod && e.key >= '1' && e.key <= '5') {
+      if (mod && e.key >= '1' && e.key <= '6') {
         e.preventDefault();
-        const panels: ActivityPanel[] = ['search', 'tree', 'context', 'stats', 'graph'];
+        const panels: ActivityPanel[] = ['search', 'tree', 'map', 'context', 'stats', 'graph'];
         handlePanelSelect(panels[parseInt(e.key) - 1]);
       }
       if (e.key === 'Escape' && breakpoint === 'compact' && activePanel) {
@@ -160,7 +163,7 @@ export default function App() {
     });
     setActiveCategory(id);
     // Switch to tree view to show the navigation
-    if (activePanel === 'search') {
+    if (activePanel === 'search' || activePanel === 'map') {
       setActivePanel('tree');
     }
     if (viewMode !== 'list') {
@@ -227,8 +230,8 @@ export default function App() {
     }));
   }, [activeCategory]);
 
-  // Determine if context panel should be pinned (wide screens)
-  const contextPinned = breakpoint === 'wide' && selected.size > 0;
+  // Determine if context panel should be pinned (wide screens, only when preview is closed)
+  const contextPinned = breakpoint === 'wide' && selected.size > 0 && !previewPath;
 
   // Layout CSS classes
   const layoutClasses = [
@@ -291,7 +294,7 @@ export default function App() {
         />
       )}
 
-      <div className={layoutClasses}>
+      <div className={layoutClasses} style={{ '--sidebar-w': activePanel ? `${sidebarWidth + 2}px` : '0px' } as React.CSSProperties}>
         <ActivityBar
           active={activePanel}
           onSelect={handlePanelSelect}

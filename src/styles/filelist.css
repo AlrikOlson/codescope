@@ -3,6 +3,7 @@
    ============================================ */
 .main-panel {
   flex: 1;
+  min-width: 280px;
   display: flex;
   flex-direction: column;
   overflow: hidden;

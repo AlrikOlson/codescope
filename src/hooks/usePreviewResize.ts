@@ -19,7 +19,8 @@ export function usePreviewResize(initialWidth = 480) {
     const onMove = (e: MouseEvent) => {
       // Moving left increases width (resize handle is on left side of preview)
       const delta = startXRef.current - e.clientX;
-      const newWidth = Math.min(800, Math.max(320, startWidthRef.current + delta));
+      const maxWidth = Math.min(800, window.innerWidth * 0.45);
+      const newWidth = Math.min(maxWidth, Math.max(320, startWidthRef.current + delta));
       setPreviewWidth(newWidth);
     };
 
