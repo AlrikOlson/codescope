@@ -315,45 +315,66 @@
   background: var(--hover-accent);
 }
 
-/* ---- Summary Bar ---- */
-.search-summary-bar {
+/* ---- Filter Bar ---- */
+.search-filter-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   padding: 6px 12px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  flex-wrap: wrap;
   background: color-mix(in oklch, var(--neon-cyan) 2%, transparent);
 }
-.search-summary-chip {
+.search-filter-chip {
   font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--text3);
-  white-space: nowrap;
-}
-.search-summary-count {
-  color: var(--neon-cyan);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-.search-summary-spacer { flex: 1; }
-.search-summary-select {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--neon-cyan);
-  background: none;
-  border: 1px solid color-mix(in oklch, var(--neon-cyan) 25%, transparent);
-  border-radius: var(--r-sm);
+  font-weight: 500;
+  color: var(--text2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
   padding: 2px 8px;
   cursor: pointer;
   transition: all var(--fast) var(--ease);
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
-.search-summary-select:hover {
-  background: color-mix(in oklch, var(--neon-cyan) 10%, transparent);
-  border-color: var(--neon-cyan);
-  box-shadow: 0 0 8px color-mix(in oklch, var(--neon-cyan) 12%, transparent);
+.search-filter-chip:hover {
+  border-color: var(--chip-color, var(--neon-cyan));
+  color: var(--chip-color, var(--neon-cyan));
+  background: color-mix(in oklch, var(--chip-color, var(--neon-cyan)) 8%, transparent);
+}
+.search-filter-chip.active {
+  border-color: var(--chip-color, var(--neon-cyan));
+  color: var(--chip-color, var(--neon-cyan));
+  background: color-mix(in oklch, var(--chip-color, var(--neon-cyan)) 12%, transparent);
+  box-shadow: 0 0 6px color-mix(in oklch, var(--chip-color, var(--neon-cyan)) 15%, transparent);
+}
+.search-filter-chip.clear {
+  padding: 2px 6px;
+  color: var(--text3);
+  border-color: color-mix(in oklch, var(--neon-magenta) 30%, transparent);
+}
+.search-filter-chip.clear:hover {
+  color: var(--neon-magenta);
+  border-color: var(--neon-magenta);
+  background: color-mix(in oklch, var(--neon-magenta) 10%, transparent);
+}
+.search-filter-count {
+  font-size: 9px;
+  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+.search-filter-total {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text3);
+  margin-left: auto;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---- Results Area ---- */
@@ -407,111 +428,82 @@
   color: var(--text2);
 }
 
-/* ---- Section Labels ---- */
-.search-section-label {
+/* ---- No-results clear filter ---- */
+.search-empty-clear-filter {
   font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-  color: var(--text3);
-  padding: 10px 12px 4px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  border-top: 1px solid color-mix(in oklch, var(--border) 50%, transparent);
-}
-/* No top border on first section */
-.search-sidebar-results > div > .search-section-label:first-child {
-  border-top: none;
-}
-.search-section-count {
-  font-size: 9px;
+  font-size: 11px;
   color: var(--neon-cyan);
-  opacity: 0.7;
-  font-variant-numeric: tabular-nums;
-  margin-left: auto;
+  background: none;
+  border: 1px solid color-mix(in oklch, var(--neon-cyan) 25%, transparent);
+  border-radius: var(--r-sm);
+  padding: 4px 12px;
+  cursor: pointer;
+  transition: all var(--fast) var(--ease);
+}
+.search-empty-clear-filter:hover {
+  background: color-mix(in oklch, var(--neon-cyan) 10%, transparent);
+  border-color: var(--neon-cyan);
 }
 
-/* ---- Result Rows ---- */
-.search-result {
+/* ---- Unified Result Cards ---- */
+.search-result-card {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 12px;
-  font-size: 12px;
+  flex-direction: column;
+  padding: 6px 12px;
   cursor: pointer;
   border-left: 2px solid transparent;
   transition: all var(--fast) var(--ease);
+  gap: 2px;
 }
-.search-result:hover,
-.search-result.active {
+.search-result-card:hover,
+.search-result-card.active {
   background: var(--hover-accent);
-  border-left-color: color-mix(in oklch, var(--neon-cyan) 30%, transparent);
+  border-left-color: var(--card-accent, color-mix(in oklch, var(--neon-cyan) 30%, transparent));
 }
-.search-result.active {
+.search-result-card.active {
   background: var(--hover-accent-mid);
-  border-left-color: var(--neon-cyan);
+  border-left-color: var(--card-accent, var(--neon-cyan));
 }
-.search-result.selected {
+.search-result-card.selected {
   background: color-mix(in oklch, var(--neon-cyan) 6%, transparent);
 }
 
-.search-result-icon {
-  flex-shrink: 0;
-  opacity: 0.4;
-}
-
-.search-result-text {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-}
-.search-result-text mark {
-  background: none;
-  color: var(--neon-cyan);
-  font-weight: 600;
-}
-
-.search-result-badge {
-  font-size: 9px;
-  font-family: var(--font-mono);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  color: var(--neon-cyan);
-  background: color-mix(in oklch, var(--neon-cyan) 8%, transparent);
-  padding: 1px 6px;
-  border-radius: var(--r-full);
-  flex-shrink: 0;
-}
-
-/* File results (two-line: filename + path) */
-.search-result-file {
-  padding: 6px 12px;
+.search-card-main {
+  display: flex;
   align-items: flex-start;
+  gap: 8px;
 }
-.search-result-file-info {
+
+.search-card-info {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 1px;
 }
-.search-result-filename {
+
+.search-card-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.search-card-filename {
   font-size: 12px;
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1;
+  min-width: 0;
 }
-.search-result-filename mark {
+.search-card-filename mark {
   background: none;
   color: var(--neon-cyan);
-  font-weight: 600;
+  font-weight: 700;
 }
-.search-result-path {
+
+.search-card-path {
   font-size: 10px;
   color: var(--text3);
   opacity: 0.7;
@@ -526,36 +518,79 @@
   flex-shrink: 0;
 }
 
-/* Grep file header */
-.search-result-grep-file {
-  font-size: 11px;
-  padding: 6px 12px;
-  background: color-mix(in oklch, var(--surface) 40%, transparent);
-}
-.search-result-grep-file .search-result-text {
-  font-size: 11px;
-  font-weight: 500;
-}
-
-/* Grep match lines */
-.search-result-grep-match {
-  padding: 3px 12px 3px 20px;
-  font-family: var(--font-mono);
-  border-left-width: 2px;
-}
-
-.grep-linenum {
-  font-size: 10px;
+.search-card-preview {
+  opacity: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: none;
+  border: none;
   color: var(--text3);
-  min-width: 32px;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  transition: all var(--fast) var(--ease);
+  flex-shrink: 0;
+}
+.search-result-card:hover .search-card-preview,
+.search-result-card.active .search-card-preview {
+  opacity: 1;
+}
+.search-card-preview:hover {
+  color: var(--neon-cyan);
+  background: var(--hover-accent);
+}
+
+/* ---- Match Type Badges ---- */
+.match-type-badge {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: var(--r-full);
+  flex-shrink: 0;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+}
+.match-type-name {
+  color: var(--neon-cyan);
+  background: color-mix(in oklch, var(--neon-cyan) 10%, transparent);
+}
+.match-type-content {
+  color: var(--neon-magenta);
+  background: color-mix(in oklch, var(--neon-magenta) 10%, transparent);
+}
+.match-type-both {
+  color: var(--neon-cyan);
+  background: linear-gradient(
+    135deg,
+    color-mix(in oklch, var(--neon-cyan) 10%, transparent),
+    color-mix(in oklch, var(--neon-magenta) 10%, transparent)
+  );
+}
+
+/* ---- Code Snippet in Card ---- */
+.search-card-snippet {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0 0 22px;
+  font-family: var(--font-mono);
+}
+.snippet-linenum {
+  font-size: 9px;
+  color: var(--text3);
+  min-width: 28px;
   text-align: right;
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
-  opacity: 0.6;
+  opacity: 0.5;
 }
-.grep-line-text {
-  font-size: 11px;
+.snippet-text {
+  font-size: 10px;
   color: var(--text2);
+  opacity: 0.7;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

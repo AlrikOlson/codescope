@@ -1,15 +1,6 @@
-import type { SearchResponse, GrepResponse, FileSearchResult, ModuleSearchResult, GrepFileResult } from './types';
+import type { FindResponse } from './types';
 
-export type UnifiedResult =
-  | { type: 'module-header' }
-  | { type: 'file-header' }
-  | { type: 'content-header' }
-  | { type: 'module'; data: ModuleSearchResult }
-  | { type: 'file'; data: FileSearchResult }
-  | { type: 'grep-file'; data: GrepFileResult }
-  | { type: 'grep-match'; line: string; lineNum: number; filePath: string };
-
-export const EMPTY_SEARCH: SearchResponse = { files: [], modules: [], queryTime: 0, totalFiles: 0, totalModules: 0 };
+export const EMPTY_FIND: FindResponse = { results: [], queryTime: 0, extCounts: {}, catCounts: {} };
 
 export function HighlightedText({ text, indices }: { text: string; indices: number[] }) {
   if (indices.length === 0) return <>{text}</>;
@@ -33,33 +24,4 @@ export function HighlightedText({ text, indices }: { text: string; indices: numb
     parts.push(inMatch ? <mark key="end">{run}</mark> : <span key="end">{run}</span>);
   }
   return <>{parts}</>;
-}
-
-export function buildFlatResults(
-  results: SearchResponse,
-  grepResults: GrepResponse | null,
-): UnifiedResult[] {
-  const items: UnifiedResult[] = [];
-
-  if (results.modules.length > 0) {
-    items.push({ type: 'module-header' });
-    for (const m of results.modules) items.push({ type: 'module', data: m });
-  }
-
-  if (results.files.length > 0) {
-    items.push({ type: 'file-header' });
-    for (const f of results.files) items.push({ type: 'file', data: f });
-  }
-
-  if (grepResults && grepResults.results.length > 0) {
-    items.push({ type: 'content-header' });
-    for (const file of grepResults.results) {
-      items.push({ type: 'grep-file', data: file });
-      for (const match of file.matches) {
-        items.push({ type: 'grep-match', line: match.line, lineNum: match.lineNum, filePath: file.path });
-      }
-    }
-  }
-
-  return items;
 }

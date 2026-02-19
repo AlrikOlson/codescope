@@ -419,6 +419,328 @@ pub async fn api_search(
 }
 
 // ---------------------------------------------------------------------------
+// Unified Find (combined name + content search)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct FindQuery {
+    q: String,
+    ext: Option<String>,
+    cat: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct FindResultEntry {
+    path: String,
+    filename: String,
+    dir: String,
+    ext: String,
+    desc: String,
+    category: String,
+    #[serde(rename = "nameScore")]
+    name_score: f64,
+    #[serde(rename = "grepScore")]
+    grep_score: f64,
+    #[serde(rename = "combinedScore")]
+    combined_score: f64,
+    #[serde(rename = "matchType")]
+    match_type: String,
+    #[serde(rename = "grepCount")]
+    grep_count: usize,
+    #[serde(rename = "topMatch")]
+    top_match: Option<String>,
+    #[serde(rename = "topMatchLine")]
+    top_match_line: Option<usize>,
+    #[serde(rename = "filenameIndices")]
+    filename_indices: Vec<usize>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct FindResponse {
+    results: Vec<FindResultEntry>,
+    #[serde(rename = "queryTime")]
+    query_time: u64,
+    #[serde(rename = "extCounts")]
+    ext_counts: HashMap<String, usize>,
+    #[serde(rename = "catCounts")]
+    cat_counts: HashMap<String, usize>,
+}
+
+struct MergedFind {
+    path: String,
+    filename: String,
+    dir: String,
+    ext: String,
+    desc: String,
+    category: String,
+    name_score: f64,
+    grep_score: f64,
+    grep_count: usize,
+    top_match: Option<String>,
+    top_match_line: Option<usize>,
+    filename_indices: Vec<usize>,
+}
+
+pub async fn api_find(
+    State(ctx): State<AppContext>,
+    Query(q): Query<FindQuery>,
+) -> Result<Json<FindResponse>, (StatusCode, Json<serde_json::Value>)> {
+    if q.q.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "Query must be at least 1 character" })),
+        ));
+    }
+
+    let limit = q.limit.unwrap_or(50).min(200);
+    let ext_filter: Option<HashSet<String>> = q.ext.as_ref().map(|exts| {
+        exts.split(',')
+            .map(|e| {
+                let e = e.trim();
+                if let Some(stripped) = e.strip_prefix('.') {
+                    stripped.to_string()
+                } else {
+                    e.to_string()
+                }
+            })
+            .collect()
+    });
+    let cat_filter = q.cat.clone();
+    let raw_query = q.q.clone();
+
+    let state = ctx.state.clone();
+    let response = tokio::task::spawn_blocking(move || {
+        use rayon::prelude::*;
+
+        let s = state.read().expect("state lock poisoned");
+        let repo = s.default_repo();
+        let start = Instant::now();
+
+        let mut merged: HashMap<String, MergedFind> = HashMap::new();
+
+        // 1. Fuzzy filename search
+        let query = preprocess_search_query(&raw_query);
+        let search_resp = run_search(&repo.search_files, &repo.search_modules, &query, limit, 0);
+
+        for f in &search_resp.files {
+            if let Some(ref exts) = ext_filter {
+                let ext = f.ext.trim_start_matches('.');
+                if !exts.contains(ext) {
+                    continue;
+                }
+            }
+            if let Some(ref cat) = cat_filter {
+                if !f.category.starts_with(cat.as_str()) {
+                    continue;
+                }
+            }
+            merged.insert(
+                f.path.clone(),
+                MergedFind {
+                    path: f.path.clone(),
+                    filename: f.filename.clone(),
+                    dir: f.dir.clone(),
+                    ext: f.ext.clone(),
+                    desc: f.desc.clone(),
+                    category: f.category.clone(),
+                    name_score: f.score,
+                    grep_score: 0.0,
+                    grep_count: 0,
+                    top_match: None,
+                    top_match_line: None,
+                    filename_indices: f.filename_indices.clone(),
+                },
+            );
+        }
+
+        // 2. Content grep (only if query is >= 2 chars)
+        if raw_query.len() >= 2 {
+            let terms: Vec<String> = raw_query.split_whitespace().map(|s| s.to_string()).collect();
+            let terms_lower: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
+            let pattern_str = terms
+                .iter()
+                .map(|t| regex::escape(t))
+                .collect::<Vec<_>>()
+                .join("|");
+
+            if let Ok(pattern) = RegexBuilder::new(&pattern_str)
+                .case_insensitive(true)
+                .build()
+            {
+                let candidates: Vec<&ScannedFile> = repo
+                    .all_files
+                    .iter()
+                    .filter(|f| {
+                        if let Some(ref exts) = ext_filter {
+                            if !exts.contains(&f.ext) {
+                                return false;
+                            }
+                        }
+                        if let Some(ref cat) = cat_filter {
+                            let file_cat =
+                                get_category_path(&f.rel_path, &repo.config).join(" > ");
+                            if !file_cat.starts_with(cat.as_str()) {
+                                return false;
+                            }
+                        }
+                        true
+                    })
+                    .collect();
+
+                let grep_results: Vec<(String, f64, usize, Option<String>, Option<usize>, String, String, String, String)> = candidates
+                    .par_iter()
+                    .filter_map(|file| {
+                        let content = fs::read_to_string(&file.abs_path).ok()?;
+                        let total_lines = content.lines().count().max(1);
+                        let mut match_count = 0usize;
+                        let mut first_match: Option<String> = None;
+                        let mut first_match_line: Option<usize> = None;
+                        for (i, line) in content.lines().enumerate() {
+                            if pattern.is_match(line) {
+                                match_count += 1;
+                                if first_match.is_none() {
+                                    let trimmed = if line.len() > 120 {
+                                        format!("{}...", &line[..120])
+                                    } else {
+                                        line.to_string()
+                                    };
+                                    first_match = Some(trimmed);
+                                    first_match_line = Some(i + 1);
+                                }
+                            }
+                        }
+                        if match_count == 0 {
+                            return None;
+                        }
+
+                        let filename = file
+                            .rel_path
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or(&file.rel_path)
+                            .to_lowercase();
+                        let grep_score = grep_relevance_score(
+                            match_count, total_lines, &filename, &file.ext, &terms_lower,
+                        );
+
+                        let fname = file
+                            .rel_path
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or(&file.rel_path)
+                            .to_string();
+                        let dir = file
+                            .rel_path
+                            .rsplit_once('/')
+                            .map(|(d, _)| d.to_string())
+                            .unwrap_or_default();
+                        let ext = file.ext.clone();
+                        let category = get_category_path(&file.rel_path, &repo.config).join(" > ");
+
+                        Some((
+                            file.rel_path.clone(),
+                            grep_score,
+                            match_count,
+                            first_match,
+                            first_match_line,
+                            fname,
+                            dir,
+                            ext,
+                            category,
+                        ))
+                    })
+                    .collect();
+
+                for (path, grep_score, match_count, first_match, first_match_line, fname, dir, ext, category) in grep_results {
+                    let entry = merged.entry(path.clone()).or_insert_with(|| MergedFind {
+                        path,
+                        filename: fname,
+                        dir,
+                        ext,
+                        desc: String::new(),
+                        category,
+                        name_score: 0.0,
+                        grep_score: 0.0,
+                        grep_count: 0,
+                        top_match: None,
+                        top_match_line: None,
+                        filename_indices: Vec::new(),
+                    });
+                    entry.grep_score = grep_score;
+                    entry.grep_count = match_count;
+                    entry.top_match = first_match;
+                    entry.top_match_line = first_match_line;
+                }
+            }
+        }
+
+        // 3. Score, sort, truncate
+        let mut ranked: Vec<MergedFind> = merged.into_values().collect();
+        ranked.sort_by(|a, b| {
+            let score_a = a.name_score * 0.6 + a.grep_score * 0.4;
+            let score_b = b.name_score * 0.6 + b.grep_score * 0.4;
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        ranked.truncate(limit);
+
+        // 4. Build response
+        let mut ext_counts: HashMap<String, usize> = HashMap::new();
+        let mut cat_counts: HashMap<String, usize> = HashMap::new();
+        let results: Vec<FindResultEntry> = ranked
+            .into_iter()
+            .map(|r| {
+                let combined_score = r.name_score * 0.6 + r.grep_score * 0.4;
+                let match_type = if r.name_score > 0.0 && r.grep_count > 0 {
+                    "both".to_string()
+                } else if r.name_score > 0.0 {
+                    "name".to_string()
+                } else {
+                    "content".to_string()
+                };
+
+                *ext_counts.entry(r.ext.clone()).or_insert(0) += 1;
+                if !r.category.is_empty() {
+                    *cat_counts.entry(r.category.clone()).or_insert(0) += 1;
+                }
+
+                FindResultEntry {
+                    path: r.path,
+                    filename: r.filename,
+                    dir: r.dir,
+                    ext: r.ext,
+                    desc: r.desc,
+                    category: r.category,
+                    name_score: r.name_score,
+                    grep_score: r.grep_score,
+                    combined_score,
+                    match_type,
+                    grep_count: r.grep_count,
+                    top_match: r.top_match,
+                    top_match_line: r.top_match_line,
+                    filename_indices: r.filename_indices,
+                }
+            })
+            .collect();
+
+        let query_time = start.elapsed().as_millis() as u64;
+
+        FindResponse {
+            results,
+            query_time,
+            ext_counts,
+            cat_counts,
+        }
+    })
+    .await
+    .unwrap();
+
+    Ok(Json(response))
+}
+
+// ---------------------------------------------------------------------------
 // Import graph
 // ---------------------------------------------------------------------------
 

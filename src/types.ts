@@ -86,6 +86,31 @@ export interface GrepResponse {
   queryTime: number;
 }
 
+// Unified find (combined name + content search)
+export interface FindResult {
+  path: string;
+  filename: string;
+  dir: string;
+  ext: string;
+  desc: string;
+  category: string;
+  nameScore: number;
+  grepScore: number;
+  combinedScore: number;
+  matchType: 'name' | 'content' | 'both';
+  grepCount: number;
+  topMatch: string | null;
+  topMatchLine: number | null;
+  filenameIndices: number[];
+}
+
+export interface FindResponse {
+  results: FindResult[];
+  queryTime: number;
+  extCounts: Record<string, number>;
+  catCounts: Record<string, number>;
+}
+
 // Collections
 export interface Collection {
   id: string;

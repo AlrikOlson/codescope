@@ -473,6 +473,7 @@ async fn main() {
         .route("/api/files", post(api_files))
         .route("/api/grep", get(api_grep))
         .route("/api/search", get(api_search))
+        .route("/api/find", get(api_find))
         .route("/api/context", post(api_context))
         .route("/api/imports", get(api_imports))
         .fallback_service(

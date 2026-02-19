@@ -4,7 +4,6 @@ import FileList from './FileList';
 import CodebaseMap from './treemap/CodebaseMap';
 import DependencyGraph from './depgraph/DependencyGraph';
 import ContextPanel from './ContextPanel';
-import SearchPalette from './SearchPalette';
 import SearchSidebar from './SearchSidebar';
 import FilePreview from './FilePreview';
 import StatsDashboard from './StatsDashboard';
@@ -35,7 +34,6 @@ export default function App() {
   const [viewMode, setViewMode] = useState<'list' | 'map' | 'graph' | 'stats'>('list');
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<ActivityPanel | null>('tree');
-  const [paletteOpen, setPaletteOpen] = useState(false);
 
   // Theme
   const [theme, setTheme] = useState<'system' | 'light' | 'dark'>(() => {
@@ -142,8 +140,9 @@ export default function App() {
     setGlobalSearch(null);
   }, []);
 
-  const handleGlobalSearchPaths = useCallback((paths: Map<string, number>, label: string) => {
-    setGlobalSearch(label);
+  // Search results callback from SearchSidebar
+  const handleSearchResults = useCallback((paths: Map<string, number>, query: string) => {
+    setGlobalSearch(query);
     setGlobalSearchPaths(paths);
     setActiveCategory(null);
   }, []);
@@ -208,13 +207,6 @@ export default function App() {
 
   const handlePreview = useCallback((path: string) => {
     setPreviewPath(prev => prev === path ? null : path);
-  }, []);
-
-  const handleSmartSelect = useCallback((paths: string[], scores: Map<string, number>, query: string) => {
-    setSelected(new Set(paths));
-    setGlobalSearch(query);
-    setGlobalSearchPaths(scores);
-    setActiveCategory(null);
   }, []);
 
   const handleRemoveFile = useCallback((path: string) => {
@@ -313,13 +305,10 @@ export default function App() {
           panels={{
             search: (
               <SearchSidebar
-                manifest={manifest}
                 selected={selected}
-                onNavigateModule={handleNavigateModule}
                 onToggleFile={handleToggleFile}
                 onPreview={handlePreview}
-                onSmartSelect={handleSmartSelect}
-                onGlobalSearchPaths={handleGlobalSearchPaths}
+                onSearchResults={handleSearchResults}
                 autoFocus={activePanel === 'search'}
               />
             ),
@@ -430,19 +419,6 @@ export default function App() {
           </div>
         )}
       </div>
-
-      {paletteOpen && (
-        <SearchPalette
-          manifest={manifest}
-          selected={selected}
-          onClose={() => setPaletteOpen(false)}
-          onNavigateModule={handleNavigateModule}
-          onToggleFile={handleToggleFile}
-          onGlobalSearchPaths={handleGlobalSearchPaths}
-          onSmartSelect={handleSmartSelect}
-          onPreview={handlePreview}
-        />
-      )}
     </div>
   );
 }
