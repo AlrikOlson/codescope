@@ -82,9 +82,9 @@ async function main() {
         cwd: process.cwd(),
       },
     })) {
-      // Log tool usage for CI visibility
-      if (message.type === "assistant") {
-        for (const block of message.content) {
+      // SDKAssistantMessage: content is at message.message.content
+      if (message.type === "assistant" && message.message?.content) {
+        for (const block of message.message.content) {
           if (block.type === "tool_use") {
             console.error(`[codescope] Using tool: ${block.name}`);
           }
@@ -95,13 +95,12 @@ async function main() {
         }
       }
 
-      if (message.type === "result") {
-        if (message.subtype === "success") {
-          lastText = message.result;
-          console.error(`[result] ${message.result}`);
-        } else {
-          console.error(`[error] ${JSON.stringify(message)}`);
-        }
+      // SDKResultMessage: final result
+      if ("result" in message && message.subtype === "success") {
+        lastText = message.result;
+        console.error(`[result] ${message.result}`);
+      } else if ("result" in message) {
+        console.error(`[error] ${JSON.stringify(message)}`);
       }
     }
   } catch (err) {
