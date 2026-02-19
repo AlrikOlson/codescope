@@ -26,6 +26,7 @@ Usage:
   bash setup.sh [options] [/path/to/project]
 
 Options:
+  --edge            Install bleeding-edge build from latest master commit
   --with-semantic   Enable ML-powered semantic search
   --from-source     Force compilation from source instead of downloading a binary
   --help, -h        Show this help
@@ -37,6 +38,9 @@ Examples:
   # Install and set up a project in one step
   bash setup.sh /path/to/my/project
 
+  # Install bleeding-edge build (latest master commit)
+  bash setup.sh --edge
+
   # Install with semantic search (downloads pre-built binary with ML support)
   bash setup.sh --with-semantic
 EOF
@@ -45,11 +49,13 @@ EOF
 # --- Parse flags ---
 WITH_SEMANTIC=0
 FROM_SOURCE=0
+EDGE=0
 PROJECT_PATH=""
 for arg in "$@"; do
     case "$arg" in
         --with-semantic) WITH_SEMANTIC=1 ;;
         --from-source)   FROM_SOURCE=1 ;;
+        --edge)          EDGE=1 ;;
         --help|-h)       usage; exit 0 ;;
         --)              ;; # ignore -- separator from curl pipe
         -*)              err "Unknown flag: $arg"; usage; exit 1 ;;
@@ -84,9 +90,16 @@ detect_platform() {
 # --- Download pre-built binary ---
 download_binary() {
     local platform="$1"
-    local api_url="https://api.github.com/repos/$REPO/releases/latest"
+    local api_url
+    if [ "$EDGE" = "1" ]; then
+        api_url="https://api.github.com/repos/$REPO/releases/tags/edge"
+    else
+        api_url="https://api.github.com/repos/$REPO/releases/latest"
+    fi
 
-    info "Checking for latest release..."
+    local channel="stable"
+    [ "$EDGE" = "1" ] && channel="edge"
+    info "Checking for latest $channel release..."
     local release_json
     if ! release_json="$(curl -fsSL --connect-timeout 10 --max-time 30 "$api_url" 2>/dev/null)"; then
         err "Could not reach GitHub. Check your internet connection."
@@ -329,11 +342,19 @@ echo "       codescope-server init"
 echo ""
 echo "    2. Open Claude Code in that directory — CodeScope is ready to use."
 echo ""
+if [ "$EDGE" = "1" ]; then
+    ok "Edge channel — built from latest master commit"
+    echo ""
+fi
 if [ "$WITH_SEMANTIC" = "1" ]; then
     ok "Semantic search enabled (ML model downloads on first use, ~90MB)"
     echo ""
 else
     echo "  Optional: re-run with --with-semantic for ML-powered search"
+    echo ""
+fi
+if [ "$EDGE" = "0" ]; then
+    echo "  Optional: re-run with --edge for bleeding-edge builds"
     echo ""
 fi
 if ! command -v codescope-server >/dev/null 2>&1; then
