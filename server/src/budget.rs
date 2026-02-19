@@ -225,9 +225,7 @@ fn build_reverse_deps(deps: &BTreeMap<String, DepEntry>) -> HashMap<String, Hash
     let mut rev: HashMap<String, HashSet<String>> = HashMap::new();
     for (module, entry) in deps {
         for dep in entry.public.iter().chain(entry.private.iter()) {
-            rev.entry(dep.clone())
-                .or_default()
-                .insert(module.clone());
+            rev.entry(dep.clone()).or_default().insert(module.clone());
         }
     }
     rev
@@ -329,10 +327,7 @@ fn allocate_file_budgets(
     }
 
     // Remaining unlocked files: split leftover upgrade budget proportionally
-    let unlocked_weight: f64 = (0..n)
-        .filter(|&i| !locked[i])
-        .map(|i| weights[i])
-        .sum();
+    let unlocked_weight: f64 = (0..n).filter(|&i| !locked[i]).map(|i| weights[i]).sum();
 
     if unlocked_weight > 0.0 && remaining > 0 {
         for i in 0..n {
@@ -351,11 +346,8 @@ fn allocate_file_budgets(
 /// Prune blocks within a file to fit its allocated budget.
 /// Keeps the highest-scored blocks (full or summary), preserving original order.
 fn prune_blocks(blocks: &[StubBlock], query_terms: &[String], file_budget: usize) -> String {
-    let mut scored: Vec<(usize, f64)> = blocks
-        .iter()
-        .enumerate()
-        .map(|(i, b)| (i, score_block(b, query_terms)))
-        .collect();
+    let mut scored: Vec<(usize, f64)> =
+        blocks.iter().enumerate().map(|(i, b)| (i, score_block(b, query_terms))).collect();
 
     // Sort by score descending — highest priority blocks first
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -378,11 +370,7 @@ fn prune_blocks(blocks: &[StubBlock], query_terms: &[String], file_budget: usize
     // Re-sort by original position to preserve file structure
     selected.sort_by_key(|(idx, _)| *idx);
 
-    selected
-        .into_iter()
-        .map(|(_, text)| text)
-        .collect::<Vec<_>>()
-        .join("")
+    selected.into_iter().map(|(_, text)| text).collect::<Vec<_>>().join("")
 }
 
 // ---------------------------------------------------------------------------
@@ -402,26 +390,17 @@ pub fn allocate_budget(
     tokenizer: &dyn Tokenizer,
     config: &ScanConfig,
 ) -> ContextResponse {
-    let desc_map: HashMap<&str, &str> = all_files
-        .iter()
-        .map(|f| (f.rel_path.as_str(), f.desc.as_str()))
-        .collect();
+    let desc_map: HashMap<&str, &str> =
+        all_files.iter().map(|f| (f.rel_path.as_str(), f.desc.as_str())).collect();
 
     // Query terms are the primary relevance signal
     let query_terms: Vec<String> = query
-        .map(|q| {
-            q.split_whitespace()
-                .filter(|w| w.len() >= 2)
-                .map(|w| w.to_lowercase())
-                .collect()
-        })
+        .map(|q| q.split_whitespace().filter(|w| w.len() >= 2).map(|w| w.to_lowercase()).collect())
         .unwrap_or_default();
 
     // Build dep connectivity structures (only if we have a query)
-    let dep_cat_prefixes: Vec<(String, String)> = deps
-        .iter()
-        .map(|(name, entry)| (name.clone(), entry.category_path.clone()))
-        .collect();
+    let dep_cat_prefixes: Vec<(String, String)> =
+        deps.iter().map(|(name, entry)| (name.clone(), entry.category_path.clone())).collect();
     let reverse_deps = build_reverse_deps(deps);
 
     // Phase 1: Load files in parallel, using cache for stubs + reads
@@ -496,8 +475,7 @@ pub fn allocate_budget(
                             },
                         );
 
-                        let importance =
-                            compute_importance(p, &raw, file_size, &query_terms);
+                        let importance = compute_importance(p, &raw, file_size, &query_terms);
 
                         LoadResult::Ok(LoadedFile {
                             path: p.clone(),
@@ -625,9 +603,7 @@ pub fn allocate_budget(
     total = files.iter().map(|f| f.current_cost).sum();
     if total > budget {
         files.sort_by(|a, b| {
-            a.importance
-                .partial_cmp(&b.importance)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            a.importance.partial_cmp(&b.importance).unwrap_or(std::cmp::Ordering::Equal)
         });
         for file in files.iter_mut() {
             if total <= budget {
@@ -665,9 +641,7 @@ fn build_context_response(
 
     // Sort by importance descending (query relevance dominates)
     files.sort_by(|a, b| {
-        b.importance
-            .partial_cmp(&a.importance)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let mut result_files: HashMap<String, ContextFileEntry> = HashMap::new();
@@ -693,13 +667,7 @@ fn build_context_response(
 
         result_files.insert(
             file.path,
-            ContextFileEntry {
-                content,
-                tier,
-                tokens: tok,
-                importance: file.importance,
-                order,
-            },
+            ContextFileEntry { content, tier, tokens: tok, importance: file.importance, order },
         );
         order += 1;
     }

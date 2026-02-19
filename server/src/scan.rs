@@ -50,8 +50,9 @@ pub fn describe(rel_path: &str) -> String {
         // Config
         "ini" | "cfg" | "conf" | "toml" | "yaml" | "yml" | "json" | "xml" => "config",
         // Scripts
-        "py" | "rb" | "lua" | "sh" | "bash" | "zsh" | "ps1" | "psm1" | "psd1" | "bat"
-        | "cmd" => "script",
+        "py" | "rb" | "lua" | "sh" | "bash" | "zsh" | "ps1" | "psm1" | "psd1" | "bat" | "cmd" => {
+            "script"
+        }
         // C# source
         "cs" => "source",
         // Build
@@ -82,9 +83,7 @@ pub fn get_category_path(rel_path: &str, config: &ScanConfig) -> Vec<String> {
     // Strip any matching scan_dirs prefix
     for scan_dir in &config.scan_dirs {
         let prefix_parts: Vec<&str> = scan_dir.split('/').collect();
-        if parts.len() > prefix_parts.len()
-            && parts[..prefix_parts.len()] == prefix_parts[..]
-        {
+        if parts.len() > prefix_parts.len() && parts[..prefix_parts.len()] == prefix_parts[..] {
             parts = parts[prefix_parts.len()..].to_vec();
             break;
         }
@@ -175,10 +174,7 @@ fn walk_files_parallel(
                     }
 
                     let abs_path = entry.path().to_path_buf();
-                    let ext_str = abs_path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("");
+                    let ext_str = abs_path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
                     if let Some(exts) = ext_filter {
                         if !exts.contains(ext_str) {
@@ -208,33 +204,20 @@ fn walk_files_parallel(
 /// Walk the project directory tree and return all discovered files plus a category-keyed manifest.
 pub fn scan_files(config: &ScanConfig) -> (Vec<ScannedFile>, BTreeMap<String, Vec<FileEntry>>) {
     // If scan_dirs is empty, scan root itself
-    let scan_dirs: Vec<String> = if config.scan_dirs.is_empty() {
-        vec![".".to_string()]
-    } else {
-        config.scan_dirs.clone()
-    };
+    let scan_dirs: Vec<String> =
+        if config.scan_dirs.is_empty() { vec![".".to_string()] } else { config.scan_dirs.clone() };
 
     // Extension filter: None means scan all (with text check)
-    let ext_filter: Option<HashSet<String>> = if config.extensions.is_empty() {
-        None
-    } else {
-        Some(config.extensions.clone())
-    };
+    let ext_filter: Option<HashSet<String>> =
+        if config.extensions.is_empty() { None } else { Some(config.extensions.clone()) };
 
     // Parallel walk
-    let raw_files = walk_files_parallel(
-        &config.root,
-        &scan_dirs,
-        &config.skip_dirs,
-        ext_filter.as_ref(),
-    );
+    let raw_files =
+        walk_files_parallel(&config.root, &scan_dirs, &config.skip_dirs, ext_filter.as_ref());
 
     // If no extension filter, apply binary file check
     let raw_files: Vec<(std::path::PathBuf, String)> = if ext_filter.is_none() {
-        raw_files
-            .into_par_iter()
-            .filter(|(abs_path, _)| is_text_file(abs_path))
-            .collect()
+        raw_files.into_par_iter().filter(|(abs_path, _)| is_text_file(abs_path)).collect()
     } else {
         raw_files
     };
@@ -247,11 +230,7 @@ pub fn scan_files(config: &ScanConfig) -> (Vec<ScannedFile>, BTreeMap<String, Ve
             let desc = describe(rel_path);
             let cat_parts = get_category_path(rel_path, config);
             let cat_key = cat_parts.join(" > ");
-            let ext = abs_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_string();
+            let ext = abs_path.extension().and_then(|e| e.to_str()).unwrap_or("").to_string();
 
             let scanned = ScannedFile {
                 rel_path: rel_path.clone(),
@@ -259,11 +238,7 @@ pub fn scan_files(config: &ScanConfig) -> (Vec<ScannedFile>, BTreeMap<String, Ve
                 desc: desc.clone(),
                 ext,
             };
-            let entry = FileEntry {
-                path: rel_path.clone(),
-                desc,
-                size,
-            };
+            let entry = FileEntry { path: rel_path.clone(), desc, size };
             (scanned, cat_key, entry)
         })
         .collect();
@@ -338,11 +313,7 @@ struct CargoTomlScanner;
 
 impl DependencyScanner for CargoTomlScanner {
     fn matches(&self, abs_path: &Path) -> bool {
-        abs_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n == "Cargo.toml")
-            .unwrap_or(false)
+        abs_path.file_name().and_then(|n| n.to_str()).map(|n| n == "Cargo.toml").unwrap_or(false)
     }
 
     fn module_name(&self, abs_path: &Path) -> Option<String> {
@@ -404,11 +375,7 @@ struct PackageJsonScanner;
 
 impl DependencyScanner for PackageJsonScanner {
     fn matches(&self, abs_path: &Path) -> bool {
-        abs_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n == "package.json")
-            .unwrap_or(false)
+        abs_path.file_name().and_then(|n| n.to_str()).map(|n| n == "package.json").unwrap_or(false)
     }
 
     fn module_name(&self, abs_path: &Path) -> Option<String> {
@@ -433,10 +400,7 @@ impl DependencyScanner for PackageJsonScanner {
         };
 
         let extract_keys = |key: &str| -> Vec<String> {
-            json[key]
-                .as_object()
-                .map(|obj| obj.keys().cloned().collect())
-                .unwrap_or_default()
+            json[key].as_object().map(|obj| obj.keys().cloned().collect()).unwrap_or_default()
         };
 
         (extract_keys("dependencies"), extract_keys("devDependencies"))
@@ -448,11 +412,7 @@ struct GoModScanner;
 
 impl DependencyScanner for GoModScanner {
     fn matches(&self, abs_path: &Path) -> bool {
-        abs_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n == "go.mod")
-            .unwrap_or(false)
+        abs_path.file_name().and_then(|n| n.to_str()).map(|n| n == "go.mod").unwrap_or(false)
     }
 
     fn module_name(&self, abs_path: &Path) -> Option<String> {
@@ -461,12 +421,7 @@ impl DependencyScanner for GoModScanner {
             if let Some(cap) = module_re.captures(&content) {
                 // Use the last path component as the short name
                 let full = &cap[1];
-                return Some(
-                    full.rsplit('/')
-                        .next()
-                        .unwrap_or(full)
-                        .to_string(),
-                );
+                return Some(full.rsplit('/').next().unwrap_or(full).to_string());
             }
         }
         abs_path
@@ -507,22 +462,15 @@ impl DependencyScanner for GoModScanner {
 
 /// Get the default set of dependency scanners.
 fn default_scanners() -> Vec<Box<dyn DependencyScanner>> {
-    vec![
-        Box::new(CargoTomlScanner),
-        Box::new(PackageJsonScanner),
-        Box::new(GoModScanner),
-    ]
+    vec![Box::new(CargoTomlScanner), Box::new(PackageJsonScanner), Box::new(GoModScanner)]
 }
 
 /// Scan for dependency manifest files (Cargo.toml, package.json, go.mod) and extract module dependencies.
 pub fn scan_deps(config: &ScanConfig) -> BTreeMap<String, DepEntry> {
     let scanners = default_scanners();
 
-    let scan_dirs: Vec<String> = if config.scan_dirs.is_empty() {
-        vec![".".to_string()]
-    } else {
-        config.scan_dirs.clone()
-    };
+    let scan_dirs: Vec<String> =
+        if config.scan_dirs.is_empty() { vec![".".to_string()] } else { config.scan_dirs.clone() };
 
     // Walk all files — no ext filter, scanners decide what they match
     let raw_files = walk_files_parallel(&config.root, &scan_dirs, &config.skip_dirs, None);
@@ -556,20 +504,11 @@ pub fn scan_deps(config: &ScanConfig) -> BTreeMap<String, DepEntry> {
                     break;
                 }
             }
-            let filtered: Vec<&str> = filtered_parts
-                .into_iter()
-                .filter(|p| !config.noise_dirs.contains(*p))
-                .collect();
+            let filtered: Vec<&str> =
+                filtered_parts.into_iter().filter(|p| !config.noise_dirs.contains(*p)).collect();
             let category_path = filtered.join(" > ");
 
-            Some((
-                module_name,
-                DepEntry {
-                    public,
-                    private,
-                    category_path,
-                },
-            ))
+            Some((module_name, DepEntry { public, private, category_path }))
         })
         .collect();
 
@@ -612,17 +551,9 @@ pub fn build_search_index(
             entries
                 .iter()
                 .map(|entry| {
-                    let filename = entry
-                        .path
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(&entry.path)
-                        .to_string();
-                    let dir = entry
-                        .path
-                        .rsplit_once('/')
-                        .map(|(d, _)| d.to_string())
-                        .unwrap_or_default();
+                    let filename = entry.path.rsplit('/').next().unwrap_or(&entry.path).to_string();
+                    let dir =
+                        entry.path.rsplit_once('/').map(|(d, _)| d.to_string()).unwrap_or_default();
                     let ext = entry
                         .path
                         .rsplit_once('.')
@@ -698,10 +629,7 @@ pub fn build_term_doc_freq(all_files: &[ScannedFile]) -> crate::types::TermDocFr
 
 /// Extension families for import pattern matching
 fn import_exts_cpp() -> HashSet<&'static str> {
-    ["h", "cpp", "c", "cc", "cxx", "hpp", "hxx", "usf", "ush", "hlsl"]
-        .iter()
-        .copied()
-        .collect()
+    ["h", "cpp", "c", "cc", "cxx", "hpp", "hxx", "usf", "ush", "hlsl"].iter().copied().collect()
 }
 
 fn import_exts_python() -> HashSet<&'static str> {
@@ -709,10 +637,7 @@ fn import_exts_python() -> HashSet<&'static str> {
 }
 
 fn import_exts_js() -> HashSet<&'static str> {
-    ["js", "ts", "jsx", "tsx", "mjs", "cjs"]
-        .iter()
-        .copied()
-        .collect()
+    ["js", "ts", "jsx", "tsx", "mjs", "cjs"].iter().copied().collect()
 }
 
 fn import_exts_rust() -> HashSet<&'static str> {
@@ -753,10 +678,11 @@ pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
     let go_import_re = regex::Regex::new(r#"import\s+(?:\(\s*)?(?:"([^"]+)")"#).unwrap();
     let cs_using_re = regex::Regex::new(r#"(?m)^using\s+(?:static\s+)?([\w.]+)\s*;"#).unwrap();
     // PowerShell: dot-source (. .\file.ps1) and Import-Module
-    let ps_dotsource_re = regex::Regex::new(r#"(?m)\.\s+['".]?\.?[\\/]?([^\s'"]+\.ps[md]?1)"#).unwrap();
-    let ps_import_re = regex::Regex::new(r#"(?mi)Import-Module\s+['".]?\.?[\\/]?([^\s'";\)]+)"#).unwrap();
-    let cs_namespace_re =
-        regex::Regex::new(r#"(?m)^(?:namespace\s+([\w.]+))"#).unwrap();
+    let ps_dotsource_re =
+        regex::Regex::new(r#"(?m)\.\s+['".]?\.?[\\/]?([^\s'"]+\.ps[md]?1)"#).unwrap();
+    let ps_import_re =
+        regex::Regex::new(r#"(?mi)Import-Module\s+['".]?\.?[\\/]?([^\s'";\)]+)"#).unwrap();
+    let cs_namespace_re = regex::Regex::new(r#"(?m)^(?:namespace\s+([\w.]+))"#).unwrap();
 
     // Build a lookup: filename (without ext) → Vec<rel_path> for resolving imports
     let mut filename_to_paths: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -769,19 +695,14 @@ pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
             .push(f.rel_path.clone());
 
         let stem = full_filename.rsplit_once('.').map(|(s, _)| s).unwrap_or(full_filename);
-        filename_to_paths
-            .entry(stem.to_string())
-            .or_default()
-            .push(f.rel_path.clone());
+        filename_to_paths.entry(stem.to_string()).or_default().push(f.rel_path.clone());
     }
 
     // Build namespace → files index for C# resolution
     let namespace_to_files: BTreeMap<String, Vec<String>> = {
         let mut ns_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        let cs_files: Vec<&ScannedFile> = all_files
-            .iter()
-            .filter(|f| cs_exts.contains(f.ext.as_str()))
-            .collect();
+        let cs_files: Vec<&ScannedFile> =
+            all_files.iter().filter(|f| cs_exts.contains(f.ext.as_str())).collect();
         let ns_pairs: Vec<(String, String)> = cs_files
             .par_iter()
             .filter_map(|f| {
@@ -808,20 +729,15 @@ pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
                 return Some(candidates[0].clone());
             }
             // Multiple files with same name — pick the one whose path ends with the import
-            let best = candidates
-                .iter()
-                .find(|c| c.ends_with(import_str))
-                .or_else(|| candidates.first());
+            let best =
+                candidates.iter().find(|c| c.ends_with(import_str)).or_else(|| candidates.first());
             if let Some(b) = best {
                 return Some(b.clone());
             }
         }
 
         // Try matching the last component of a dotted/slashed path to filename stems
-        let last_component = import_str
-            .rsplit(&['.', '/'][..])
-            .next()
-            .unwrap_or(import_str);
+        let last_component = import_str.rsplit(&['.', '/'][..]).next().unwrap_or(import_str);
         if let Some(candidates) = filename_to_paths.get(last_component) {
             if candidates.len() == 1 {
                 return Some(candidates[0].clone());
@@ -861,11 +777,8 @@ pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
 
             if py_exts.contains(ext) {
                 for cap in py_import_re.captures_iter(&content) {
-                    let import_str = cap
-                        .get(1)
-                        .or_else(|| cap.get(2))
-                        .map(|m| m.as_str())
-                        .unwrap_or("");
+                    let import_str =
+                        cap.get(1).or_else(|| cap.get(2)).map(|m| m.as_str()).unwrap_or("");
                     if !import_str.is_empty() {
                         if let Some(path) = resolve_import(import_str) {
                             resolved.push(path);
@@ -876,11 +789,8 @@ pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
 
             if js_exts.contains(ext) {
                 for cap in js_import_re.captures_iter(&content) {
-                    let import_str = cap
-                        .get(1)
-                        .or_else(|| cap.get(2))
-                        .map(|m| m.as_str())
-                        .unwrap_or("");
+                    let import_str =
+                        cap.get(1).or_else(|| cap.get(2)).map(|m| m.as_str()).unwrap_or("");
                     if !import_str.is_empty() && !import_str.starts_with('.') {
                         // Skip relative imports for now, they need path resolution
                         if let Some(path) = resolve_import(import_str) {
@@ -897,11 +807,8 @@ pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
 
             if rust_exts.contains(ext) {
                 for cap in rust_import_re.captures_iter(&content) {
-                    let import_str = cap
-                        .get(1)
-                        .or_else(|| cap.get(2))
-                        .map(|m| m.as_str())
-                        .unwrap_or("");
+                    let import_str =
+                        cap.get(1).or_else(|| cap.get(2)).map(|m| m.as_str()).unwrap_or("");
                     if !import_str.is_empty() {
                         if let Some(path) = resolve_import(import_str) {
                             resolved.push(path);
@@ -987,10 +894,7 @@ pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
 
     for (file, deps) in pairs {
         for dep in &deps {
-            imported_by
-                .entry(dep.clone())
-                .or_default()
-                .push(file.clone());
+            imported_by.entry(dep.clone()).or_default().push(file.clone());
         }
         imports.insert(file, deps);
     }
@@ -1000,10 +904,7 @@ pub fn scan_imports(all_files: &[ScannedFile]) -> ImportGraph {
         list.sort();
     }
 
-    ImportGraph {
-        imports,
-        imported_by,
-    }
+    ImportGraph { imports, imported_by }
 }
 
 // ---------------------------------------------------------------------------
@@ -1024,10 +925,7 @@ pub fn resolve_cross_repo_imports(
     for repo in repos.values() {
         for f in &repo.all_files {
             let full_filename = f.rel_path.rsplit('/').next().unwrap_or(&f.rel_path);
-            let stem = full_filename
-                .rsplit_once('.')
-                .map(|(s, _)| s)
-                .unwrap_or(full_filename);
+            let stem = full_filename.rsplit_once('.').map(|(s, _)| s).unwrap_or(full_filename);
             global_lookup
                 .entry(stem.to_string())
                 .or_default()
@@ -1040,7 +938,8 @@ pub fn resolve_cross_repo_imports(
     for repo in repos.values() {
         // Find imports that didn't resolve within the repo
         // (files referenced in import directives but not in the repo's own import graph)
-        let local_files: HashSet<&str> = repo.all_files.iter().map(|f| f.rel_path.as_str()).collect();
+        let local_files: HashSet<&str> =
+            repo.all_files.iter().map(|f| f.rel_path.as_str()).collect();
 
         for (file, imported_files) in &repo.import_graph.imports {
             for imported in imported_files {

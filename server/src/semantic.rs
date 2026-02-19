@@ -66,7 +66,9 @@ fn extract_chunks(files: &[ScannedFile]) -> Vec<Chunk> {
                 current_chunk.clear();
                 chunk_start_line = line_num + 1;
             } else {
-                if current_chunk.len() + line.len() + 1 > MAX_CHUNK_CHARS && !current_chunk.is_empty() {
+                if current_chunk.len() + line.len() + 1 > MAX_CHUNK_CHARS
+                    && !current_chunk.is_empty()
+                {
                     chunks.push(Chunk {
                         file_path: file.rel_path.clone(),
                         start_line: chunk_start_line,
@@ -106,20 +108,15 @@ fn load_model() -> Result<(BertModel, Tokenizer), String> {
     let api = Api::new().map_err(|e| format!("Failed to create HF API: {e}"))?;
 
     // Set cache dir to ~/.cache/codescope/models/ if possible
-    let repo = api.repo(Repo::with_revision(
-        MODEL_ID.to_string(),
-        RepoType::Model,
-        "main".to_string(),
-    ));
+    let repo =
+        api.repo(Repo::with_revision(MODEL_ID.to_string(), RepoType::Model, "main".to_string()));
 
     eprintln!("  [semantic] Downloading/loading model {MODEL_ID}...");
 
-    let config_path = repo
-        .get("config.json")
-        .map_err(|e| format!("Failed to get config.json: {e}"))?;
-    let tokenizer_path = repo
-        .get("tokenizer.json")
-        .map_err(|e| format!("Failed to get tokenizer.json: {e}"))?;
+    let config_path =
+        repo.get("config.json").map_err(|e| format!("Failed to get config.json: {e}"))?;
+    let tokenizer_path =
+        repo.get("tokenizer.json").map_err(|e| format!("Failed to get tokenizer.json: {e}"))?;
     let weights_path = repo
         .get("model.safetensors")
         .map_err(|e| format!("Failed to get model.safetensors: {e}"))?;
@@ -188,15 +185,16 @@ fn encode_batch(
     }
 
     let batch_size = texts.len();
-    let input_ids =
-        Tensor::from_vec(all_ids, (batch_size, max_len), &device)
-            .map_err(|e| format!("Tensor creation failed: {e}"))?;
-    let attention_mask =
-        Tensor::from_vec(all_mask.iter().map(|&x| x as f32).collect::<Vec<_>>(), (batch_size, max_len), &device)
-            .map_err(|e| format!("Tensor creation failed: {e}"))?;
-    let token_type_ids =
-        Tensor::from_vec(all_type_ids, (batch_size, max_len), &device)
-            .map_err(|e| format!("Tensor creation failed: {e}"))?;
+    let input_ids = Tensor::from_vec(all_ids, (batch_size, max_len), &device)
+        .map_err(|e| format!("Tensor creation failed: {e}"))?;
+    let attention_mask = Tensor::from_vec(
+        all_mask.iter().map(|&x| x as f32).collect::<Vec<_>>(),
+        (batch_size, max_len),
+        &device,
+    )
+    .map_err(|e| format!("Tensor creation failed: {e}"))?;
+    let token_type_ids = Tensor::from_vec(all_type_ids, (batch_size, max_len), &device)
+        .map_err(|e| format!("Tensor creation failed: {e}"))?;
 
     // Forward pass
     let output = model
@@ -210,13 +208,9 @@ fn encode_batch(
         .broadcast_as(output.shape())
         .map_err(|e| format!("broadcast failed: {e}"))?;
 
-    let masked = output
-        .mul(&mask_expanded)
-        .map_err(|e| format!("mul failed: {e}"))?;
+    let masked = output.mul(&mask_expanded).map_err(|e| format!("mul failed: {e}"))?;
 
-    let summed = masked
-        .sum(1)
-        .map_err(|e| format!("sum failed: {e}"))?;
+    let summed = masked.sum(1).map_err(|e| format!("sum failed: {e}"))?;
 
     let mask_sum = mask_expanded
         .sum(1)
@@ -224,9 +218,7 @@ fn encode_batch(
         .clamp(1e-9, f64::MAX)
         .map_err(|e| format!("clamp failed: {e}"))?;
 
-    let mean_pooled = summed
-        .div(&mask_sum)
-        .map_err(|e| format!("div failed: {e}"))?;
+    let mean_pooled = summed.div(&mask_sum).map_err(|e| format!("div failed: {e}"))?;
 
     // L2 normalize
     let norms = mean_pooled
@@ -243,9 +235,7 @@ fn encode_batch(
         .clamp(1e-9, f64::MAX)
         .map_err(|e| format!("clamp failed: {e}"))?;
 
-    let normalized = mean_pooled
-        .div(&norms)
-        .map_err(|e| format!("div failed: {e}"))?;
+    let normalized = mean_pooled.div(&norms).map_err(|e| format!("div failed: {e}"))?;
 
     // Extract to Vec<Vec<f32>>
     let flat: Vec<f32> = normalized
@@ -342,11 +332,7 @@ pub fn build_semantic_index(files: &[ScannedFile]) -> Option<SemanticIndex> {
         all_embeddings.len()
     );
 
-    Some(SemanticIndex {
-        embeddings: all_embeddings,
-        chunk_meta,
-        dim: EMBEDDING_DIM,
-    })
+    Some(SemanticIndex { embeddings: all_embeddings, chunk_meta, dim: EMBEDDING_DIM })
 }
 
 // ---------------------------------------------------------------------------
@@ -383,11 +369,7 @@ pub fn semantic_search(
     for i in 0..n_chunks {
         let offset = i * dim;
         let chunk_emb = &index.embeddings[offset..offset + dim];
-        let dot: f32 = query_emb
-            .iter()
-            .zip(chunk_emb.iter())
-            .map(|(a, b)| a * b)
-            .sum();
+        let dot: f32 = query_emb.iter().zip(chunk_emb.iter()).map(|(a, b)| a * b).sum();
         scores.push((i, dot));
     }
 

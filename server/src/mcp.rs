@@ -18,13 +18,10 @@ fn resolve_repo<'a>(
     args: &serde_json::Value,
 ) -> Result<&'a RepoState, String> {
     match args.get("repo").and_then(|v| v.as_str()) {
-        Some(name) => state
-            .repos
-            .get(name)
-            .ok_or_else(|| {
-                let available: Vec<&str> = state.repos.keys().map(|k| k.as_str()).collect();
-                format!("Unknown repo '{name}'. Available: {}", available.join(", "))
-            }),
+        Some(name) => state.repos.get(name).ok_or_else(|| {
+            let available: Vec<&str> = state.repos.keys().map(|k| k.as_str()).collect();
+            format!("Unknown repo '{name}'. Available: {}", available.join(", "))
+        }),
         None if state.repos.len() == 1 => Ok(state.repos.values().next().unwrap()),
         None if state.default_repo.is_some() => {
             let name = state.default_repo.as_ref().unwrap();
@@ -306,20 +303,14 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                             let ext = path.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
                             let content = extract_stubs(&raw, ext);
                             let lines = content.lines().count();
-                            (
-                                format!("# {path}\n({lines} lines, stubs)\n\n{content}"),
-                                false,
-                            )
+                            (format!("# {path}\n({lines} lines, stubs)\n\n{content}"), false)
                         } else if start_line.is_some() || end_line.is_some() {
                             let all_lines: Vec<&str> = raw.lines().collect();
                             let total = all_lines.len();
                             let s = start_line.unwrap_or(1).min(total).max(1);
                             let e = end_line.unwrap_or(total).min(total);
                             if s > e {
-                                return (
-                                    format!("Error: start_line ({s}) > end_line ({e})"),
-                                    true,
-                                );
+                                return (format!("Error: start_line ({s}) > end_line ({e})"), true);
                             }
                             let width = format!("{}", e).len();
                             let mut content = String::new();
@@ -331,10 +322,7 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                                     w = width
                                 ));
                             }
-                            (
-                                format!("# {path} (lines {s}-{e} of {total})\n\n{content}"),
-                                false,
-                            )
+                            (format!("# {path} (lines {s}-{e} of {total})\n\n{content}"), false)
                         } else {
                             let content = if raw.len() > MAX_FILE_READ {
                                 let mut end = MAX_FILE_READ;
@@ -400,34 +388,22 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
 
             let query = args["query"].as_str().unwrap_or("");
             if query.len() < 2 {
-                return (
-                    "Error: Query must be at least 2 characters".to_string(),
-                    true,
-                );
+                return ("Error: Query must be at least 2 characters".to_string(), true);
             }
 
             let limit = args["limit"].as_u64().unwrap_or(100).min(500) as usize;
             let max_per_file = 8;
             let context_lines = args["context"].as_u64().unwrap_or(2).min(10) as usize;
             let ext_filter: Option<HashSet<String>> = args["ext"].as_str().map(|exts| {
-                exts.split(',')
-                    .map(|e| e.trim().trim_start_matches('.').to_string())
-                    .collect()
+                exts.split(',').map(|e| e.trim().trim_start_matches('.').to_string()).collect()
             });
             let cat_filter = args["category"].as_str();
 
             // Multi-term OR
             let terms: Vec<&str> = query.split_whitespace().collect();
             let terms_lower: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
-            let pattern_str = terms
-                .iter()
-                .map(|t| regex::escape(t))
-                .collect::<Vec<_>>()
-                .join("|");
-            let pattern = match RegexBuilder::new(&pattern_str)
-                .case_insensitive(true)
-                .build()
-            {
+            let pattern_str = terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|");
+            let pattern = match RegexBuilder::new(&pattern_str).case_insensitive(true).build() {
                 Ok(p) => p,
                 Err(_) => return ("Error: Invalid pattern".to_string(), true),
             };
@@ -449,10 +425,8 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
 
             for repo in &repos {
                 let config = &repo.config;
-                let idf_weights: Vec<f64> = terms_lower
-                    .iter()
-                    .map(|t| repo.term_doc_freq.idf(t))
-                    .collect();
+                let idf_weights: Vec<f64> =
+                    terms_lower.iter().map(|t| repo.term_doc_freq.idf(t)).collect();
                 let candidates: Vec<&ScannedFile> = repo
                     .all_files
                     .iter()
@@ -507,12 +481,8 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                         continue;
                     }
 
-                    let filename = file
-                        .rel_path
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(&file.rel_path)
-                        .to_lowercase();
+                    let filename =
+                        file.rel_path.rsplit('/').next().unwrap_or(&file.rel_path).to_lowercase();
                     let score = grep_relevance_score(
                         total_match_count,
                         total_lines,
@@ -538,11 +508,8 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
             }
 
             // Sort by relevance score descending
-            file_hits.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            file_hits
+                .sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 
             // Format top-N results within limit
             let mut results = Vec::new();
@@ -642,10 +609,7 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
             for (cat, files) in &repo.manifest {
                 out.push_str(&format!("{cat}  ({} files)\n", files.len()));
             }
-            (
-                format!("{} modules total\n\n{out}", repo.manifest.len()),
-                false,
-            )
+            (format!("{} modules total\n\n{out}", repo.manifest.len()), false)
         }
         "cs_get_module_files" => {
             let repo = match resolve_repo(state, args) {
@@ -678,13 +642,9 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
             };
             let module = args["module"].as_str().unwrap_or("");
             match repo.deps.get(module) {
-                None => (
-                    format!("No dependency info found for '{module}'"),
-                    true,
-                ),
+                None => (format!("No dependency info found for '{module}'"), true),
                 Some(dep) => {
-                    let mut out =
-                        format!("Module: {module}\nCategory: {}\n\n", dep.category_path);
+                    let mut out = format!("Module: {module}\nCategory: {}\n\n", dep.category_path);
                     if !dep.public.is_empty() {
                         out.push_str("Public dependencies:\n");
                         for d in &dep.public {
@@ -741,14 +701,10 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
 
             // Sort by score descending
             all_modules.sort_by(|a, b| {
-                b.1.score
-                    .partial_cmp(&a.1.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                b.1.score.partial_cmp(&a.1.score).unwrap_or(std::cmp::Ordering::Equal)
             });
             all_files.sort_by(|a, b| {
-                b.1.score
-                    .partial_cmp(&a.1.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                b.1.score.partial_cmp(&a.1.score).unwrap_or(std::cmp::Ordering::Equal)
             });
             all_modules.truncate(module_limit);
             all_files.truncate(file_limit);
@@ -770,7 +726,10 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                 out.push_str("Files:\n");
                 for (repo, f) in &all_files {
                     let prefix = if multi { format!("[{}] ", repo.name) } else { String::new() };
-                    out.push_str(&format!("  {prefix}{} — {} (score {:.1})\n", f.path, f.desc, f.score));
+                    out.push_str(&format!(
+                        "  {prefix}{} — {} (score {:.1})\n",
+                        f.path, f.desc, f.score
+                    ));
                 }
             }
             if all_modules.is_empty() && all_files.is_empty() {
@@ -789,14 +748,9 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
             };
             let paths: Vec<String> = args["paths"]
                 .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                        .collect()
-                })
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
                 .unwrap_or_default();
-            let budget =
-                args["budget"].as_u64().unwrap_or(DEFAULT_TOKEN_BUDGET as u64) as usize;
+            let budget = args["budget"].as_u64().unwrap_or(DEFAULT_TOKEN_BUDGET as u64) as usize;
             let unit = match args["unit"].as_str() {
                 Some("chars") => BudgetUnit::Chars,
                 _ => BudgetUnit::Tokens,
@@ -879,7 +833,9 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
             out.push_str("  -> Class/function signatures without bodies. Use this BEFORE mode=\"full\" on large files.\n\n");
             out.push_str("**Search for code patterns or keywords:**\n");
             out.push_str("  cs_grep({ query: \"FogVolume\", ext: \"h,cpp\", context: 3 })\n");
-            out.push_str("  -> Searches file contents. Returns matching lines with surrounding context.\n\n");
+            out.push_str(
+                "  -> Searches file contents. Returns matching lines with surrounding context.\n\n",
+            );
             out.push_str("**Find files by name + content (best first search):**\n");
             out.push_str("  cs_find({ query: \"VolumetricCloud\" })\n");
             out.push_str("  -> Combined fuzzy filename + content grep, ranked by relevance.\n\n");
@@ -902,20 +858,12 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
             let direction = args["direction"].as_str().unwrap_or("both");
 
             let imports: Vec<String> = if direction == "both" || direction == "imports" {
-                repo.import_graph
-                    .imports
-                    .get(path)
-                    .cloned()
-                    .unwrap_or_default()
+                repo.import_graph.imports.get(path).cloned().unwrap_or_default()
             } else {
                 vec![]
             };
             let imported_by: Vec<String> = if direction == "both" || direction == "imported_by" {
-                repo.import_graph
-                    .imported_by
-                    .get(path)
-                    .cloned()
-                    .unwrap_or_default()
+                repo.import_graph.imported_by.get(path).cloned().unwrap_or_default()
             } else {
                 vec![]
             };
@@ -924,25 +872,26 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
             let mut cross_imports = Vec::new();
             let mut cross_imported_by = Vec::new();
             for edge in &state.cross_repo_edges {
-                if edge.from_repo == repo.name && edge.from_file == path
+                if edge.from_repo == repo.name
+                    && edge.from_file == path
                     && (direction == "both" || direction == "imports")
                 {
                     cross_imports.push(format!("[{}] {}", edge.to_repo, edge.to_file));
                 }
-                if edge.to_repo == repo.name && edge.to_file == path
+                if edge.to_repo == repo.name
+                    && edge.to_file == path
                     && (direction == "both" || direction == "imported_by")
                 {
                     cross_imported_by.push(format!("[{}] {}", edge.from_repo, edge.from_file));
                 }
             }
 
-            if imports.is_empty() && imported_by.is_empty()
-                && cross_imports.is_empty() && cross_imported_by.is_empty()
+            if imports.is_empty()
+                && imported_by.is_empty()
+                && cross_imports.is_empty()
+                && cross_imported_by.is_empty()
             {
-                return (
-                    format!("No import relationships found for '{path}'"),
-                    false,
-                );
+                return (format!("No import relationships found for '{path}'"), false);
             }
 
             let mut out = format!("# {path}\n\n");
@@ -979,7 +928,10 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                 }
             }
             if !cross_imported_by.is_empty() {
-                out.push_str(&format!("Cross-repo imported by ({} files):\n", cross_imported_by.len()));
+                out.push_str(&format!(
+                    "Cross-repo imported by ({} files):\n",
+                    cross_imported_by.len()
+                ));
                 for inc in &cross_imported_by {
                     out.push_str(&format!("  {inc}\n"));
                 }
@@ -995,16 +947,11 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
 
             let raw_query = args["query"].as_str().unwrap_or("");
             if raw_query.len() < 2 {
-                return (
-                    "Error: Query must be at least 2 characters".to_string(),
-                    true,
-                );
+                return ("Error: Query must be at least 2 characters".to_string(), true);
             }
             let limit = args["limit"].as_u64().unwrap_or(30).min(100) as usize;
             let ext_filter: Option<HashSet<String>> = args["ext"].as_str().map(|exts| {
-                exts.split(',')
-                    .map(|e| e.trim().trim_start_matches('.').to_string())
-                    .collect()
+                exts.split(',').map(|e| e.trim().trim_start_matches('.').to_string()).collect()
             });
             let cat_filter = args["category"].as_str().map(|s| s.to_string());
 
@@ -1013,14 +960,8 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
             // Content grep pattern
             let terms: Vec<&str> = raw_query.split_whitespace().collect();
             let terms_lower: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
-            let pattern_str = terms
-                .iter()
-                .map(|t| regex::escape(t))
-                .collect::<Vec<_>>()
-                .join("|");
-            let pattern = RegexBuilder::new(&pattern_str)
-                .case_insensitive(true)
-                .build();
+            let pattern_str = terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|");
+            let pattern = RegexBuilder::new(&pattern_str).case_insensitive(true).build();
 
             struct FindResult {
                 display_path: String,
@@ -1075,10 +1016,8 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
 
                 // 2. Content grep
                 if let Ok(ref pattern) = pattern {
-                    let idf_weights: Vec<f64> = terms_lower
-                        .iter()
-                        .map(|t| repo.term_doc_freq.idf(t))
-                        .collect();
+                    let idf_weights: Vec<f64> =
+                        terms_lower.iter().map(|t| repo.term_doc_freq.idf(t)).collect();
                     let candidates: Vec<&ScannedFile> = repo
                         .all_files
                         .iter()
@@ -1089,8 +1028,7 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                                 }
                             }
                             if let Some(ref cat) = cat_filter {
-                                let file_cat =
-                                    get_category_path(&f.rel_path, config).join(" > ");
+                                let file_cat = get_category_path(&f.rel_path, config).join(" > ");
                                 if !file_cat.starts_with(cat.as_str()) {
                                     return false;
                                 }
@@ -1118,7 +1056,8 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                                     first_match_line_idx = i;
                                 }
                                 let line_lower = line.to_lowercase();
-                                let line_term_count = terms_lower.iter()
+                                let line_term_count = terms_lower
+                                    .iter()
                                     .filter(|t| line_lower.contains(t.as_str()))
                                     .count();
                                 for (ti, term) in terms_lower.iter().enumerate() {
@@ -1154,23 +1093,25 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                             &file.ext,
                             &terms_lower,
                             terms_seen.len(),
-                            if first_match_line_idx == usize::MAX { 0 } else { first_match_line_idx },
+                            if first_match_line_idx == usize::MAX {
+                                0
+                            } else {
+                                first_match_line_idx
+                            },
                             &idf_weights,
                         );
 
                         let key = repo_path(repo, &file.rel_path, multi);
-                        let entry = merged
-                            .entry(key.clone())
-                            .or_insert_with(|| FindResult {
-                                display_path: key,
-                                desc: file.desc.clone(),
-                                name_score: 0.0,
-                                grep_score: 0.0,
-                                grep_count: 0,
-                                top_match: None,
-                                terms_matched: 0,
-                                total_terms: terms_lower.len(),
-                            });
+                        let entry = merged.entry(key.clone()).or_insert_with(|| FindResult {
+                            display_path: key,
+                            desc: file.desc.clone(),
+                            name_score: 0.0,
+                            grep_score: 0.0,
+                            grep_count: 0,
+                            top_match: None,
+                            terms_matched: 0,
+                            total_terms: terms_lower.len(),
+                        });
                         entry.grep_score = grep_score;
                         entry.grep_count = match_count;
                         entry.top_match = best_snippet;
@@ -1188,8 +1129,10 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
             let max_grep = ranked.iter().map(|r| r.grep_score).fold(0.0f64, f64::max).max(1.0);
 
             ranked.sort_by(|a, b| {
-                let norm_a = (a.name_score / max_name) * name_w + (a.grep_score / max_grep) * grep_w;
-                let norm_b = (b.name_score / max_name) * name_w + (b.grep_score / max_grep) * grep_w;
+                let norm_a =
+                    (a.name_score / max_name) * name_w + (a.grep_score / max_grep) * grep_w;
+                let norm_b =
+                    (b.name_score / max_name) * name_w + (b.grep_score / max_grep) * grep_w;
                 // Dual-match boost: files matching both name AND content get 1.25x
                 let boost_a = if a.name_score > 0.0 && a.grep_count > 0 { 1.25 } else { 1.0 };
                 let boost_b = if b.name_score > 0.0 && b.grep_count > 0 { 1.25 } else { 1.0 };
@@ -1218,7 +1161,10 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
                 let tag_str = if source.is_empty() {
                     String::new()
                 } else if r.total_terms > 1 && has_content {
-                    format!(" [{}, {}/{} terms, {} lines]", source, r.terms_matched, r.total_terms, r.grep_count)
+                    format!(
+                        " [{}, {}/{} terms, {} lines]",
+                        source, r.terms_matched, r.total_terms, r.grep_count
+                    )
                 } else if has_content {
                     format!(" [{}, {} lines]", source, r.grep_count)
                 } else {
@@ -1236,12 +1182,13 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
         // =====================================================================
         // New tools
         // =====================================================================
-
         "cs_status" => {
             let version = env!("CARGO_PKG_VERSION");
             let repo_count = state.repos.len();
-            let mut out = format!("CodeScope v{version} — {repo_count} repositor{} indexed\n\n",
-                if repo_count == 1 { "y" } else { "ies" });
+            let mut out = format!(
+                "CodeScope v{version} — {repo_count} repositor{} indexed\n\n",
+                if repo_count == 1 { "y" } else { "ies" }
+            );
 
             let mut total_files = 0usize;
             for repo in state.repos.values() {
@@ -1433,10 +1380,7 @@ fn handle_tool_call(state: &ServerState, name: &str, args: &serde_json::Value) -
 // Mutating tool handlers (need write lock)
 // ---------------------------------------------------------------------------
 
-fn handle_rescan(
-    state: &mut ServerState,
-    args: &serde_json::Value,
-) -> (String, bool) {
+fn handle_rescan(state: &mut ServerState, args: &serde_json::Value) -> (String, bool) {
     let target_repo = args.get("repo").and_then(|v| v.as_str());
     let tok = state.tokenizer.clone();
 
@@ -1471,10 +1415,7 @@ fn handle_rescan(
     (results.join("\n"), false)
 }
 
-fn handle_add_repo(
-    state: &mut ServerState,
-    args: &serde_json::Value,
-) -> (String, bool) {
+fn handle_add_repo(state: &mut ServerState, args: &serde_json::Value) -> (String, bool) {
     let name = match args["name"].as_str() {
         Some(n) => n.to_string(),
         None => return ("Error: 'name' is required".to_string(), true),
@@ -1593,10 +1534,8 @@ pub fn run_mcp(state: Arc<RwLock<ServerState>>) {
             }
             "tools/call" => {
                 let tool_name = msg["params"]["name"].as_str().unwrap_or("");
-                let arguments = msg["params"]
-                    .get("arguments")
-                    .cloned()
-                    .unwrap_or(serde_json::json!({}));
+                let arguments =
+                    msg["params"].get("arguments").cloned().unwrap_or(serde_json::json!({}));
 
                 // Mutating tools need write lock
                 let (text, is_error) = match tool_name {

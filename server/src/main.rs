@@ -44,10 +44,8 @@ pub(crate) fn load_codescope_config(project_root: &std::path::Path) -> ScanConfi
             if let Ok(table) = content.parse::<toml::Table>() {
                 // scan_dirs
                 if let Some(dirs) = table.get("scan_dirs").and_then(|v| v.as_array()) {
-                    config.scan_dirs = dirs
-                        .iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                        .collect();
+                    config.scan_dirs =
+                        dirs.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
                 }
 
                 // skip_dirs — merge with defaults
@@ -61,10 +59,8 @@ pub(crate) fn load_codescope_config(project_root: &std::path::Path) -> ScanConfi
 
                 // extensions
                 if let Some(exts) = table.get("extensions").and_then(|v| v.as_array()) {
-                    config.extensions = exts
-                        .iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                        .collect();
+                    config.extensions =
+                        exts.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
                 }
 
                 // noise_dirs — merge with defaults
@@ -88,7 +84,11 @@ pub(crate) fn load_codescope_config(project_root: &std::path::Path) -> ScanConfi
 // Scan a single repo and return RepoState
 // ---------------------------------------------------------------------------
 
-pub fn scan_repo(name: &str, root: &std::path::Path, _tok: &Arc<dyn tokenizer::Tokenizer>) -> RepoState {
+pub fn scan_repo(
+    name: &str,
+    root: &std::path::Path,
+    _tok: &Arc<dyn tokenizer::Tokenizer>,
+) -> RepoState {
     scan_repo_with_options(name, root, _tok, false)
 }
 
@@ -100,10 +100,7 @@ pub fn scan_repo_with_options(
 ) -> RepoState {
     let config = load_codescope_config(root);
 
-    eprintln!(
-        "  [{name}] Scanning codebase at {}...",
-        root.display()
-    );
+    eprintln!("  [{name}] Scanning codebase at {}...", root.display());
     if !config.scan_dirs.is_empty() {
         eprintln!("  [{name}] Scan dirs: {:?}", config.scan_dirs);
     }
@@ -194,13 +191,10 @@ fn parse_repos_toml(path: &std::path::Path) -> Vec<(String, PathBuf)> {
 
     let mut repos = Vec::new();
     for (name, value) in repos_table {
-        let root = value
-            .get("root")
-            .and_then(|v| v.as_str())
-            .unwrap_or_else(|| {
-                eprintln!("Error: repos.{name} missing 'root' field");
-                std::process::exit(1);
-            });
+        let root = value.get("root").and_then(|v| v.as_str()).unwrap_or_else(|| {
+            eprintln!("Error: repos.{name} missing 'root' field");
+            std::process::exit(1);
+        });
         let root = PathBuf::from(root).canonicalize().unwrap_or_else(|e| {
             eprintln!("Error: repos.{name} root '{}' not found: {e}", root);
             std::process::exit(1);
@@ -234,7 +228,9 @@ fn print_help() {
     eprintln!("  --dist <PATH>         Path to web UI dist directory");
     eprintln!("  --tokenizer <NAME>    Token counter: bytes-estimate (default) or tiktoken");
     #[cfg(feature = "semantic")]
-    eprintln!("  --semantic            Enable semantic code search (downloads ML model on first use)");
+    eprintln!(
+        "  --semantic            Enable semantic code search (downloads ML model on first use)"
+    );
     eprintln!("  --help                Show this help message");
     eprintln!("  --version             Show version");
     eprintln!();
@@ -357,11 +353,8 @@ async fn main() {
 
         if repo_specs.is_empty() {
             let project_root = project_root.canonicalize().unwrap_or(project_root);
-            let name = project_root
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("default")
-                .to_string();
+            let name =
+                project_root.file_name().and_then(|n| n.to_str()).unwrap_or("default").to_string();
             repo_specs.push((name, project_root));
         }
     }
@@ -376,7 +369,9 @@ async fn main() {
     let enable_semantic = false;
 
     if args.iter().any(|a| a == "--semantic") && !cfg!(feature = "semantic") {
-        eprintln!("  Warning: --semantic flag ignored. This binary does not include semantic search.");
+        eprintln!(
+            "  Warning: --semantic flag ignored. This binary does not include semantic search."
+        );
         eprintln!("  To enable it, reinstall with: curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --with-semantic");
     }
 
@@ -391,11 +386,8 @@ async fn main() {
         .collect();
 
     let mut repos = BTreeMap::new();
-    let default_repo = if repo_states.len() == 1 {
-        Some(repo_states[0].name.clone())
-    } else {
-        None
-    };
+    let default_repo =
+        if repo_states.len() == 1 { Some(repo_states[0].name.clone()) } else { None };
     for repo in repo_states {
         repos.insert(repo.name.clone(), repo);
     }
@@ -413,12 +405,7 @@ async fn main() {
     );
 
     // Build unified ServerState (shared by MCP and HTTP modes)
-    let server_state = ServerState {
-        repos,
-        default_repo,
-        cross_repo_edges,
-        tokenizer: tok,
-    };
+    let server_state = ServerState { repos, default_repo, cross_repo_edges, tokenizer: tok };
     let state = Arc::new(RwLock::new(server_state));
 
     if mcp_mode {
@@ -478,26 +465,20 @@ async fn main() {
         .route("/api/find", get(api_find))
         .route("/api/context", post(api_context))
         .route("/api/imports", get(api_imports))
-        .fallback_service(
-            ServeDir::new(&dist_dir).not_found_service(ServeFile::new(&index_html)),
-        )
+        .fallback_service(ServeDir::new(&dist_dir).not_found_service(ServeFile::new(&index_html)))
         .layer(CompressionLayer::new())
         .layer(CorsLayer::permissive())
         .with_state(ctx);
 
-    let explicit_port: Option<u16> = std::env::var("PORT")
-        .ok()
-        .and_then(|p| p.parse().ok());
+    let explicit_port: Option<u16> = std::env::var("PORT").ok().and_then(|p| p.parse().ok());
 
     let listener = if let Some(port) = explicit_port {
         // User chose a port explicitly — fail hard if busy
-        tokio::net::TcpListener::bind(format!("0.0.0.0:{port}"))
-            .await
-            .unwrap_or_else(|e| {
-                eprintln!("Error: Could not bind to port {port}: {e}");
-                eprintln!("  PORT={port} was set explicitly. Choose a different port.");
-                std::process::exit(1);
-            })
+        tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await.unwrap_or_else(|e| {
+            eprintln!("Error: Could not bind to port {port}: {e}");
+            eprintln!("  PORT={port} was set explicitly. Choose a different port.");
+            std::process::exit(1);
+        })
     } else {
         // Auto-scan: try 8432..=8441
         const BASE: u16 = 8432;

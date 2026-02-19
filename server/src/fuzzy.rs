@@ -127,11 +127,7 @@ fn find_substring(text: &[u8], pattern: &[u8], case_sensitive: bool) -> Option<u
 // Smith-Waterman DP fuzzy matcher (fzf v2 style)
 // ---------------------------------------------------------------------------
 
-fn fuzzy_score_v2(
-    text: &str,
-    pattern: &str,
-    case_sensitive: bool,
-) -> Option<(f64, Vec<usize>)> {
+fn fuzzy_score_v2(text: &str, pattern: &str, case_sensitive: bool) -> Option<(f64, Vec<usize>)> {
     if pattern.is_empty() {
         return Some((0.0, vec![]));
     }
@@ -172,11 +168,7 @@ fn fuzzy_score_v2(
     let mut bonus = vec![0i32; w];
     for (j, slot) in bonus.iter_mut().enumerate() {
         let pos = start_bound + j;
-        let prev_class = if pos == 0 {
-            CharClass::White
-        } else {
-            char_class(tb[pos - 1])
-        };
+        let prev_class = if pos == 0 { CharClass::White } else { char_class(tb[pos - 1]) };
         *slot = compute_bonus(prev_class, char_class(tb[pos]));
     }
 
@@ -191,11 +183,8 @@ fn fuzzy_score_v2(
         };
         score += first_bonus * BONUS_FIRST_CHAR_MULTIPLIER;
         for k in 1..m {
-            let b = if abs_pos + k < start_bound + w {
-                bonus[abs_pos + k - start_bound]
-            } else {
-                0
-            };
+            let b =
+                if abs_pos + k < start_bound + w { bonus[abs_pos + k - start_bound] } else { 0 };
             score += std::cmp::max(b, BONUS_CONSECUTIVE);
         }
         let indices: Vec<usize> = (abs_pos..abs_pos + m).collect();
@@ -417,7 +406,9 @@ fn score_file(f: &SearchFileEntry, tokens: &[TokenInfo]) -> Option<SearchFileRes
         let fname_text = if token.case_sensitive { &f.filename } else { &f.filename_lower };
         let fname_passes = (token.mask & f.filename_mask) == token.mask;
         if fname_passes {
-            if let Some((score, indices)) = fuzzy_score_v2(fname_text, pattern, token.case_sensitive) {
+            if let Some((score, indices)) =
+                fuzzy_score_v2(fname_text, pattern, token.case_sensitive)
+            {
                 total_score += score * 2.0;
                 filename_indices.extend(indices);
                 continue;
@@ -427,7 +418,8 @@ fn score_file(f: &SearchFileEntry, tokens: &[TokenInfo]) -> Option<SearchFileRes
         let path_text = if token.case_sensitive { &f.path } else { &f.path_lower };
         let path_passes = (token.mask & f.path_mask) == token.mask;
         if path_passes {
-            if let Some((score, indices)) = fuzzy_score_v2(path_text, pattern, token.case_sensitive) {
+            if let Some((score, indices)) = fuzzy_score_v2(path_text, pattern, token.case_sensitive)
+            {
                 total_score += score;
                 path_indices.extend(indices);
                 continue;
@@ -484,26 +476,25 @@ pub fn run_search(
         };
     }
 
-    let tokens: Vec<TokenInfo> = trimmed.split_whitespace().map(|t| {
-        let case_sensitive = has_uppercase(t);
-        let lower = t.to_lowercase();
-        let mask = char_bitmask(&lower);
-        TokenInfo { lower, case_sensitive, mask }
-    }).collect();
-
-    let mut module_results: Vec<SearchModuleResult> = search_modules
-        .par_iter()
-        .filter_map(|m| score_module(m, &tokens))
+    let tokens: Vec<TokenInfo> = trimmed
+        .split_whitespace()
+        .map(|t| {
+            let case_sensitive = has_uppercase(t);
+            let lower = t.to_lowercase();
+            let mask = char_bitmask(&lower);
+            TokenInfo { lower, case_sensitive, mask }
+        })
         .collect();
+
+    let mut module_results: Vec<SearchModuleResult> =
+        search_modules.par_iter().filter_map(|m| score_module(m, &tokens)).collect();
     module_results.sort_unstable_by(|a, b| {
         b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
     });
     module_results.truncate(module_limit);
 
-    let mut file_results: Vec<SearchFileResult> = search_files
-        .par_iter()
-        .filter_map(|f| score_file(f, &tokens))
-        .collect();
+    let mut file_results: Vec<SearchFileResult> =
+        search_files.par_iter().filter_map(|f| score_file(f, &tokens)).collect();
 
     if file_results.len() > file_limit {
         file_results.select_nth_unstable_by(file_limit, |a, b| {
@@ -531,17 +522,12 @@ pub fn run_search(
 // ---------------------------------------------------------------------------
 
 const KNOWN_EXTS: &[&str] = &[
-    "h", "hpp", "hxx", "cpp", "cxx", "cc", "c",
-    "cs", "py", "rb", "lua",
-    "ini", "cfg", "conf", "toml", "yaml", "yml", "json", "xml",
-    "usf", "ush", "hlsl", "glsl", "vert", "frag", "comp", "wgsl",
-    "js", "ts", "jsx", "tsx", "mjs", "cjs",
-    "rs", "go", "java", "kt", "scala", "swift",
-    "css", "scss", "less", "sass",
-    "html", "htm", "vue", "svelte",
-    "sh", "bash", "zsh", "ps1", "psm1", "psd1", "bat", "cmd",
-    "md", "rst", "txt", "adoc",
-    "cmake", "make", "gradle", "csproj", "sln",
+    "h", "hpp", "hxx", "cpp", "cxx", "cc", "c", "cs", "py", "rb", "lua", "ini", "cfg", "conf",
+    "toml", "yaml", "yml", "json", "xml", "usf", "ush", "hlsl", "glsl", "vert", "frag", "comp",
+    "wgsl", "js", "ts", "jsx", "tsx", "mjs", "cjs", "rs", "go", "java", "kt", "scala", "swift",
+    "css", "scss", "less", "sass", "html", "htm", "vue", "svelte", "sh", "bash", "zsh", "ps1",
+    "psm1", "psd1", "bat", "cmd", "md", "rst", "txt", "adoc", "cmake", "make", "gradle", "csproj",
+    "sln",
 ];
 
 /// Strip known file extensions from search tokens so fuzzy search matches the stem.

@@ -48,13 +48,10 @@ impl ScanConfig {
             .iter()
             .map(|s| s.to_string())
             .collect(),
-            noise_dirs: [
-                "Private", "Public", "Internal", "Source", "Src", "Include",
-                "src", "lib",
-            ]
-            .iter()
-            .map(|s| s.to_string())
-            .collect(),
+            noise_dirs: ["Private", "Public", "Internal", "Source", "Src", "Include", "src", "lib"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
         }
     }
 }
@@ -190,10 +187,7 @@ pub struct TermDocFreq {
 
 impl TermDocFreq {
     pub fn new() -> Self {
-        Self {
-            total_docs: 0,
-            freq: HashMap::new(),
-        }
+        Self { total_docs: 0, freq: HashMap::new() }
     }
 
     /// IDF with Laplace smoothing: ln((N+1)/(df+1)) + 1.
@@ -255,10 +249,7 @@ impl ServerState {
         if let Some(ref name) = self.default_repo {
             &self.repos[name]
         } else {
-            self.repos
-                .values()
-                .next()
-                .expect("ServerState must have at least one repo")
+            self.repos.values().next().expect("ServerState must have at least one repo")
         }
     }
 }
@@ -315,14 +306,8 @@ pub fn grep_relevance_score(
     let density = match_count as f64 / (total_lines as f64).sqrt().max(1.0);
 
     // Filename bonus: reduced from 50 to 15 so content can compete
-    let filename_bonus = if terms_lower
-        .iter()
-        .any(|t| filename_lower.contains(t.as_str()))
-    {
-        15.0
-    } else {
-        0.0
-    };
+    let filename_bonus =
+        if terms_lower.iter().any(|t| filename_lower.contains(t.as_str())) { 15.0 } else { 0.0 };
 
     let def_bonus = if is_definition_file(ext) { 5.0 } else { 0.0 };
 
@@ -349,11 +334,7 @@ pub fn grep_relevance_score(
     let matched_idf_sum: f64 = sorted_idfs.iter().take(terms_matched).sum();
     let total_idf_sum: f64 = sorted_idfs.iter().sum();
 
-    let coverage = if total_idf_sum > 0.0 {
-        matched_idf_sum / total_idf_sum
-    } else {
-        1.0
-    };
+    let coverage = if total_idf_sum > 0.0 { matched_idf_sum / total_idf_sum } else { 1.0 };
     let coverage_factor = coverage * coverage;
 
     // Floor of 0.3 keeps partial matches visible but far below full matches

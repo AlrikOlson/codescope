@@ -32,24 +32,15 @@ fn read_state(
 // ---------------------------------------------------------------------------
 
 pub async fn api_tree(State(ctx): State<AppContext>) -> impl IntoResponse {
-    (
-        [("content-type", "application/json")],
-        ctx.cache.tree_json.clone(),
-    )
+    ([("content-type", "application/json")], ctx.cache.tree_json.clone())
 }
 
 pub async fn api_manifest(State(ctx): State<AppContext>) -> impl IntoResponse {
-    (
-        [("content-type", "application/json")],
-        ctx.cache.manifest_json.clone(),
-    )
+    ([("content-type", "application/json")], ctx.cache.manifest_json.clone())
 }
 
 pub async fn api_deps(State(ctx): State<AppContext>) -> impl IntoResponse {
-    (
-        [("content-type", "application/json")],
-        ctx.cache.deps_json.clone(),
-    )
+    ([("content-type", "application/json")], ctx.cache.deps_json.clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -77,26 +68,16 @@ pub async fn api_file(
     let s = read_state(&ctx.state)?;
     let repo = s.default_repo();
 
-    let full_path = validate_path(&repo.root, &q.path).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": e })),
-        )
-    })?;
+    let full_path = validate_path(&repo.root, &q.path)
+        .map_err(|e| (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": e }))))?;
 
     let metadata = fs::metadata(&full_path).map_err(|_| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "File not found" })),
-        )
+        (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "File not found" })))
     })?;
 
     let file_size = metadata.len();
     let raw = fs::read_to_string(&full_path).map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Read error" })),
-        )
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "Read error" })))
     })?;
 
     let truncated = raw.len() > MAX_FILE_READ;
@@ -112,13 +93,7 @@ pub async fn api_file(
 
     let lines = content.lines().count();
 
-    Ok(Json(FileResponse {
-        content,
-        lines,
-        size: file_size,
-        path: q.path,
-        truncated,
-    }))
+    Ok(Json(FileResponse { content, lines, size: file_size, path: q.path, truncated }))
 }
 
 // ---------------------------------------------------------------------------
@@ -156,21 +131,12 @@ pub async fn api_files(
     for p in &body.paths {
         match validate_path(&repo.root, p) {
             Err(e) => {
-                files.insert(
-                    p.clone(),
-                    BatchFileEntry::Err {
-                        error: e.to_string(),
-                    },
-                );
+                files.insert(p.clone(), BatchFileEntry::Err { error: e.to_string() });
             }
             Ok(full_path) => match fs::read_to_string(&full_path) {
                 Err(_) => {
-                    files.insert(
-                        p.clone(),
-                        BatchFileEntry::Err {
-                            error: "Read error".to_string(),
-                        },
-                    );
+                    files
+                        .insert(p.clone(), BatchFileEntry::Err { error: "Read error".to_string() });
                 }
                 Ok(raw) => {
                     let use_stubs = body.mode.as_deref() == Some("stubs");
@@ -258,20 +224,10 @@ pub async fn api_grep(
 
     // Multi-term OR: "cloud reconstruct" -> regex `cloud|reconstruct`
     let terms: Vec<String> = q.q.split_whitespace().map(|s| s.to_string()).collect();
-    let pattern_str = terms
-        .iter()
-        .map(|t| regex::escape(t))
-        .collect::<Vec<_>>()
-        .join("|");
-    let pattern = RegexBuilder::new(&pattern_str)
-        .case_insensitive(true)
-        .build()
-        .map_err(|_| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "Invalid pattern" })),
-            )
-        })?;
+    let pattern_str = terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|");
+    let pattern = RegexBuilder::new(&pattern_str).case_insensitive(true).build().map_err(|_| {
+        (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "error": "Invalid pattern" })))
+    })?;
 
     // Heavy file I/O — clone Arc, acquire read lock inside blocking closure.
     // The read() call here is safe to unwrap: lock poisoning only occurs if a
@@ -305,10 +261,7 @@ pub async fn api_grep(
 
         // Parallel grep: each file processed independently
         let terms_owned: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
-        let idf_weights: Vec<f64> = terms_owned
-            .iter()
-            .map(|t| repo.term_doc_freq.idf(t))
-            .collect();
+        let idf_weights: Vec<f64> = terms_owned.iter().map(|t| repo.term_doc_freq.idf(t)).collect();
         let mut file_results: Vec<(GrepFileResult, usize)> = candidates
             .par_iter()
             .filter_map(|file| {
@@ -336,22 +289,15 @@ pub async fn api_grep(
                             } else {
                                 line.to_string()
                             };
-                            file_matches.push(GrepMatch {
-                                line: trimmed,
-                                line_num: i + 1,
-                            });
+                            file_matches.push(GrepMatch { line: trimmed, line_num: i + 1 });
                         }
                     }
                 }
                 if file_matches.is_empty() {
                     None
                 } else {
-                    let filename = file
-                        .rel_path
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(&file.rel_path)
-                        .to_lowercase();
+                    let filename =
+                        file.rel_path.rsplit('/').next().unwrap_or(&file.rel_path).to_lowercase();
                     let score = grep_relevance_score(
                         total_match_count,
                         total_lines,
@@ -377,11 +323,8 @@ pub async fn api_grep(
             .collect();
 
         // Sort by relevance score (descending), then truncate to limit
-        file_results.sort_by(|a, b| {
-            b.0.score
-                .partial_cmp(&a.0.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        file_results
+            .sort_by(|a, b| b.0.score.partial_cmp(&a.0.score).unwrap_or(std::cmp::Ordering::Equal));
 
         let searched_files = candidates.len();
         let mut results = Vec::new();
@@ -396,12 +339,7 @@ pub async fn api_grep(
 
         let query_time = start.elapsed().as_millis() as u64;
 
-        GrepResponse {
-            results,
-            total_matches,
-            searched_files,
-            query_time,
-        }
+        GrepResponse { results, total_matches, searched_files, query_time }
     })
     .await
     .unwrap();
@@ -431,13 +369,7 @@ pub async fn api_search(
     let file_limit = q.file_limit.unwrap_or(80);
     let module_limit = q.module_limit.unwrap_or(8);
     let query = preprocess_search_query(&q.q);
-    Ok(Json(run_search(
-        &repo.search_files,
-        &repo.search_modules,
-        &query,
-        file_limit,
-        module_limit,
-    )))
+    Ok(Json(run_search(&repo.search_files, &repo.search_modules, &query, file_limit, module_limit)))
 }
 
 // ---------------------------------------------------------------------------
@@ -588,16 +520,9 @@ pub async fn api_find(
         if raw_query.len() >= 2 {
             let terms: Vec<String> = raw_query.split_whitespace().map(|s| s.to_string()).collect();
             let terms_lower: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
-            let pattern_str = terms
-                .iter()
-                .map(|t| regex::escape(t))
-                .collect::<Vec<_>>()
-                .join("|");
+            let pattern_str = terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|");
 
-            if let Ok(pattern) = RegexBuilder::new(&pattern_str)
-                .case_insensitive(true)
-                .build()
-            {
+            if let Ok(pattern) = RegexBuilder::new(&pattern_str).case_insensitive(true).build() {
                 let candidates: Vec<&ScannedFile> = repo
                     .all_files
                     .iter()
@@ -608,8 +533,7 @@ pub async fn api_find(
                             }
                         }
                         if let Some(ref cat) = cat_filter {
-                            let file_cat =
-                                get_category_path(&f.rel_path, &repo.config).join(" > ");
+                            let file_cat = get_category_path(&f.rel_path, &repo.config).join(" > ");
                             if !file_cat.starts_with(cat.as_str()) {
                                 return false;
                             }
@@ -618,11 +542,20 @@ pub async fn api_find(
                     })
                     .collect();
 
-                let idf_weights: Vec<f64> = terms_lower
-                    .iter()
-                    .map(|t| repo.term_doc_freq.idf(t))
-                    .collect();
-                let grep_results: Vec<(String, f64, usize, Option<String>, Option<usize>, String, String, String, String, usize)> = candidates
+                let idf_weights: Vec<f64> =
+                    terms_lower.iter().map(|t| repo.term_doc_freq.idf(t)).collect();
+                let grep_results: Vec<(
+                    String,
+                    f64,
+                    usize,
+                    Option<String>,
+                    Option<usize>,
+                    String,
+                    String,
+                    String,
+                    String,
+                    usize,
+                )> = candidates
                     .par_iter()
                     .filter_map(|file| {
                         let content = fs::read_to_string(&file.abs_path).ok()?;
@@ -640,7 +573,8 @@ pub async fn api_find(
                                     first_match_line_idx = i;
                                 }
                                 let line_lower = line.to_lowercase();
-                                let line_term_count = terms_lower.iter()
+                                let line_term_count = terms_lower
+                                    .iter()
                                     .filter(|t| line_lower.contains(t.as_str()))
                                     .count();
                                 for (ti, term) in terms_lower.iter().enumerate() {
@@ -677,16 +611,16 @@ pub async fn api_find(
                             &file.ext,
                             &terms_lower,
                             terms_seen.len(),
-                            if first_match_line_idx == usize::MAX { 0 } else { first_match_line_idx },
+                            if first_match_line_idx == usize::MAX {
+                                0
+                            } else {
+                                first_match_line_idx
+                            },
                             &idf_weights,
                         );
 
-                        let fname = file
-                            .rel_path
-                            .rsplit('/')
-                            .next()
-                            .unwrap_or(&file.rel_path)
-                            .to_string();
+                        let fname =
+                            file.rel_path.rsplit('/').next().unwrap_or(&file.rel_path).to_string();
                         let dir = file
                             .rel_path
                             .rsplit_once('/')
@@ -710,7 +644,19 @@ pub async fn api_find(
                     })
                     .collect();
 
-                for (path, grep_score, match_count, best_snippet, best_snippet_line, fname, dir, ext, category, file_terms_matched) in grep_results {
+                for (
+                    path,
+                    grep_score,
+                    match_count,
+                    best_snippet,
+                    best_snippet_line,
+                    fname,
+                    dir,
+                    ext,
+                    category,
+                    file_terms_matched,
+                ) in grep_results
+                {
                     let entry = merged.entry(path.clone()).or_insert_with(|| MergedFind {
                         path,
                         filename: fname,
@@ -751,9 +697,7 @@ pub async fn api_find(
             let norm_b = (b.name_score / max_name) * name_w + (b.grep_score / max_grep) * grep_w;
             let boost_a = if a.name_score > 0.0 && a.grep_count > 0 { 1.25 } else { 1.0 };
             let boost_b = if b.name_score > 0.0 && b.grep_count > 0 { 1.25 } else { 1.0 };
-            (norm_b * boost_b)
-                .partial_cmp(&(norm_a * boost_a))
-                .unwrap_or(std::cmp::Ordering::Equal)
+            (norm_b * boost_b).partial_cmp(&(norm_a * boost_a)).unwrap_or(std::cmp::Ordering::Equal)
         });
         ranked.truncate(limit);
 
@@ -763,7 +707,8 @@ pub async fn api_find(
         let results: Vec<FindResultEntry> = ranked
             .into_iter()
             .map(|r| {
-                let norm_score = (r.name_score / max_name) * name_w + (r.grep_score / max_grep) * grep_w;
+                let norm_score =
+                    (r.name_score / max_name) * name_w + (r.grep_score / max_grep) * grep_w;
                 let boost = if r.name_score > 0.0 && r.grep_count > 0 { 1.25 } else { 1.0 };
                 let combined_score = norm_score * boost;
                 let match_type = if r.name_score > 0.0 && r.grep_count > 0 {
@@ -802,12 +747,7 @@ pub async fn api_find(
 
         let query_time = start.elapsed().as_millis() as u64;
 
-        FindResponse {
-            results,
-            query_time,
-            ext_counts,
-            cat_counts,
-        }
+        FindResponse { results, query_time, ext_counts, cat_counts }
     })
     .await
     .unwrap();
@@ -841,28 +781,16 @@ pub async fn api_imports(
     let repo = s.default_repo();
     let direction = q.direction.as_deref().unwrap_or("both");
     let imports = if direction == "both" || direction == "imports" {
-        repo.import_graph
-            .imports
-            .get(&q.path)
-            .cloned()
-            .unwrap_or_default()
+        repo.import_graph.imports.get(&q.path).cloned().unwrap_or_default()
     } else {
         vec![]
     };
     let imported_by = if direction == "both" || direction == "imported_by" {
-        repo.import_graph
-            .imported_by
-            .get(&q.path)
-            .cloned()
-            .unwrap_or_default()
+        repo.import_graph.imported_by.get(&q.path).cloned().unwrap_or_default()
     } else {
         vec![]
     };
-    Ok(Json(ImportsResponse {
-        path: q.path,
-        imports,
-        imported_by,
-    }))
+    Ok(Json(ImportsResponse { path: q.path, imports, imported_by }))
 }
 
 // ---------------------------------------------------------------------------

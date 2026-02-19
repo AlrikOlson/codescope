@@ -19,9 +19,8 @@ pub fn classify_language(ext: &str) -> LanguageFamily {
     match ext {
         // Brace-based languages
         "h" | "hpp" | "hxx" | "cpp" | "cxx" | "cc" | "c" | "cs" | "java" | "kt" | "scala"
-        | "rs" | "go" | "js" | "ts" | "jsx" | "tsx" | "mjs" | "cjs" | "swift" | "usf"
-        | "ush" | "hlsl" | "glsl" | "vert" | "frag" | "comp" | "wgsl" | "d"
-        | "ps1" | "psm1" | "psd1" => {
+        | "rs" | "go" | "js" | "ts" | "jsx" | "tsx" | "mjs" | "cjs" | "swift" | "usf" | "ush"
+        | "hlsl" | "glsl" | "vert" | "frag" | "comp" | "wgsl" | "d" | "ps1" | "psm1" | "psd1" => {
             LanguageFamily::BraceBased
         }
         // Indent-based languages
@@ -601,8 +600,10 @@ pub fn extract_tier2(tier1: &str) -> String {
             continue;
         }
 
-        if trimmed.starts_with("#include") || trimmed.starts_with("import ")
-            || trimmed.starts_with("from ") || trimmed.starts_with("use ")
+        if trimmed.starts_with("#include")
+            || trimmed.starts_with("import ")
+            || trimmed.starts_with("from ")
+            || trimmed.starts_with("use ")
         {
             includes_seen += 1;
             if includes_seen <= 5 {
@@ -847,11 +848,7 @@ pub fn parse_blocks(tier1: &str, ext: &str) -> Vec<StubBlock> {
                     // Extract the imported name from various formats
                     t.strip_prefix("#include")
                         .map(|s| {
-                            s.trim()
-                                .trim_matches('"')
-                                .trim_matches('<')
-                                .trim_matches('>')
-                                .trim()
+                            s.trim().trim_matches('"').trim_matches('<').trim_matches('>').trim()
                         })
                         .and_then(|s| s.rsplit('/').next())
                         .or(Some(t))
@@ -913,19 +910,14 @@ pub fn parse_blocks(tier1: &str, ext: &str) -> Vec<StubBlock> {
                     let name = block_macro_arg(trimmed);
                     let mut block_lines = vec![lines[i]];
                     // If multi-line, collect until closing paren/brace
-                    if !trimmed.ends_with(';')
-                        && !trimmed.ends_with(')')
-                        && !trimmed.ends_with('}')
+                    if !trimmed.ends_with(';') && !trimmed.ends_with(')') && !trimmed.ends_with('}')
                     {
                         let start_i = i;
                         i += 1;
                         while i < lines.len() && i < start_i + 20 {
                             block_lines.push(lines[i]);
                             let t = lines[i].trim();
-                            if t.ends_with(';')
-                                || t.ends_with(')')
-                                || t.ends_with('}')
-                                || t == ")"
+                            if t.ends_with(';') || t.ends_with(')') || t.ends_with('}') || t == ")"
                             {
                                 i += 1;
                                 break;
@@ -1024,12 +1016,8 @@ pub fn parse_blocks(tier1: &str, ext: &str) -> Vec<StubBlock> {
             }
 
             let full_text = block_lines.join("\n") + "\n";
-            let decl_line = block_lines[0]
-                .trim()
-                .split('{')
-                .next()
-                .unwrap_or(block_lines[0])
-                .trim();
+            let decl_line =
+                block_lines[0].trim().split('{').next().unwrap_or(block_lines[0]).trim();
             let summary_text = format!("{} {{ /* {} members */ }};\n", decl_line, member_count);
             blocks.push(StubBlock {
                 kind: BlockKind::ClassDecl,
@@ -1175,9 +1163,7 @@ fn block_class_name(line: &str) -> String {
     } else {
         trimmed
     };
-    let end = after
-        .find(&[' ', ':', '{', '\t', '<'][..])
-        .unwrap_or(after.len());
+    let end = after.find(&[' ', ':', '{', '\t', '<'][..]).unwrap_or(after.len());
     after[..end].trim().to_string()
 }
 

@@ -61,10 +61,7 @@ struct DetectedProject {
 /// "packages/*" -> "packages"
 /// "src" -> "src"
 fn top_level_dir(pattern: &str) -> Option<&str> {
-    let clean = pattern
-        .trim_end_matches("/*")
-        .trim_end_matches("/**")
-        .trim_end_matches('/');
+    let clean = pattern.trim_end_matches("/*").trim_end_matches("/**").trim_end_matches('/');
     let top = clean.split('/').next()?;
     if top.is_empty() || top == "." {
         None
@@ -129,17 +126,16 @@ fn resolve_node_workspace(root: &Path) -> (Vec<String>, Option<String>) {
     };
 
     // workspaces can be an array or an object with "packages" key
-    let workspace_patterns: Vec<&str> = if let Some(arr) = data.get("workspaces").and_then(|v| v.as_array()) {
-        arr.iter().filter_map(|v| v.as_str()).collect()
-    } else if let Some(arr) = data
-        .get("workspaces")
-        .and_then(|v| v.get("packages"))
-        .and_then(|v| v.as_array())
-    {
-        arr.iter().filter_map(|v| v.as_str()).collect()
-    } else {
-        return (fallback_dirs(root, &["src", "lib", "app"]), None);
-    };
+    let workspace_patterns: Vec<&str> =
+        if let Some(arr) = data.get("workspaces").and_then(|v| v.as_array()) {
+            arr.iter().filter_map(|v| v.as_str()).collect()
+        } else if let Some(arr) =
+            data.get("workspaces").and_then(|v| v.get("packages")).and_then(|v| v.as_array())
+        {
+            arr.iter().filter_map(|v| v.as_str()).collect()
+        } else {
+            return (fallback_dirs(root, &["src", "lib", "app"]), None);
+        };
 
     if workspace_patterns.is_empty() {
         return (fallback_dirs(root, &["src", "lib", "app"]), None);
@@ -301,7 +297,8 @@ fn resolve_python_workspace(root: &Path) -> (Vec<String>, Option<String>) {
                     }
                 }
                 if !dirs.is_empty() {
-                    let info = format!("{} packages across {} directories", member_count, dirs.len());
+                    let info =
+                        format!("{} packages across {} directories", member_count, dirs.len());
                     return (dirs.into_iter().collect(), Some(info));
                 }
             }
@@ -334,11 +331,7 @@ fn resolve_dotnet_dirs(root: &Path) -> (Vec<String>, Option<String>) {
             }
         }
     }
-    let info = if !dirs.is_empty() {
-        Some(format!("{} projects", dirs.len()))
-    } else {
-        None
-    };
+    let info = if !dirs.is_empty() { Some(format!("{} projects", dirs.len())) } else { None };
     (dirs.into_iter().collect(), info)
 }
 
@@ -359,29 +352,33 @@ fn resolve_unreal_dirs(root: &Path) -> (Vec<String>, Option<String>) {
 
 /// Return only the directories from `candidates` that actually exist under `root`.
 fn fallback_dirs(root: &Path, candidates: &[&str]) -> Vec<String> {
-    candidates
-        .iter()
-        .filter(|d| root.join(d).is_dir())
-        .map(|d| d.to_string())
-        .collect()
+    candidates.iter().filter(|d| root.join(d).is_dir()).map(|d| d.to_string()).collect()
 }
 
 /// Detect directories that should be skipped (generated, vendored, build output).
 fn detect_skip_dirs(root: &Path) -> Vec<String> {
     let candidates = [
         // Build output
-        "target", "dist", "build", "out", ".next", ".nuxt", ".output",
+        "target",
+        "dist",
+        "build",
+        "out",
+        ".next",
+        ".nuxt",
+        ".output",
         // Dependencies
-        "node_modules", "vendor", ".venv", "venv", "__pycache__",
+        "node_modules",
+        "vendor",
+        ".venv",
+        "venv",
+        "__pycache__",
         // Generated
-        "generated", "gen", ".generated",
+        "generated",
+        "gen",
+        ".generated",
     ];
 
-    candidates
-        .iter()
-        .filter(|d| root.join(d).is_dir())
-        .map(|d| d.to_string())
-        .collect()
+    candidates.iter().filter(|d| root.join(d).is_dir()).map(|d| d.to_string()).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -482,11 +479,7 @@ fn detect_project(root: &Path) -> DetectedProject {
     // --- .NET ---
     let has_sln = std::fs::read_dir(root)
         .ok()
-        .map(|entries| {
-            entries
-                .flatten()
-                .any(|e| e.file_name().to_string_lossy().ends_with(".sln"))
-        })
+        .map(|entries| entries.flatten().any(|e| e.file_name().to_string_lossy().ends_with(".sln")))
         .unwrap_or(false);
     if has_sln {
         ecosystems.push(Ecosystem::DotNet);
@@ -506,9 +499,7 @@ fn detect_project(root: &Path) -> DetectedProject {
     let has_uproject = std::fs::read_dir(root)
         .ok()
         .map(|entries| {
-            entries
-                .flatten()
-                .any(|e| e.file_name().to_string_lossy().ends_with(".uproject"))
+            entries.flatten().any(|e| e.file_name().to_string_lossy().ends_with(".uproject"))
         })
         .unwrap_or(false);
     if has_uproject {
@@ -529,10 +520,26 @@ fn detect_project(root: &Path) -> DetectedProject {
     // Check immediate subdirectories for ecosystem markers not found at root.
     // Common patterns: server/Cargo.toml, api/go.mod, frontend/package.json, etc.
     let skip_set: HashSet<&str> = [
-        "node_modules", "target", "dist", "build", ".git", "__pycache__",
-        "vendor", ".venv", "venv", ".next", ".nuxt", "out", ".output",
-        ".idea", ".vscode", ".vs",
-    ].iter().copied().collect();
+        "node_modules",
+        "target",
+        "dist",
+        "build",
+        ".git",
+        "__pycache__",
+        "vendor",
+        ".venv",
+        "venv",
+        ".next",
+        ".nuxt",
+        "out",
+        ".output",
+        ".idea",
+        ".vscode",
+        ".vs",
+    ]
+    .iter()
+    .copied()
+    .collect();
 
     if let Ok(entries) = std::fs::read_dir(root) {
         for entry in entries.flatten() {
@@ -564,7 +571,10 @@ fn detect_project(root: &Path) -> DetectedProject {
                 }
                 found_nested = true;
             }
-            if path.join("package.json").exists() && !ecosystems.contains(&Ecosystem::Node) && !ecosystems.contains(&Ecosystem::Pnpm) {
+            if path.join("package.json").exists()
+                && !ecosystems.contains(&Ecosystem::Node)
+                && !ecosystems.contains(&Ecosystem::Pnpm)
+            {
                 ecosystems.push(Ecosystem::Node);
                 scan_dirs.insert(dir_name.clone());
                 for ext in Ecosystem::Node.extensions() {
@@ -572,7 +582,9 @@ fn detect_project(root: &Path) -> DetectedProject {
                 }
                 found_nested = true;
             }
-            if (path.join("go.mod").exists() || path.join("go.work").exists()) && !ecosystems.contains(&Ecosystem::Go) {
+            if (path.join("go.mod").exists() || path.join("go.work").exists())
+                && !ecosystems.contains(&Ecosystem::Go)
+            {
                 ecosystems.push(Ecosystem::Go);
                 scan_dirs.insert(dir_name.clone());
                 for ext in Ecosystem::Go.extensions() {
@@ -580,7 +592,9 @@ fn detect_project(root: &Path) -> DetectedProject {
                 }
                 found_nested = true;
             }
-            if (path.join("pyproject.toml").exists() || path.join("setup.py").exists()) && !ecosystems.contains(&Ecosystem::Python) {
+            if (path.join("pyproject.toml").exists() || path.join("setup.py").exists())
+                && !ecosystems.contains(&Ecosystem::Python)
+            {
                 ecosystems.push(Ecosystem::Python);
                 scan_dirs.insert(dir_name.clone());
                 for ext in Ecosystem::Python.extensions() {
@@ -588,7 +602,9 @@ fn detect_project(root: &Path) -> DetectedProject {
                 }
                 found_nested = true;
             }
-            if (path.join("CMakeLists.txt").exists() || path.join("Makefile").exists()) && !ecosystems.contains(&Ecosystem::CppProject) {
+            if (path.join("CMakeLists.txt").exists() || path.join("Makefile").exists())
+                && !ecosystems.contains(&Ecosystem::CppProject)
+            {
                 ecosystems.push(Ecosystem::CppProject);
                 scan_dirs.insert(dir_name.clone());
                 for ext in Ecosystem::CppProject.extensions() {
@@ -601,8 +617,13 @@ fn detect_project(root: &Path) -> DetectedProject {
             // own ecosystem marker (e.g. root has package.json AND server/Cargo.toml)
             if !found_nested {
                 let nested_markers = [
-                    "Cargo.toml", "package.json", "go.mod", "go.work",
-                    "pyproject.toml", "setup.py", "CMakeLists.txt",
+                    "Cargo.toml",
+                    "package.json",
+                    "go.mod",
+                    "go.work",
+                    "pyproject.toml",
+                    "setup.py",
+                    "CMakeLists.txt",
                 ];
                 for marker in &nested_markers {
                     if path.join(marker).exists() {
@@ -670,15 +691,23 @@ fn detect_project(root: &Path) -> DetectedProject {
 // ---------------------------------------------------------------------------
 
 fn validate_scan(root: &Path, scan_dirs: &[String], extensions: &HashSet<String>) -> usize {
-    let dirs_to_scan: Vec<String> = if scan_dirs.is_empty() {
-        vec![".".to_string()]
-    } else {
-        scan_dirs.to_vec()
-    };
+    let dirs_to_scan: Vec<String> =
+        if scan_dirs.is_empty() { vec![".".to_string()] } else { scan_dirs.to_vec() };
 
     let default_skip: HashSet<&str> = [
-        "node_modules", "target", "dist", "build", ".git", "__pycache__",
-        "vendor", ".venv", "venv", ".next", ".nuxt", "out", ".output",
+        "node_modules",
+        "target",
+        "dist",
+        "build",
+        ".git",
+        "__pycache__",
+        "vendor",
+        ".venv",
+        "venv",
+        ".next",
+        ".nuxt",
+        "out",
+        ".output",
     ]
     .iter()
     .copied()
@@ -688,19 +717,12 @@ fn validate_scan(root: &Path, scan_dirs: &[String], extensions: &HashSet<String>
     let limit = 10_000; // Cap to avoid slow scans on huge repos
 
     for dir_name in &dirs_to_scan {
-        let dir = if dir_name == "." {
-            root.to_path_buf()
-        } else {
-            root.join(dir_name)
-        };
+        let dir = if dir_name == "." { root.to_path_buf() } else { root.join(dir_name) };
         if !dir.exists() {
             continue;
         }
 
-        let walker = ignore::WalkBuilder::new(&dir)
-            .hidden(true)
-            .git_ignore(true)
-            .build();
+        let walker = ignore::WalkBuilder::new(&dir).hidden(true).git_ignore(true).build();
 
         for entry in walker.flatten() {
             if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
@@ -763,11 +785,8 @@ fn generate_codescope_toml(detection: &DetectedProject) -> String {
     }
 
     if !detection.scan_dirs.is_empty() {
-        let quoted: Vec<String> = detection
-            .scan_dirs
-            .iter()
-            .map(|d| format!("\"{}\"", d))
-            .collect();
+        let quoted: Vec<String> =
+            detection.scan_dirs.iter().map(|d| format!("\"{}\"", d)).collect();
         out.push_str(&format!("scan_dirs = [{}]\n", quoted.join(", ")));
     }
 
@@ -779,11 +798,8 @@ fn generate_codescope_toml(detection: &DetectedProject) -> String {
     }
 
     if !detection.skip_dirs.is_empty() {
-        let quoted: Vec<String> = detection
-            .skip_dirs
-            .iter()
-            .map(|d| format!("\"{}\"", d))
-            .collect();
+        let quoted: Vec<String> =
+            detection.skip_dirs.iter().map(|d| format!("\"{}\"", d)).collect();
         out.push_str(&format!("skip_dirs = [{}]\n", quoted.join(", ")));
     }
 
@@ -861,43 +877,27 @@ fn merge_global_repos_toml(root: &Path) -> Result<(), String> {
     let dir = PathBuf::from(&home).join(".codescope");
     let toml_path = dir.join("repos.toml");
 
-    let repo_name = root
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("default");
+    let repo_name = root.file_name().and_then(|n| n.to_str()).unwrap_or("default");
 
     // Read existing or start fresh
     let mut table: toml::Table = if toml_path.exists() {
         let content = std::fs::read_to_string(&toml_path)
             .map_err(|e| format!("Failed to read {}: {}", toml_path.display(), e))?;
-        content
-            .parse()
-            .map_err(|e| format!("Failed to parse {}: {}", toml_path.display(), e))?
+        content.parse().map_err(|e| format!("Failed to parse {}: {}", toml_path.display(), e))?
     } else {
         toml::Table::new()
     };
 
-    let repos = table
-        .entry("repos")
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
-    let repos = repos
-        .as_table_mut()
-        .ok_or("repos is not a table in repos.toml")?;
+    let repos = table.entry("repos").or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let repos = repos.as_table_mut().ok_or("repos is not a table in repos.toml")?;
 
     if repos.contains_key(repo_name) {
-        eprintln!(
-            "  Repo '{}' already in {}",
-            repo_name,
-            toml_path.display()
-        );
+        eprintln!("  Repo '{}' already in {}", repo_name, toml_path.display());
         return Ok(());
     }
 
     let mut entry = toml::Table::new();
-    entry.insert(
-        "root".to_string(),
-        toml::Value::String(root.to_string_lossy().to_string()),
-    );
+    entry.insert("root".to_string(), toml::Value::String(root.to_string_lossy().to_string()));
     repos.insert(repo_name.to_string(), toml::Value::Table(entry));
 
     std::fs::create_dir_all(&dir)
@@ -907,11 +907,7 @@ fn merge_global_repos_toml(root: &Path) -> Result<(), String> {
     std::fs::write(&toml_path, output)
         .map_err(|e| format!("Failed to write {}: {}", toml_path.display(), e))?;
 
-    eprintln!(
-        "  Added '{}' to {}",
-        repo_name,
-        toml_path.display()
-    );
+    eprintln!("  Added '{}' to {}", repo_name, toml_path.display());
     Ok(())
 }
 
@@ -1007,10 +1003,7 @@ pub fn run_init(args: &[String]) -> i32 {
     }
 
     eprintln!();
-    eprintln!(
-        "  Open Claude Code in {} -- CodeScope tools are now available.",
-        root.display()
-    );
+    eprintln!("  Open Claude Code in {} -- CodeScope tools are now available.", root.display());
     0
 }
 
@@ -1070,11 +1063,7 @@ pub fn run_doctor(args: &[String]) -> i32 {
         let content = std::fs::read_to_string(&mcp_path).unwrap_or_default();
         match serde_json::from_str::<serde_json::Value>(&content) {
             Ok(data) => {
-                if data
-                    .get("mcpServers")
-                    .and_then(|v| v.get("codescope"))
-                    .is_some()
-                {
+                if data.get("mcpServers").and_then(|v| v.get("codescope")).is_some() {
                     eprintln!("  [PASS] .mcp.json has codescope entry");
                 } else {
                     eprintln!("  [WARN] .mcp.json exists but missing codescope entry");
@@ -1094,11 +1083,8 @@ pub fn run_doctor(args: &[String]) -> i32 {
     // 4. Quick test scan (limit 100 files)
     let config = crate::load_codescope_config(&root);
 
-    let scan_dirs: Vec<String> = if config.scan_dirs.is_empty() {
-        vec![".".to_string()]
-    } else {
-        config.scan_dirs.clone()
-    };
+    let scan_dirs: Vec<String> =
+        if config.scan_dirs.is_empty() { vec![".".to_string()] } else { config.scan_dirs.clone() };
 
     let start = std::time::Instant::now();
     let mut file_count: usize = 0;
@@ -1106,19 +1092,12 @@ pub fn run_doctor(args: &[String]) -> i32 {
     let scan_limit = 100;
 
     for dir_name in &scan_dirs {
-        let scan_root = if dir_name == "." {
-            root.clone()
-        } else {
-            root.join(dir_name)
-        };
+        let scan_root = if dir_name == "." { root.clone() } else { root.join(dir_name) };
         if !scan_root.exists() {
             continue;
         }
 
-        let walker = ignore::WalkBuilder::new(&scan_root)
-            .hidden(true)
-            .git_ignore(true)
-            .build();
+        let walker = ignore::WalkBuilder::new(&scan_root).hidden(true).git_ignore(true).build();
 
         for entry in walker.flatten() {
             if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
@@ -1163,10 +1142,7 @@ pub fn run_doctor(args: &[String]) -> i32 {
     let elapsed = start.elapsed();
 
     if file_count > 0 {
-        eprintln!(
-            "  [PASS] Test scan: found {} files in {:.0?}",
-            file_count, elapsed
-        );
+        eprintln!("  [PASS] Test scan: found {} files in {:.0?}", file_count, elapsed);
     } else {
         eprintln!("  [WARN] Test scan: no files found");
         has_warn = true;
@@ -1186,10 +1162,7 @@ pub fn run_doctor(args: &[String]) -> i32 {
         }
     }
     if git_dirs > 1 {
-        eprintln!(
-            "  [WARN] Found {} subdirectories with .git -- root may be too broad",
-            git_dirs
-        );
+        eprintln!("  [WARN] Found {} subdirectories with .git -- root may be too broad", git_dirs);
         has_warn = true;
     }
 

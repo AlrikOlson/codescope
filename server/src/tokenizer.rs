@@ -30,9 +30,7 @@ pub struct TiktokenTokenizer {
 #[cfg(feature = "tiktoken")]
 impl TiktokenTokenizer {
     pub fn new() -> Self {
-        Self {
-            bpe: tiktoken_rs::cl100k_base().unwrap(),
-        }
+        Self { bpe: tiktoken_rs::cl100k_base().unwrap() }
     }
 }
 
