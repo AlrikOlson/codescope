@@ -1,6 +1,6 @@
 [package]
 name = "codescope-server"
-version = "1.2.0"
+version = "1.2.1"
 edition = "2021"
 description = "Fast codebase indexer and search server — MCP server for Claude Code and standalone web UI"
 repository = "https://github.com/AlrikOlson/codescope"
