@@ -3,78 +3,74 @@
 [![CI](https://github.com/AlrikOlson/codescope/actions/workflows/ci.yml/badge.svg)](https://github.com/AlrikOlson/codescope/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Fast codebase indexer and search server. Works as an [MCP](https://modelcontextprotocol.io/) server for Claude Code or as a standalone HTTP server with a rich web UI.
+CodeScope indexes your codebase and exposes it over MCP. Scans 200K files in ~2s, extracts function/class signatures across 18 languages, builds import dependency graphs, and uses a water-fill algorithm to pack relevant context into token budgets.
 
-Indexes 200K+ files in under 2 seconds. Understands module structure, import graphs, and file dependencies across 18+ languages.
+Works as an MCP server for [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code) or as a standalone HTTP server with a web UI.
 
-## Quick Start
-
-**Install:**
+## Install
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash
 ```
 
-Downloads a pre-built binary (~5MB). No compilation needed.
+Pre-built binary, ~5MB.
 
-**Set up your project:**
+## Setup
 
 ```bash
 cd /path/to/your/project
 codescope-server init
 ```
 
-Generates `.codescope.toml` and `.mcp.json`. Open Claude Code in that directory and CodeScope tools are available immediately.
+Generates `.codescope.toml` and `.mcp.json`. Restart Claude Code to pick up the tools.
 
-**Or both in one command:**
+## How It Works
 
-```bash
-curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- /path/to/project
-```
+**Scanning.** Parallel directory walk via the `ignore` crate, respects `.gitignore`. Detects modules by directory heuristics (e.g., a directory with its own `Cargo.toml` or `package.json` is a module boundary). Files are scored by IDF-weighted path terms for search ranking.
 
-## Why CodeScope?
+**Stub extraction.** Strips function and class bodies, keeps signatures. Uses brace-depth tracking for C-family languages and indentation tracking for Python/Ruby. This lets agents read the structure of a file without burning tokens on implementation details. Quality varies by language — works best for Rust, TypeScript, and Python; C++ templates can trip up the brace tracker.
 
-- **Structural awareness** — not just text search. Extracts function/class signatures, traces import graphs, and detects module boundaries across 18+ languages.
-- **Token-budget reads** — `cs_read_context` uses a water-fill algorithm to allocate tokens across files by importance, fitting exactly what an LLM's context window can hold.
-- **Impact analysis** — "what breaks if I change this file?" Traces the full import dependency chain with configurable depth, even across repository boundaries.
-- **Semantic search** — find code by meaning, not just keywords. Uses BERT embeddings (all-MiniLM-L6-v2) for intent-based matching.
+**Fuzzy matching.** FZF v2 algorithm: 64-bit bitmask pre-filter rejects non-matching candidates in O(1), then Smith-Waterman DP scores matches with bonuses for CamelCase boundaries, path delimiters, and consecutive characters.
+
+**Budget allocation.** `cs_read_context` ranks files by importance (search relevance, dependency centrality), then fills a token budget using a water-fill strategy. Files demote through tiers — full content, stubs, pruned stubs, manifest-only — until everything fits. Files the agent already read in the current session get deprioritized automatically.
 
 ## MCP Tools
 
+19 tools, grouped by function:
+
 | Tool | Description |
 |------|-------------|
-| **Search** | |
-| `cs_find` | Combined filename + content search — start here |
-| `cs_grep` | Regex content search with context lines, extension/category filters |
-| `cs_search` | Fuzzy filename and module search (CamelCase-aware) |
-| `cs_semantic_search` | Search by intent using ML embeddings (requires `--semantic` flag) |
-| **Read** | |
-| `cs_read_file` | Read a file — full content or structural stubs (signatures without bodies) |
+| `cs_find` | Combined filename + content search (start here) |
+| `cs_grep` | Regex content search with context lines and file filters |
+| `cs_semantic_search` | Search by intent using BERT embeddings (requires `--semantic`) |
+| `cs_read_file` | Read a file: full content or structural stubs (signatures only) |
 | `cs_read_files` | Batch read up to 50 files |
-| `cs_read_context` | Budget-aware batch read — fits N files into a token budget with importance-weighted compression |
-| **Navigate** | |
-| `cs_list_modules` | List all detected modules/categories with file counts |
+| `cs_read_context` | Budget-aware batch read with importance-weighted compression |
+| `cs_list_modules` | List detected modules with file counts |
 | `cs_get_module_files` | List files in a specific module |
 | `cs_get_deps` | Module dependency graph (public/private) |
-| `cs_find_imports` | Trace import/include relationships in both directions |
-| **Analyze** | |
-| `cs_impact` | Full dependency chain — what files are affected by a change, with depth control |
-| **Server** | |
-| `cs_status` | Indexed repos, file counts, language breakdown, scan time |
-| `cs_rescan` | Re-index repos without restarting |
-| `cs_add_repo` | Add a new repository at runtime |
+| `cs_find_imports` | Trace import relationships in both directions |
+| `cs_impact` | Transitive dependency chain — what breaks if a file changes |
+| `cs_blame` | Git blame for a file or line range |
+| `cs_file_history` | Recent commits that touched a file, with co-changed files |
+| `cs_changed_since` | Files changed since a commit, branch, or tag |
+| `cs_hot_files` | Most frequently changed files (churn ranking) |
+| `cs_session_info` | Files read in the current MCP session |
+| `cs_status` | Indexed repos, file counts, language stats, scan time |
+| `cs_rescan` | Re-index without restarting |
+| `cs_add_repo` | Add a repository at runtime |
 
 ## Semantic Search
 
-All pre-built binaries include semantic search. Enable it at startup:
+Enable at startup:
 
 ```bash
 codescope-server --mcp --root /path/to/project --semantic
 ```
 
-Uses the [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) model (~90MB, downloaded to `~/.cache/codescope/models/` on first use). Generates 384-dimensional embeddings with mean pooling and L2 normalization, then ranks results by cosine similarity.
+Uses [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) (~90MB, downloaded to `~/.cache/codescope/models/` on first use). Generates 384-dimensional embeddings with mean pooling and L2 normalization, ranks by cosine similarity. Adds a few seconds to startup for indexing.
 
-When `--semantic` is passed, `codescope-server init` automatically configures your project to use it.
+When `--semantic` is passed, `codescope-server init` configures the project to use it automatically.
 
 ## Web UI
 
@@ -84,17 +80,15 @@ codescope-web /path/to/project
 
 Opens at `http://localhost:8432`. Set `PORT=9000` for a custom port.
 
-**Panels:**
-
 | Shortcut | Panel |
 |----------|-------|
-| `Ctrl+K` / `Ctrl+1` | Search — full-text with fuzzy matching |
-| `Ctrl+B` / `Ctrl+2` | Tree — file/module browser with breadcrumbs |
-| `Ctrl+3` | Context — selected files inspector |
-| `Ctrl+4` | Stats — codebase metrics dashboard |
-| `Ctrl+5` | Graph — interactive dependency visualization |
+| `Ctrl+K` / `Ctrl+1` | Search (full-text, fuzzy) |
+| `Ctrl+B` / `Ctrl+2` | File/module tree browser |
+| `Ctrl+3` | Context inspector |
+| `Ctrl+4` | Codebase stats |
+| `Ctrl+5` | Dependency graph |
 
-**View modes:** file list with preview, treemap visualization (Three.js), dependency graph, stats dashboard. Supports dark/light/system themes, virtual scrolling for large codebases, and responsive layouts.
+Also includes a treemap visualization (Three.js) and dark/light theme support.
 
 ## Multi-Repo Support
 
@@ -182,15 +176,15 @@ Environment:
 
 ## Troubleshooting
 
-**"codescope-server: command not found"** — Restart your terminal or `source ~/.bashrc` (or `~/.zshrc`).
+`codescope-server: command not found` — Restart your terminal or `source ~/.bashrc` / `~/.zshrc`.
 
-**Semantic search not responding** — Make sure you passed `--semantic` when starting the server. The model downloads on first use (~90MB).
+Semantic search not responding — Make sure you passed `--semantic` when starting the server. The model downloads on first use (~90MB).
 
-**Install fails behind a proxy** — Build from source: `bash setup.sh --from-source` (requires Rust toolchain).
+Install fails behind a proxy — Build from source: `bash setup.sh --from-source` (requires Rust toolchain).
 
-**Claude Code doesn't see the tools** — Run `codescope-server init` in your project directory, then restart Claude Code. Verify `.mcp.json` exists in your project root.
+Claude Code doesn't see the tools — Run `codescope-server init` in your project directory, then restart Claude Code. Verify `.mcp.json` exists in your project root.
 
-**WSL** — Works the same as regular Linux. No special steps.
+WSL — Works the same as regular Linux. No special steps.
 
 ---
 
@@ -260,7 +254,7 @@ Version analysis uses the [Claude Agent SDK](https://docs.anthropic.com/en/docs/
 ```
 server/src/
 ├── main.rs        CLI parsing, HTTP server (Axum), MCP mode entry
-├── mcp.rs         MCP stdio server (JSON-RPC), 15 tools
+├── mcp.rs         MCP stdio server (JSON-RPC), 19 tools
 ├── api.rs         HTTP API handlers (/api/tree, /api/grep, etc.)
 ├── scan.rs        File discovery, module detection, dependency + import scanning
 ├── stubs.rs       Language-aware stub extraction (signatures without bodies)
@@ -279,7 +273,7 @@ src/               React 18 frontend (Vite + TypeScript)
 
 ### Language Support
 
-**Stub extraction** (function/class signatures):
+Stub extraction (function/class signatures):
 
 Brace-based: C, C++, C#, Java, Kotlin, Scala, Rust, Go, JavaScript, TypeScript, Swift, D, PowerShell, HLSL/GLSL/WGSL shaders
 
@@ -287,11 +281,11 @@ Indent-based: Python, Ruby
 
 Config: JSON, YAML, TOML, XML, INI
 
-**Import tracing:**
+Import tracing:
 
 C/C++ (`#include`), Python (`import`/`from`), JavaScript/TypeScript (`import`/`require`), Rust (module system), Go (package imports), C# (`using`), PowerShell (`Import-Module`)
 
-**Package manager detection:** Cargo.toml, package.json, go.mod, .csproj
+Package manager detection: Cargo.toml, package.json, go.mod, .csproj
 
 ## License
 
