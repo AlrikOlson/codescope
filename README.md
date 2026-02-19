@@ -80,15 +80,19 @@ codescope-web /path/to/project
 
 Opens at `http://localhost:8432`. Set `PORT=9000` for a custom port.
 
-| Shortcut | Panel |
-|----------|-------|
-| `Ctrl+K` / `Ctrl+1` | Search (full-text, fuzzy) |
-| `Ctrl+B` / `Ctrl+2` | File/module tree browser |
-| `Ctrl+3` | Context inspector |
-| `Ctrl+4` | Codebase stats |
-| `Ctrl+5` | Dependency graph |
+**Panels:**
 
-Also includes a treemap visualization (Three.js) and dark/light theme support.
+- **Explorer** (`Ctrl+B`) — File/module tree with integrated context builder. Select files to build LLM context. Selections sync bidirectionally with the map and graph views.
+- **Search** (`Ctrl+K`) — Full-text fuzzy search with real-time results and file preview.
+
+**Views** (toggle via the toolbar):
+
+- **Files** — Flat file list for the active module, with inline preview.
+- **Map** — Squarified treemap of the entire codebase. Zoom, pan, click to select modules. Double-click to zoom into a subtree. Cube-root dampening prevents large folders from dominating visibility.
+- **Graph** — 3D force-directed dependency graph (Three.js). Nodes are colored by category cluster, edges show public/private dependencies. Click nodes to inspect dependency trees. Supports graphs with 1000+ nodes via LOD geometry and spatial-hash simulation.
+- **Stats** — Language breakdown, file counts, scan timing.
+
+Dark/light/system theme toggle in the activity bar.
 
 ## Multi-Repo Support
 
@@ -247,7 +251,7 @@ dev:     lint ─┬─→ build (4 platforms) ─→ channel-release (dev)
          test ─┘
 ```
 
-Version analysis uses the [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/sdk) with CodeScope's own MCP tools to analyze changes and determine semantic version bumps, commit messages, and release notes.
+Version analysis uses the [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/sdk) with CodeScope's own MCP tools to analyze changes and determine semantic version bumps, commit messages, and release notes. All version files (`Cargo.toml`, `package.json`, `package-lock.json`) are updated atomically during release.
 
 ## Architecture
 
@@ -266,9 +270,27 @@ server/src/
 └── semantic.rs    Semantic search via all-MiniLM-L6-v2 BERT embeddings
 
 src/               React 18 frontend (Vite + TypeScript)
-├── App.tsx        Main app shell, panels, keyboard shortcuts
-└── ...            TreeSidebar, FileList, SearchSidebar, CodebaseMap,
-                   DependencyGraph, StatsDashboard, ContextPanel, ActivityBar
+├── App.tsx              Main app shell, view routing, keyboard shortcuts
+├── ActivityBar.tsx       Side navigation (panel switching, theme toggle)
+├── TreeSidebar.tsx       File/module tree with integrated context builder
+├── SearchSidebar.tsx     Full-text fuzzy search panel
+├── FileList.tsx          Flat file listing with inline preview
+├── FilePreview.tsx       Source code viewer
+├── StatsDashboard.tsx    Language and file statistics
+├── selectionActions.ts   Unified selection logic (module toggle, dep selection)
+├── treemap/              Squarified treemap visualization (Canvas 2D)
+│   ├── CodebaseMap.tsx   Treemap view component
+│   ├── buildTreemapData  Tree → treemap node conversion with value dampening
+│   ├── layout.ts         Squarified layout algorithm
+│   └── render.ts         Canvas rendering with zoom/pan viewport
+└── depgraph/             3D dependency graph (Three.js)
+    ├── DependencyGraph   Graph view component with inspect panels
+    ├── simulation.ts     Force-directed layout (spatial hash, cluster gravity)
+    ├── nodeRenderer.ts   Instanced mesh rendering with LOD geometry
+    ├── edgeRenderer.ts   Edge lines with public/private styling
+    ├── interaction.ts    Mouse picking, camera fly-to, node selection
+    ├── highlights.ts     Dirty-flagged highlight state computation
+    └── nebulaEffects.ts  Ambient cluster glow effects
 ```
 
 ### Language Support
@@ -285,7 +307,7 @@ Import tracing:
 
 C/C++ (`#include`), Python (`import`/`from`), JavaScript/TypeScript (`import`/`require`), Rust (module system), Go (package imports), C# (`using`), PowerShell (`Import-Module`)
 
-Package manager detection: Cargo.toml, package.json, go.mod, .csproj
+Dependency scanning: Cargo.toml, package.json, go.mod, CMakeLists.txt, .Build.cs
 
 ## License
 
