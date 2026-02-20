@@ -4,6 +4,11 @@ All notable changes to CodeScope will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.1] - 2026-02-20
+
+### Added
+- AI-powered documentation sync step in the release pipeline: automatically detects and fixes factual inaccuracies in `README.md` and `CONTRIBUTING.md` at release time using the Claude Agent SDK and CodeScope MCP tools (`.github/scripts/ai-docs-sync.mjs`, `.github/scripts/lib/docs.mjs`)
+
 ## [0.6.0] - 2026-02-20
 
 ### Added

@@ -172,6 +172,7 @@ Options:
   --config <PATH>          Load repos from a TOML config file
   --mcp                    Run as MCP stdio server
   --semantic               Enable semantic code search
+  --semantic-model <NAME>  Embedding model: minilm (default), codebert, starencoder
   --dist <PATH>            Path to web UI dist directory
   --tokenizer <NAME>       Token counter: bytes-estimate (default) or tiktoken
   --help                   Show help
@@ -247,10 +248,10 @@ Single workflow (`ci.yml`):
 PR:      lint ─┐ (parallel)
          test ─┘
 
-master:  lint ─┬─→ version (AI) ─→ build (4 platforms) ─→ stable-release
+master:  lint ─┬─→ version (AI) ─→ build (6 platforms) ─→ stable-release
          test ─┘                                         ─→ channel-release (edge)
 
-dev:     lint ─┬─→ build (4 platforms) ─→ channel-release (dev)
+dev:     lint ─┬─→ build (6 platforms) ─→ channel-release (dev)
          test ─┘
 ```
 
@@ -270,6 +271,8 @@ server/src/
 ├── tokenizer.rs   Token counting (bytes-estimate or tiktoken)
 ├── types.rs       Shared types: RepoState, ServerState, IDF index, scoring
 ├── init.rs        CLI subcommands: init, doctor
+├── git.rs         Git operations: blame, file history, changed files, churn analysis
+├── watch.rs       File watcher for incremental live re-indexing
 └── semantic.rs    Semantic search via all-MiniLM-L6-v2 BERT embeddings
 
 src/               React 18 frontend (Vite + TypeScript)

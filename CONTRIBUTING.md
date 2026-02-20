@@ -71,6 +71,8 @@ The backend lives in `server/src/` with these modules:
 | `tokenizer.rs` | Token counting (bytes-estimate or tiktoken) |
 | `types.rs` | Shared types and helpers |
 | `init.rs` | `init` and `doctor` subcommands |
+| `git.rs` | Git operations: blame, file history, changed files, churn analysis |
+| `watch.rs` | File watcher for incremental live re-indexing |
 | `semantic.rs` | Semantic search via BERT embeddings |
 
 The frontend is a React 18 + TypeScript app in `src/`, built with Vite.
