@@ -140,3 +140,36 @@ jobs:
         run: npm run build
       - name: Run integration tests
         run: bash tests/integration.sh
+
+  # ──────────────────────────────────────────────
+  # E2E agent test — Claude Agent SDK + CodeScope MCP
+  # ──────────────────────────────────────────────
+  e2e-agent:
+    needs: [changes, test]
+    if: needs.changes.outputs.has_code_changes == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Build server
+        run: cargo build --release --manifest-path server/Cargo.toml
+
+      - name: Initialize CodeScope index
+        run: server/target/release/codescope-server init --root .
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run e2e agent test
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: node .github/scripts/e2e-agent-test.mjs

@@ -72,9 +72,30 @@ fn repo_path(repo: &RepoState, path: &str, multi: bool) -> String {
 // ---------------------------------------------------------------------------
 
 fn tool_definitions() -> serde_json::Value {
+    // Shared annotation sets (MCP spec 2025-11-25)
+    let ro = serde_json::json!({
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+    });
+    let mutating = serde_json::json!({
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+    });
+    let additive = serde_json::json!({
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+    });
+
     serde_json::json!([
         {
             "name": "cs_search",
+            "annotations": ro,
             "description": "YOUR PRIMARY DISCOVERY TOOL. Combined search: fuzzy filename + content grep + semantic search (when available) in one call. Returns a unified ranked list. Use this first for discovering files and modules.\n\nReturns files ranked by combined relevance. When semantic search is available, results are automatically fused with keyword matches for better accuracy. Use fileLimit/moduleLimit to control result counts.",
             "inputSchema": {
                 "type": "object",
@@ -94,11 +115,12 @@ fn tool_definitions() -> serde_json::Value {
         },
         {
             "name": "cs_grep",
+            "annotations": ro,
             "description": "Search source file contents (case-insensitive). Default match_mode='all' requires ALL terms present in a line. Use 'any' for OR, 'exact' for literal phrases, 'regex' for patterns.\n\nTips: Filter with ext='rs,go', path='server/src' prefix, or category. Follow up with cs_read for full context.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "description": "Search terms (min 2 chars)." },
+                    "query": { "type": "string", "description": "Search terms (min 1 char)." },
                     "match_mode": { "type": "string", "enum": ["all", "any", "exact", "regex"], "description": "How to match multi-word queries. 'all' (default): line must contain ALL terms. 'any': line contains ANY term (OR). 'exact': treat query as literal phrase. 'regex': raw regex pattern." },
                     "ext": { "type": "string", "description": "Comma-separated extensions to filter (e.g. 'h,cpp' or 'rs,go')" },
                     "path": { "type": "string", "description": "Path prefix to filter files (e.g. 'server/src' or 'src/components')" },
@@ -114,6 +136,7 @@ fn tool_definitions() -> serde_json::Value {
         },
         {
             "name": "cs_read",
+            "annotations": ro,
             "description": "Read source files. Use 'path' for a single file, 'paths' for batch reads.\n\nModes:\n- stubs (recommended first): structural outline with class/function signatures, no bodies.\n- full: complete content. For large files, use start_line/end_line.\n\nWith 'paths' + 'budget': budget-aware batch read with importance-weighted allocation.",
             "inputSchema": {
                 "type": "object",
@@ -136,7 +159,8 @@ fn tool_definitions() -> serde_json::Value {
         },
         {
             "name": "cs_modules",
-            "description": "Explore module/category structure. Actions:\n- list (default): list modules with file counts\n- files: get all files in a specific module\n- deps: get public/private dependencies for a module",
+            "annotations": ro,
+            "description": "Explore module/category structure. Actions:\n- list (default): list modules with file counts\n- files: get all files in a specific module\n- deps: get package-level dependencies from manifests (Cargo.toml, package.json, go.mod). For file-level import relationships, use cs_imports instead.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -150,6 +174,7 @@ fn tool_definitions() -> serde_json::Value {
         },
         {
             "name": "cs_imports",
+            "annotations": ro,
             "description": "Find import/include relationships for a file. Shows what a file imports and/or what imports it.\n\nSet transitive=true for impact analysis: finds everything that depends on the file (directly or transitively) via BFS over the import graph.",
             "inputSchema": {
                 "type": "object",
@@ -166,6 +191,7 @@ fn tool_definitions() -> serde_json::Value {
         },
         {
             "name": "cs_git",
+            "annotations": ro,
             "description": "Git history analysis. Actions:\n- blame: who last modified each line of a file\n- history: recent commits that touched a file\n- changed: files changed since a commit/branch/tag\n- hotspots: most frequently changed files (churn ranking)",
             "inputSchema": {
                 "type": "object",
@@ -184,6 +210,7 @@ fn tool_definitions() -> serde_json::Value {
         },
         {
             "name": "cs_status",
+            "annotations": ro,
             "description": "Show indexed repositories, file counts, language breakdown, scan time, and session info (files read, tokens served).",
             "inputSchema": {
                 "type": "object",
@@ -193,6 +220,7 @@ fn tool_definitions() -> serde_json::Value {
         },
         {
             "name": "cs_rescan",
+            "annotations": mutating,
             "description": "Re-index one or all repositories without restarting the server. Use after significant file changes.",
             "inputSchema": {
                 "type": "object",
@@ -203,6 +231,7 @@ fn tool_definitions() -> serde_json::Value {
         },
         {
             "name": "cs_add_repo",
+            "annotations": additive,
             "description": "Dynamically add a new repository to the index at runtime.",
             "inputSchema": {
                 "type": "object",
@@ -512,8 +541,8 @@ fn handle_tool_call(
             let multi = repos.len() > 1;
 
             let query = args["query"].as_str().unwrap_or("");
-            if query.len() < 2 {
-                return ("Error: Query must be at least 2 characters".to_string(), true);
+            if query.is_empty() {
+                return ("Error: Query must not be empty".to_string(), true);
             }
 
             let limit = args["limit"].as_u64().unwrap_or(50).min(200) as usize;
@@ -1056,8 +1085,8 @@ fn handle_tool_call(
             let multi = repos.len() > 1;
 
             let raw_query = args["query"].as_str().unwrap_or("");
-            if raw_query.len() < 2 {
-                return ("Error: Query must be at least 2 characters".to_string(), true);
+            if raw_query.is_empty() {
+                return ("Error: Query must not be empty".to_string(), true);
             }
             let file_limit =
                 args["fileLimit"].as_u64().unwrap_or(args["limit"].as_u64().unwrap_or(30)).min(100)
@@ -1305,11 +1334,12 @@ fn handle_tool_call(
             });
             ranked.truncate(file_limit);
 
-            // Semantic fusion: if semantic index is available, merge results
+            // Semantic fusion via Reciprocal Rank Fusion (RRF).
+            // RRF is rank-based, sidestepping the score normalization problem between
+            // keyword scores and cosine similarity. Formula: score = Σ 1/(k + rank).
             #[cfg(feature = "semantic")]
             let has_semantic = {
                 let mut fused = false;
-                // Collect semantic results from each repo
                 for repo in &repos {
                     let sem_guard = repo.semantic_index.read().unwrap();
                     if let Some(ref index) = *sem_guard {
@@ -1319,85 +1349,108 @@ fn handle_tool_call(
                         {
                             if !sem_results.is_empty() {
                                 fused = true;
-                                // Build a set of file paths already in keyword results
-                                let keyword_paths: HashSet<String> =
-                                    ranked.iter().map(|r| r.display_path.clone()).collect();
+                                const RRF_K: f64 = 60.0;
 
-                                // For results in both: boost score by 1.3x
-                                for r in &mut ranked {
-                                    // Strip repo prefix for comparison
-                                    let bare_path = if multi {
-                                        r.display_path.split("] ").last().unwrap_or(&r.display_path)
-                                    } else {
-                                        &r.display_path
-                                    };
-                                    let in_semantic =
-                                        sem_results.iter().any(|sr| sr.file_path == bare_path);
-                                    if in_semantic {
-                                        // Boost: increase both name and grep scores
-                                        r.name_score *= 1.3;
-                                        r.grep_score *= 1.3;
-                                    }
-                                }
+                                // Build keyword rank map (ranked is already sorted by score)
+                                let keyword_map: std::collections::HashMap<
+                                    String,
+                                    (usize, &FindResult),
+                                > = ranked
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, r)| (r.display_path.clone(), (i + 1, r)))
+                                    .collect();
 
-                                // Add semantic-only results
-                                let max_sem_score = sem_results
+                                // Build semantic rank map + metadata
+                                use crate::semantic::SemanticSearchResult;
+                                let sem_map: std::collections::HashMap<
+                                    String,
+                                    (usize, &SemanticSearchResult),
+                                > = sem_results
                                     .iter()
-                                    .map(|r| r.score)
-                                    .fold(0.0f32, f32::max)
-                                    .max(0.001);
-                                for sr in &sem_results {
-                                    let display = repo_path(repo, &sr.file_path, multi);
-                                    if !keyword_paths.contains(&display) {
-                                        // Normalize semantic score to keyword score range
-                                        let norm_score =
-                                            (sr.score / max_sem_score) as f64 * max_grep * 0.8;
-                                        ranked.push(FindResult {
-                                            display_path: display,
-                                            desc: format!("line ~{}", sr.start_line),
-                                            name_score: 0.0,
-                                            grep_score: norm_score,
-                                            grep_count: 0,
-                                            top_match: Some(
-                                                sr.snippet.lines().next().unwrap_or("").to_string(),
-                                            ),
-                                            terms_matched: 0,
-                                            total_terms: terms_lower.len(),
-                                        });
-                                    }
-                                }
+                                    .enumerate()
+                                    .map(|(i, sr)| {
+                                        (repo_path(repo, &sr.file_path, multi), (i + 1, sr))
+                                    })
+                                    .collect();
 
-                                // Re-sort after fusion
-                                let max_name2 = ranked
-                                    .iter()
-                                    .map(|r| r.name_score)
-                                    .fold(0.0f64, f64::max)
-                                    .max(1.0);
-                                let max_grep2 = ranked
-                                    .iter()
-                                    .map(|r| r.grep_score)
-                                    .fold(0.0f64, f64::max)
-                                    .max(1.0);
-                                ranked.sort_by(|a, b| {
-                                    let norm_a = (a.name_score / max_name2) * name_w
-                                        + (a.grep_score / max_grep2) * grep_w;
-                                    let norm_b = (b.name_score / max_name2) * name_w
-                                        + (b.grep_score / max_grep2) * grep_w;
-                                    let boost_a = if a.name_score > 0.0 && a.grep_count > 0 {
-                                        1.25
-                                    } else {
-                                        1.0
-                                    };
-                                    let boost_b = if b.name_score > 0.0 && b.grep_count > 0 {
-                                        1.25
-                                    } else {
-                                        1.0
-                                    };
-                                    (norm_b * boost_b)
-                                        .partial_cmp(&(norm_a * boost_a))
-                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                // Collect all unique paths from both rankings
+                                let all_paths: HashSet<String> =
+                                    keyword_map.keys().chain(sem_map.keys()).cloned().collect();
+
+                                // Compute RRF scores and rebuild ranked list
+                                let mut rrf_ranked: Vec<(f64, FindResult)> = all_paths
+                                    .into_iter()
+                                    .map(|path| {
+                                        let kw_rrf = keyword_map
+                                            .get(&path)
+                                            .map(|(rank, _)| 1.0 / (RRF_K + *rank as f64))
+                                            .unwrap_or(0.0);
+                                        let sem_rrf = sem_map
+                                            .get(&path)
+                                            .map(|(rank, _)| 1.0 / (RRF_K + *rank as f64))
+                                            .unwrap_or(0.0);
+                                        let rrf_score = kw_rrf + sem_rrf;
+
+                                        // Build result entry from best available source
+                                        let entry = if let Some((_, kw_result)) =
+                                            keyword_map.get(&path)
+                                        {
+                                            // Keyword result exists — clone it
+                                            FindResult {
+                                                display_path: path,
+                                                desc: kw_result.desc.clone(),
+                                                name_score: kw_result.name_score,
+                                                grep_score: kw_result.grep_score,
+                                                grep_count: kw_result.grep_count,
+                                                top_match: kw_result.top_match.clone(),
+                                                terms_matched: kw_result.terms_matched,
+                                                total_terms: kw_result.total_terms,
+                                            }
+                                        } else if let Some((_, sr)) = sem_map.get(&path) {
+                                            // Semantic-only result
+                                            let file_desc = repo
+                                                .all_files
+                                                .iter()
+                                                .find(|f| f.rel_path == sr.file_path)
+                                                .map(|f| f.desc.as_str())
+                                                .unwrap_or("");
+                                            let desc = if file_desc.is_empty() {
+                                                format!("line ~{}", sr.start_line)
+                                            } else {
+                                                format!("{} (line ~{})", file_desc, sr.start_line)
+                                            };
+                                            let preview = sr
+                                                .snippet
+                                                .lines()
+                                                .find(|l| {
+                                                    let t = l.trim();
+                                                    !t.is_empty() && !t.starts_with("// File:")
+                                                })
+                                                .unwrap_or("")
+                                                .to_string();
+                                            FindResult {
+                                                display_path: path,
+                                                desc,
+                                                name_score: 0.0,
+                                                grep_score: 0.0,
+                                                grep_count: 0,
+                                                top_match: Some(preview),
+                                                terms_matched: 0,
+                                                total_terms: terms_lower.len(),
+                                            }
+                                        } else {
+                                            unreachable!()
+                                        };
+                                        (rrf_score, entry)
+                                    })
+                                    .collect();
+
+                                rrf_ranked.sort_by(|a, b| {
+                                    b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
                                 });
-                                ranked.truncate(file_limit);
+                                rrf_ranked.truncate(file_limit);
+                                ranked = rrf_ranked.into_iter().map(|(_, r)| r).collect();
                             }
                         }
                     }
@@ -1916,7 +1969,7 @@ pub(crate) fn dispatch_jsonrpc(
                 "result": {
                     "protocolVersion": negotiated,
                     "capabilities": {
-                        "tools": {}
+                        "tools": { "listChanged": true }
                     },
                     "serverInfo": {
                         "name": "codescope",
@@ -1959,11 +2012,7 @@ pub(crate) fn dispatch_jsonrpc(
             // Never set isError: true — it triggers Claude Code's sibling tool call
             // cascade failure (all parallel calls get killed). Instead, prefix the
             // error message so the LLM can still detect and recover from failures.
-            let content_text = if is_error {
-                format!("\u{26a0} Error: {text}")
-            } else {
-                text
-            };
+            let content_text = if is_error { format!("\u{26a0} Error: {text}") } else { text };
             serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,

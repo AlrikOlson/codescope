@@ -1139,6 +1139,15 @@ pub fn semantic_search(
         scores.push((i, dot));
     }
 
+    // Filter out low-relevance results before ranking — prevents garbage results
+    // for queries with no meaningful matches. Threshold tuned for MiniLM on code;
+    // code vocabulary mismatch requires a lower cutoff than general text (~0.3-0.5).
+    const MIN_SEMANTIC_SCORE: f32 = 0.25;
+    scores.retain(|(_, dot)| *dot >= MIN_SEMANTIC_SCORE);
+    if scores.is_empty() {
+        return Ok(Vec::new());
+    }
+
     // Oversample: retrieve more candidates for reranking
     let oversample = limit * 6;
     scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));

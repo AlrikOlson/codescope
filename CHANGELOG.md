@@ -4,6 +4,24 @@ All notable changes to CodeScope will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.10.0] — 2026-02-20
+
+### Added
+- MCP tool annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) on all 9 tools per MCP spec 2025-11-25
+- Cosine similarity relevance threshold (0.25) for semantic search — eliminates garbage results for irrelevant queries
+- `tools.listChanged` capability declaration in MCP initialize response
+
+### Changed
+- **Soft errors:** Tool call errors no longer set `isError: true` in MCP responses, preventing Claude Code's sibling tool call cascade failure where one error kills all parallel calls
+- **Reciprocal Rank Fusion (RRF):** Replaced ad-hoc 1.3x score boosting for hybrid keyword+semantic search with rank-based RRF (k=60), producing better-calibrated result rankings
+- **Semantic previews:** Semantic-only search results now show actual matching code snippets instead of `// File:` header comments, plus file descriptions from the index
+- **Grep minimum query:** Lowered from 2 characters to 1, allowing single-character searches
+- **Module deps description:** Clarified that `cs_modules deps` returns package-manifest dependencies, not file-level imports (use `cs_imports` for that)
+
+### Fixed
+- `cs_git blame` on uncommitted/new files now returns a clear error message instead of a cryptic libgit2 "path does not exist in tree" error
+- `cs_search` for gibberish/irrelevant queries no longer returns 30 low-quality semantic results
+
 ## [0.9.0] — 2026-02-20
 
 ### Added

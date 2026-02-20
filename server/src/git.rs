@@ -104,6 +104,18 @@ pub fn blame(
 ) -> Result<Vec<BlameLine>, String> {
     let repo = Repository::open(repo_root).map_err(|e| format!("Failed to open repo: {e}"))?;
 
+    // Check if the file exists in the git tree (HEAD) — give a clear error for new/uncommitted files
+    if let Ok(head_ref) = repo.head() {
+        if let Ok(tree) = head_ref.peel_to_tree() {
+            if tree.get_path(Path::new(rel_path)).is_err() {
+                return Err(format!(
+                    "File '{}' has no git history (new or uncommitted file). Commit it first, or use cs_read instead.",
+                    rel_path
+                ));
+            }
+        }
+    }
+
     let mut opts = BlameOptions::new();
     if let Some(s) = start {
         opts.min_line(s);
