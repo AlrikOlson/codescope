@@ -1,0 +1,125 @@
+name: E2E Agent Test
+
+on:
+  push:
+    branches: [main, master, dev]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Don't cancel in-progress e2e — API calls cost money
+concurrency:
+  group: e2e-agent-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    outputs:
+      should_run: ${{ steps.decide.outputs.should_run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: decide
+        run: |
+          # Always run on manual trigger
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            echo "manual trigger — always run"
+            exit 0
+          fi
+
+          # Detect changed files
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
+
+          if [[ "$BASE" == 0000* ]]; then
+            CHANGED=$(git ls-files)
+          else
+            CHANGED=$(git diff --name-only "$BASE" HEAD)
+          fi
+
+          echo "--- Changed files ---"
+          echo "$CHANGED"
+          echo "---"
+
+          # Skip bot commits
+          AUTHOR=$(git log -1 --format='%an')
+          if [ "$AUTHOR" = "github-actions[bot]" ]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "bot commit — skip"
+            exit 0
+          fi
+
+          # Run e2e on ANY meaningful change — skip only for pure docs/markdown
+          SHOULD_RUN=false
+          if echo "$CHANGED" | grep -qE '^server/'; then SHOULD_RUN=true; fi
+          if echo "$CHANGED" | grep -qE '^\.github/'; then SHOULD_RUN=true; fi
+          if echo "$CHANGED" | grep -qE '^tests/'; then SHOULD_RUN=true; fi
+          if echo "$CHANGED" | grep -qE '^(src/|package\.json$|tsconfig)'; then SHOULD_RUN=true; fi
+
+          echo "should_run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
+          echo "should_run=$SHOULD_RUN"
+
+  e2e-agent:
+    needs: changes
+    if: needs.changes.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Serialize API access across all CI e2e runs
+    concurrency:
+      group: anthropic-api-ci
+      cancel-in-progress: false
+    steps:
+      - uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Build server
+        run: cargo build --release --manifest-path server/Cargo.toml
+
+      - name: Initialize CodeScope index
+        run: server/target/release/codescope-server init --root .
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run e2e agent test
+        continue-on-error: true
+        id: e2e
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: node .github/scripts/e2e-agent-test.mjs
+
+      - name: Upload agent conversation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-logs-e2e
+          path: /tmp/agent-conversation-*.jsonl
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Check e2e result
+        if: steps.e2e.outcome == 'failure'
+        run: |
+          echo "::warning::E2E agent test failed — see agent logs artifact for details"
+          exit 1

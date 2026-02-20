@@ -22,7 +22,6 @@ jobs:
     outputs:
       should_lint: ${{ steps.decide.outputs.should_lint }}
       should_test: ${{ steps.decide.outputs.should_test }}
-      should_e2e: ${{ steps.decide.outputs.should_e2e }}
       has_code_changes: ${{ steps.decide.outputs.has_code_changes }}
     steps:
       - uses: actions/checkout@v4
@@ -47,15 +46,13 @@ jobs:
           echo "$CHANGED"
           echo "---"
 
-          CODE=false; TESTS=false; CI=false; E2E=false
+          CODE=false; TESTS=false; CI=false
 
           if echo "$CHANGED" | grep -qE '^server/(src/|Cargo\.)'; then CODE=true; fi
           if echo "$CHANGED" | grep -qE '^(src/|package\.json$|package-lock\.json$|tsconfig|vite\.config)'; then CODE=true; fi
           if echo "$CHANGED" | grep -qE '^server/(setup\.sh$|setup\.ps1$|codescope-)'; then CODE=true; fi
           if echo "$CHANGED" | grep -qE '^tests/'; then TESTS=true; fi
           if echo "$CHANGED" | grep -qE '^\.github/'; then CI=true; fi
-          # E2E triggers on server code OR agent scripts/lib changes
-          if echo "$CHANGED" | grep -qE '^\.github/scripts/'; then E2E=true; fi
 
           IS_BOT=false
           AUTHOR=$(git log -1 --format='%an')
@@ -64,7 +61,6 @@ jobs:
           echo "code=$CODE" >> "$GITHUB_OUTPUT"
           echo "tests=$TESTS" >> "$GITHUB_OUTPUT"
           echo "ci=$CI" >> "$GITHUB_OUTPUT"
-          echo "e2e=$E2E" >> "$GITHUB_OUTPUT"
           echo "is_bot=$IS_BOT" >> "$GITHUB_OUTPUT"
 
       - id: decide
@@ -72,13 +68,11 @@ jobs:
           CODE="${{ steps.detect.outputs.code }}"
           TESTS="${{ steps.detect.outputs.tests }}"
           CI="${{ steps.detect.outputs.ci }}"
-          E2E="${{ steps.detect.outputs.e2e }}"
           IS_BOT="${{ steps.detect.outputs.is_bot }}"
 
           # Skip lint/test on bot version-bump commits
           SHOULD_LINT=false
           SHOULD_TEST=false
-          SHOULD_E2E=false
           if [ "$IS_BOT" = "false" ]; then
             if [ "$CODE" = "true" ] || [ "$TESTS" = "true" ] || [ "$CI" = "true" ]; then
               SHOULD_LINT=true
@@ -86,18 +80,13 @@ jobs:
             if [ "$CODE" = "true" ] || [ "$TESTS" = "true" ]; then
               SHOULD_TEST=true
             fi
-            # E2E runs on server code changes OR agent script changes
-            if [ "$CODE" = "true" ] || [ "$E2E" = "true" ]; then
-              SHOULD_E2E=true
-            fi
           fi
 
           echo "should_lint=$SHOULD_LINT" >> "$GITHUB_OUTPUT"
           echo "should_test=$SHOULD_TEST" >> "$GITHUB_OUTPUT"
-          echo "should_e2e=$SHOULD_E2E" >> "$GITHUB_OUTPUT"
           echo "has_code_changes=$CODE" >> "$GITHUB_OUTPUT"
 
-          echo "lint=$SHOULD_LINT test=$SHOULD_TEST e2e=$SHOULD_E2E code=$CODE bot=$IS_BOT"
+          echo "lint=$SHOULD_LINT test=$SHOULD_TEST code=$CODE bot=$IS_BOT"
 
   # ──────────────────────────────────────────────
   # Lint — fast, no build needed
@@ -151,68 +140,3 @@ jobs:
         run: npm run build
       - name: Run integration tests
         run: bash tests/integration.sh
-
-  # ──────────────────────────────────────────────
-  # E2E agent test — Claude Agent SDK + CodeScope MCP
-  # Triggers on server code changes OR agent script changes.
-  # Waits for test job if it's running, but runs independently
-  # when only scripts changed (test job is skipped).
-  # ──────────────────────────────────────────────
-  e2e-agent:
-    needs: [changes, test]
-    if: |
-      always() &&
-      needs.changes.result == 'success' &&
-      needs.changes.outputs.should_e2e == 'true' &&
-      (needs.test.result == 'success' || needs.test.result == 'skipped')
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    # Global concurrency: only one AI agent job at a time to avoid rate limit contention
-    concurrency:
-      group: anthropic-api-ci
-      cancel-in-progress: false
-    steps:
-      - uses: step-security/harden-runner@v2
-        with:
-          egress-policy: audit
-
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: server
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Build server
-        run: cargo build --release --manifest-path server/Cargo.toml
-
-      - name: Initialize CodeScope index
-        run: server/target/release/codescope-server init --root .
-
-      - name: Install Node dependencies
-        run: npm ci
-
-      - name: Run e2e agent test
-        continue-on-error: true
-        id: e2e
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: node .github/scripts/e2e-agent-test.mjs
-
-      - name: Upload agent conversation logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: agent-logs-e2e
-          path: /tmp/agent-conversation-*.jsonl
-          retention-days: 30
-          if-no-files-found: ignore
-
-      - name: Check e2e result
-        if: steps.e2e.outcome == 'failure'
-        run: |
-          echo "::warning::E2E agent test failed — see agent logs artifact for details"
-          exit 1
