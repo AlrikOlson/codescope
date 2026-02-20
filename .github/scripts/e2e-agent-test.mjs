@@ -10,10 +10,27 @@
  * Exit codes: 0 = pass, 1 = fail
  */
 
-import { runAgent, parseAgentJson, writeStepSummary } from "./lib/agent.mjs";
+import { runAgent, writeStepSummary } from "./lib/agent.mjs";
 
 const MAX_TURNS = 6;
 const MAX_BUDGET_USD = 1.0;
+
+const outputSchema = {
+  type: "object",
+  properties: {
+    status_ok: { type: "boolean" },
+    search_ok: { type: "boolean" },
+    grep_ok: { type: "boolean" },
+    read_ok: { type: "boolean" },
+    repos_indexed: { type: "number" },
+    total_files: { type: "number" },
+    languages: { type: "array", items: { type: "string" } },
+    search_result_count: { type: "number" },
+    grep_match_count: { type: "number" },
+    errors: { type: "array", items: { type: "string" } },
+  },
+  required: ["status_ok", "search_ok", "grep_ok", "read_ok", "repos_indexed", "total_files"],
+};
 
 const systemPrompt = `You are a QA agent validating that CodeScope MCP tools work correctly.
 You have 4 tools: cs_status, cs_search, cs_grep, cs_read.
@@ -24,23 +41,9 @@ Your job:
 3. Call cs_grep for an exact pattern (e.g. "pub fn") — verify matching lines are shown.
 4. Call cs_read on one file in stubs mode — verify structural outline is returned.
 
-After using all 4 tools, output a JSON object with your findings:
-{
-  "status_ok": true/false,
-  "search_ok": true/false,
-  "grep_ok": true/false,
-  "read_ok": true/false,
-  "repos_indexed": <number>,
-  "total_files": <number>,
-  "languages": ["rs", "ts", ...],
-  "search_result_count": <number>,
-  "grep_match_count": <number>,
-  "errors": ["any errors encountered"]
-}
+Be concise. Use each tool exactly once. Report your findings in the structured output.`;
 
-Be concise. Use each tool exactly once. Output ONLY the JSON at the end.`;
-
-const prompt = `Validate the CodeScope MCP server by testing all 4 tools against this codebase. Report your findings as the JSON object described in your instructions.`;
+const prompt = `Validate the CodeScope MCP server by testing all 4 tools against this codebase. Report your findings.`;
 
 async function main() {
   console.error(`[e2e] Starting agent test (maxTurns=${MAX_TURNS}, maxBudget=$${MAX_BUDGET_USD})`);
@@ -55,6 +58,7 @@ async function main() {
       maxBudgetUsd: MAX_BUDGET_USD,
       codeScopeOnly: true,
       logLabel: "e2e-test",
+      outputFormat: { type: "json_schema", schema: outputSchema },
     });
   } catch (err) {
     console.error(`[e2e] Agent failed: ${err.message}`);
@@ -62,22 +66,13 @@ async function main() {
     process.exit(1);
   }
 
-  const { text: output, usage } = agentResult;
+  const { usage, structured_output: result } = agentResult;
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
   console.error(`[e2e] Agent completed in ${elapsed}s`);
 
-  // Parse structured JSON from agent output
-  const result = parseAgentJson(output, [
-    "status_ok",
-    "search_ok",
-    "grep_ok",
-    "read_ok",
-  ]);
-
   if (!result) {
-    console.error("[e2e] FAIL: Could not parse structured JSON from agent output");
-    console.error("[e2e] Raw output:", output.slice(-500));
-    writeStepSummary(`## E2E Agent Test\n\n**Status:** FAIL — could not parse agent JSON\n**Turns:** ${usage.turns} | **Cost:** $${usage.totalCostUsd.toFixed(2)}\n`);
+    console.error("[e2e] FAIL: No structured output from agent");
+    writeStepSummary(`## E2E Agent Test\n\n**Status:** FAIL — no structured output\n**Turns:** ${usage.turns} | **Cost:** $${usage.totalCostUsd.toFixed(2)}\n`);
     process.exit(1);
   }
 

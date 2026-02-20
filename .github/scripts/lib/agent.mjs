@@ -114,8 +114,8 @@ export function writeStepSummary(markdown) {
  * Uses the SDK's built-in maxBudgetUsd for cost control and reads
  * authoritative usage from the SDKResultMessage.
  *
- * @param {{ prompt: string, systemPrompt: string, model?: string, maxTurns?: number, maxBudgetUsd?: number, codeScopeOnly?: boolean, logLabel?: string }} params
- * @returns {Promise<{ text: string, usage: { inputTokens: number, outputTokens: number, cachedTokens: number, totalCostUsd: number, turns: number, logFile: string } }>}
+ * @param {{ prompt: string, systemPrompt: string, model?: string, maxTurns?: number, maxBudgetUsd?: number, codeScopeOnly?: boolean, logLabel?: string, outputFormat?: object }} params
+ * @returns {Promise<{ text: string, usage: { inputTokens: number, outputTokens: number, cachedTokens: number, totalCostUsd: number, turns: number, logFile: string }, structured_output?: object }>}
  */
 export async function runAgent({
   prompt,
@@ -125,8 +125,10 @@ export async function runAgent({
   maxBudgetUsd = DEFAULT_MAX_BUDGET_USD,
   codeScopeOnly = false,
   logLabel = "agent",
+  outputFormat = undefined,
 }) {
   let lastText = "";
+  let structuredOutput = undefined;
   let toolCallCount = 0;
 
   // Authoritative usage — filled from SDKResultMessage at the end
@@ -164,6 +166,10 @@ export async function runAgent({
 
   if (codeScopeOnly) {
     opts.disallowedTools = codeScopeOnlyDisallowedTools();
+  }
+
+  if (outputFormat) {
+    opts.outputFormat = outputFormat;
   }
 
   for await (const message of query({
@@ -219,6 +225,11 @@ export async function runAgent({
         }
       }
 
+      // Capture structured output if present
+      if (message.structured_output) {
+        structuredOutput = message.structured_output;
+      }
+
       logEntry({
         timestamp: new Date().toISOString(),
         type: "result",
@@ -246,33 +257,5 @@ export async function runAgent({
     `~$${finalUsage.totalCostUsd.toFixed(2)}`
   );
 
-  return { text: lastText, usage: usageSummary };
-}
-
-/**
- * Parse structured JSON from agent output text.
- * Finds the last JSON object containing all required keys.
- *
- * @param {string} text - raw agent output
- * @param {string[]} requiredKeys - keys the JSON must contain
- * @returns {object|null}
- */
-export function parseAgentJson(text, requiredKeys) {
-  // Match all JSON objects in the text (handles nested objects)
-  const jsonPattern = /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g;
-  const matches = text.match(jsonPattern);
-  if (!matches) return null;
-
-  // Try from last match backwards — the final JSON is most likely the answer
-  for (let i = matches.length - 1; i >= 0; i--) {
-    try {
-      const parsed = JSON.parse(matches[i]);
-      const hasAllKeys = requiredKeys.every((key) => key in parsed);
-      if (hasAllKeys) return parsed;
-    } catch {
-      continue;
-    }
-  }
-
-  return null;
+  return { text: lastText, usage: usageSummary, structured_output: structuredOutput };
 }

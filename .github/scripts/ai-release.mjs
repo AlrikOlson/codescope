@@ -4,7 +4,7 @@
 // All outputs written to GITHUB_OUTPUT and /tmp/ai-release-output.json.
 
 import { gatherContext } from "./lib/git.mjs";
-import { runAgent, parseAgentJson, writeStepSummary } from "./lib/agent.mjs";
+import { runAgent, writeStepSummary } from "./lib/agent.mjs";
 import { parseTag, applyBump, validateBump } from "./lib/version.mjs";
 import { setOutput, writeReleaseOutput } from "./lib/output.mjs";
 
@@ -36,6 +36,18 @@ function highestVersionFromCommits(commits, lastTag) {
 }
 
 const OUTPUT_FILE = "/tmp/ai-release-output.json";
+
+const outputSchema = {
+  type: "object",
+  properties: {
+    bump: { type: "string", enum: ["major", "minor", "patch"] },
+    reason: { type: "string" },
+    commitMessage: { type: "string" },
+    releaseBody: { type: "string" },
+    changelogEntry: { type: "string" },
+  },
+  required: ["bump", "reason", "commitMessage", "releaseBody", "changelogEntry"],
+};
 
 const SYSTEM_PROMPT = `You are a precise release engineer for CodeScope, a Rust MCP server + TypeScript web UI for codebase search and navigation.
 
@@ -89,8 +101,7 @@ ${diffStat}
    - Be concise bullet points (one line per change)
    - Only include sections that have changes
 
-After your analysis, your FINAL line of output must be EXACTLY one JSON object (no markdown fencing, no text after):
-{"bump":"patch","reason":"one sentence explanation","commitMessage":"release: vX.Y.Z — summary","releaseBody":"## What's Changed\\n\\n### Fixes\\n- ...","changelogEntry":"## [X.Y.Z] - YYYY-MM-DD\\n\\n### Fixed\\n- ..."}`;
+After your analysis, report your findings in the structured output.`;
 }
 
 /**
@@ -156,6 +167,7 @@ async function main() {
       maxBudgetUsd: 2.0,
       codeScopeOnly: true,
       logLabel: "release",
+      outputFormat: { type: "json_schema", schema: outputSchema },
     });
   } catch (err) {
     console.error(`Agent SDK error: ${err.message}`);
@@ -166,7 +178,7 @@ async function main() {
     return;
   }
 
-  const { text, usage } = agentResult;
+  const { usage, structured_output: result } = agentResult;
 
   // Write step summary with cost/usage info
   writeStepSummary([
@@ -181,8 +193,6 @@ async function main() {
     `| Estimated cost | $${usage.totalCostUsd.toFixed(2)} |`,
   ].join("\n"));
 
-  // Parse structured output
-  const result = parseAgentJson(text, ["bump"]);
   const bump = validateBump(result?.bump);
   // Apply bump from the highest known version (including release commits in the log)
   // so we don't regress version numbers when last tag is behind

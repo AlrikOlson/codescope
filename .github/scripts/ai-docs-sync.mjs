@@ -4,13 +4,34 @@
 // All outputs written to /tmp/ai-docs-sync-output.json.
 
 import { gatherContext } from "./lib/git.mjs";
-import { runAgent, parseAgentJson, writeStepSummary } from "./lib/agent.mjs";
+import { runAgent, writeStepSummary } from "./lib/agent.mjs";
 import { hasDocRelevantChanges, writeDocSyncOutput } from "./lib/docs.mjs";
 
 const OUTPUT_FILE = "/tmp/ai-docs-sync-output.json";
 
 // Only allow updates to these files — scope guard against agent writing to unexpected paths
 const ALLOWED_DOC_FILES = new Set(["README.md", "CONTRIBUTING.md"]);
+
+const outputSchema = {
+  type: "object",
+  properties: {
+    updates: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          file: { type: "string" },
+          content: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["file", "content", "reason"],
+      },
+    },
+    noChanges: { type: "array", items: { type: "string" } },
+    summary: { type: "string" },
+  },
+  required: ["updates", "noChanges", "summary"],
+};
 
 const SYSTEM_PROMPT = `You are a documentation accuracy reviewer for CodeScope.
 
@@ -59,13 +80,7 @@ Read README.md and CONTRIBUTING.md first, then verify each fact:
 3. **Prerequisites**: Rust version, Node version
 4. **Clone URL**: Must match actual repo
 
-## Output Format
-
-After verification, your FINAL line must be EXACTLY one JSON object (no markdown fencing):
-{"updates":[{"file":"README.md","content":"full file content","reason":"one-line summary"}],"noChanges":["CONTRIBUTING.md"],"summary":"one-line summary"}
-
-If all docs are accurate:
-{"updates":[],"noChanges":["README.md","CONTRIBUTING.md"],"summary":"All docs are accurate"}`;
+After verification, report your findings in the structured output. For each file that needs updating, include the full corrected file content. For files that are accurate, list them in noChanges.`;
 }
 
 async function main() {
@@ -98,6 +113,7 @@ async function main() {
       maxBudgetUsd: 2.0,
       codeScopeOnly: true,
       logLabel: "docs-sync",
+      outputFormat: { type: "json_schema", schema: outputSchema },
     });
   } catch (err) {
     console.error(`[docs] Agent SDK error: ${err.message}`);
@@ -110,7 +126,7 @@ async function main() {
     return;
   }
 
-  const { text, usage } = agentResult;
+  const { usage, structured_output: result } = agentResult;
 
   // Write step summary
   writeStepSummary([
@@ -124,17 +140,14 @@ async function main() {
     `| Estimated cost | $${usage.totalCostUsd.toFixed(2)} |`,
   ].join("\n"));
 
-  // Parse structured output
-  const result = parseAgentJson(text, ["updates"]);
-
   if (!result) {
-    console.error("[docs] Failed to parse agent JSON output");
+    console.error("[docs] No structured output from agent");
     writeDocSyncOutput(OUTPUT_FILE, {
       updates: [],
       noChanges: [],
-      summary: "Failed to parse agent output",
+      summary: "No structured output from agent",
     });
-    writeStepSummary(`\n**Result:** Failed to parse agent output\n`);
+    writeStepSummary(`\n**Result:** No structured output from agent\n`);
     return;
   }
 
