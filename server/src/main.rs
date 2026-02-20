@@ -479,13 +479,14 @@ async fn main() {
         std::thread::spawn(move || {
             let s = state_bg.read().unwrap();
             // Collect (name, files, semantic_index_handle) for each repo
-            let work: Vec<(
+            type SemWork = (
                 String,
                 PathBuf,
                 Vec<ScannedFile>,
                 std::sync::Arc<std::sync::RwLock<Option<types::SemanticIndex>>>,
                 std::sync::Arc<types::SemanticProgress>,
-            )> = s
+            );
+            let work: Vec<SemWork> = s
                 .repos
                 .values()
                 .map(|r| {

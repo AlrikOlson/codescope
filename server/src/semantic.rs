@@ -341,13 +341,13 @@ fn encode_batch(
         let pad_len = max_len - ids.len();
 
         all_ids.extend_from_slice(ids);
-        all_ids.extend(std::iter::repeat(0u32).take(pad_len));
+        all_ids.extend(std::iter::repeat_n(0u32, pad_len));
 
         all_mask.extend_from_slice(mask);
-        all_mask.extend(std::iter::repeat(0u32).take(pad_len));
+        all_mask.extend(std::iter::repeat_n(0u32, pad_len));
 
         all_type_ids.extend_from_slice(type_ids);
-        all_type_ids.extend(std::iter::repeat(0u32).take(pad_len));
+        all_type_ids.extend(std::iter::repeat_n(0u32, pad_len));
     }
 
     let batch_size = texts.len();
@@ -855,7 +855,7 @@ pub fn build_semantic_index(
 
     let device_label = if use_gpu { "GPU" } else { "CPU" };
     *progress.device.write().unwrap() = device_label.to_string();
-    let total_batches = (miss_chunks + batch_size - 1) / batch_size;
+    let total_batches = miss_chunks.div_ceil(batch_size);
     progress.total_batches.store(total_batches, Relaxed);
     progress.completed_batches.store(0, Relaxed);
     progress.status.store(2, Relaxed);
@@ -882,7 +882,7 @@ pub fn build_semantic_index(
 
     // Split into batches, then distribute batches to workers
     let batches: Vec<&[ChunkRef]> = chunk_refs.chunks(batch_size).collect();
-    let group_size = (batches.len() + n_workers - 1) / n_workers;
+    let group_size = batches.len().div_ceil(n_workers);
     let batch_groups: Vec<Vec<&[ChunkRef]>> =
         batches.chunks(group_size).map(|g| g.to_vec()).collect();
 
@@ -893,7 +893,8 @@ pub fn build_semantic_index(
 
     // Per-file result accumulator: (embeddings, complete?)
     // Workers write results here; we flush to cache after all workers finish.
-    let file_results: Vec<std::sync::Mutex<Vec<(ChunkMeta, Vec<f32>)>>> = to_embed
+    type FileResult = Vec<(ChunkMeta, Vec<f32>)>;
+    let file_results: Vec<std::sync::Mutex<FileResult>> = to_embed
         .iter()
         .map(|fc| std::sync::Mutex::new(Vec::with_capacity(fc.chunks.len())))
         .collect();
@@ -957,7 +958,7 @@ pub fn build_semantic_index(
                         let done =
                             batch_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                         progress.completed_batches.store(done, Relaxed);
-                        if done % 20 == 0 || done == total_batches {
+                        if done.is_multiple_of(20) || done == total_batches {
                             eprintln!("  [semantic] Progress: {done}/{total_batches} batches");
                         }
                     }
