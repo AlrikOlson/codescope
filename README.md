@@ -45,7 +45,7 @@ Generates `.codescope.toml` and `.mcp.json`. Restart Claude Code to pick up the 
 |------|-------------|
 | `cs_find` | Combined filename + content search (start here) |
 | `cs_grep` | Regex content search with context lines and file filters |
-| `cs_semantic_search` | Search by intent using BERT embeddings (requires `--semantic`) |
+| `cs_semantic_search` | Search by intent using BERT embeddings (requires semantic-enabled binary) |
 | `cs_read_file` | Read a file: full content or structural stubs (signatures only) |
 | `cs_read_files` | Batch read up to 50 files |
 | `cs_read_context` | Budget-aware batch read with importance-weighted compression |
@@ -65,15 +65,15 @@ Generates `.codescope.toml` and `.mcp.json`. Restart Claude Code to pick up the 
 
 ## Semantic Search
 
-Enable at startup:
+Enabled by default. To disable:
 
 ```bash
-codescope-server --mcp --root /path/to/project --semantic
+codescope-server --mcp --root /path/to/project --no-semantic
 ```
 
 Uses [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) (~90MB, downloaded to `~/.cache/codescope/models/` on first use). Generates 384-dimensional embeddings with mean pooling and L2 normalization, ranks by cosine similarity. Adds a few seconds to startup for indexing.
 
-When `--semantic` is passed, `codescope-server init` configures the project to use it automatically.
+Pass `--semantic` to `codescope-server init` to pre-build the semantic index cache on first setup.
 
 ## Web UI
 
@@ -171,7 +171,7 @@ Options:
   --repo <NAME=PATH>       Named repository (repeatable)
   --config <PATH>          Load repos from a TOML config file
   --mcp                    Run as MCP stdio server
-  --semantic               Enable semantic code search
+  --no-semantic            Disable semantic code search (enabled by default)
   --semantic-model <NAME>  Embedding model: minilm (default), codebert, starencoder
   --dist <PATH>            Path to web UI dist directory
   --tokenizer <NAME>       Token counter: bytes-estimate (default) or tiktoken
@@ -186,7 +186,7 @@ Environment:
 
 `codescope-server: command not found` — Restart your terminal or `source ~/.bashrc` / `~/.zshrc`.
 
-Semantic search not responding — Make sure you passed `--semantic` when starting the server. The model downloads on first use (~90MB).
+Semantic search not responding — Semantic search is enabled by default; check `cs_status` to see indexing progress. The model downloads on first use (~90MB). Pass `--no-semantic` to disable it.
 
 Install fails behind a proxy — Build from source: `bash setup.sh --from-source` (requires Rust toolchain).
 

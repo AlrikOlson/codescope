@@ -4,6 +4,24 @@ All notable changes to CodeScope will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.0] - 2026-02-20
+
+### Added
+- Centralized semantic cache at `~/.cache/codescope/semantic/{repo-identity}/semantic.cache` with automatic migration from legacy in-repo `.codescope/semantic.cache`
+- Path context breadcrumbs prepended to each embedding chunk for improved semantic disambiguation
+- Relevance reranking in `cs_semantic_search`: 6× oversampling with `adjusted_score()` path-based signals
+- `SEMANTIC_SKIP_DIRS` filter excludes `ThirdParty`, `External`, `Intermediate`, `Deploy` from embedding
+- Device (CPU/GPU), batch progress %, and chunk count displayed in `cs_status` semantic output
+- `--semantic` flag for `codescope-server init` subcommand
+
+### Changed
+- Semantic cache format version 1 → 2 (includes path context; old caches are discarded and rebuilt automatically)
+- `cs_semantic_search` errors now include index build progress (device, batch count) when index is still loading
+- `is_annotation_or_macro()` in `stubs.rs` made public
+
+### Fixed
+- Resolved Clippy lints for Rust 1.93 CI compatibility
+
 ## [0.6.2] - 2026-02-20
 
 ### Changed
