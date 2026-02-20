@@ -38,11 +38,8 @@ test_repo() {
     git clone --depth 1 --quiet "$url" "$TMPDIR/$name"
   fi
 
-  # Detect semantic support and start server with appropriate flags
-  local SERVER_FLAGS="--root $TMPDIR/$name"
-  if "$BINARY" --help 2>&1 | grep -q -- '--semantic'; then
-    SERVER_FLAGS="--semantic $SERVER_FLAGS"
-  fi
+  # Start server — semantic is enabled by default since v0.9.0
+  local SERVER_FLAGS="--root $TMPDIR/$name --no-semantic"
 
   PORT=$PORT "$BINARY" $SERVER_FLAGS &
   SERVER_PID=$!
