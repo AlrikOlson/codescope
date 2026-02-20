@@ -370,6 +370,9 @@ jobs:
 
       - name: Build binary
         shell: bash
+        env:
+          # Skip nvidia-smi probe in bindgen_cuda (no GPU in CI)
+          CUDA_COMPUTE_CAP: ${{ matrix.cuda && '89' || '' }}
         run: |
           BUILD_CMD="cargo"
           if [ "${{ matrix.use_cross }}" = "true" ]; then BUILD_CMD="cross"; fi
