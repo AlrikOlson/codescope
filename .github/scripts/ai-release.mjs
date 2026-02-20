@@ -51,13 +51,18 @@ const outputSchema = {
 
 const SYSTEM_PROMPT = `You are a precise release engineer for CodeScope, a Rust MCP server + TypeScript web UI for codebase search and navigation.
 
-You have 4 CodeScope MCP tools. Use them efficiently:
-1. cs_search — YOUR PRIMARY TOOL. Use this FIRST for any discovery. Combines semantic + keyword search automatically.
-2. cs_read — Read specific files. Use mode=stubs for structural overviews without reading entire files.
-3. cs_grep — Exact pattern matching. Use for counting specific items or finding exact strings.
-4. cs_status — Check what's indexed.
+You have 4 CodeScope MCP tools:
+1. cs_search — combined semantic + keyword search
+2. cs_read — read specific files (use mode=stubs for overviews)
+3. cs_grep — exact pattern matching
+4. cs_status — check index status
 
-WORKFLOW: cs_search to discover → cs_read to verify → cs_grep to count. Be concise.`;
+CRITICAL: You have a LIMITED number of tool calls. Budget them carefully:
+- Use AT MOST 6-8 tool calls total, then produce your final structured output.
+- The commit messages already tell you WHAT changed. Only use tools to verify specifics (e.g. whether an API broke).
+- Do NOT exhaustively explore every changed file. Focus on the 2-3 most important changes.
+- If the changes are clearly CI/tooling (no server/src changes), skip tool calls entirely and go straight to your structured output.
+- Your LAST turn MUST be your structured output — never end on a tool call.`;
 
 /**
  * Build the prompt for the AI agent.
@@ -79,8 +84,8 @@ ${diffStat}
 
 ## Instructions
 
-1. Use CodeScope tools (cs_search, cs_read, cs_grep) to read the changed files and understand what was modified.
-2. CRITICAL: The commit messages are your PRIMARY source of truth for what changed. CodeScope shows the CURRENT state of the code, NOT what was added in this release. If a file like mcp.rs was MODIFIED (not created), the features in it ALREADY EXISTED — they were changed, not added. Only classify something as "new" if:
+1. CRITICAL: The commit messages and diffstat above are your PRIMARY source of truth. You can ALREADY determine the bump type and write release notes from them alone. Only use CodeScope tools if you need to verify something specific (e.g. whether a change is breaking). For CI/tooling-only changes, skip tools entirely.
+2. CodeScope shows the CURRENT state of the code, NOT what was added in this release. If a file like mcp.rs was MODIFIED (not created), the features in it ALREADY EXISTED — they were changed, not added. Only classify something as "new" if:
    - The commit message explicitly says "add", "new", "introduce", or "implement"
    - The file itself is newly created (check the diffstat for new files vs modified files)
    - The diffstat shows the file went from 0 lines to N lines
@@ -163,7 +168,7 @@ async function main() {
     agentResult = await runAgent({
       prompt: buildPrompt(lastTag, commits, diffStat),
       systemPrompt: SYSTEM_PROMPT,
-      maxTurns: 15,
+      maxTurns: 20,
       maxBudgetUsd: 3.0,
       codeScopeOnly: true,
       logLabel: "release",
