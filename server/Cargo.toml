@@ -11,7 +11,7 @@ keywords = ["codebase", "indexer", "search", "mcp", "code-navigation"]
 categories = ["command-line-utilities", "development-tools"]
 
 [features]
-default = []
+default = ["semantic"]
 tiktoken = ["dep:tiktoken-rs"]
 semantic = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers", "dep:hf-hub"]
 cuda = ["semantic", "candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]

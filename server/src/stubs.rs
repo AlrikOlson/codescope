@@ -63,6 +63,7 @@ fn stub_brace_based(content: &str) -> String {
     let mut brace_depth: i32 = 0;
     let mut scope_is_structural: Vec<bool> = Vec::new();
     let mut in_block_comment = false;
+    let mut in_doc_comment = false;
     let mut skip_until_close_brace: Option<i32> = None;
 
     while i < lines.len() {
@@ -70,8 +71,13 @@ fn stub_brace_based(content: &str) -> String {
         let trimmed = line.trim();
 
         if in_block_comment {
+            if in_doc_comment {
+                out.push_str(line);
+                out.push('\n');
+            }
             if trimmed.contains("*/") {
                 in_block_comment = false;
+                in_doc_comment = false;
             }
             i += 1;
             continue;
@@ -99,7 +105,13 @@ fn stub_brace_based(content: &str) -> String {
         }
 
         if trimmed.starts_with("/*") && !trimmed.contains("*/") {
+            let is_doc = trimmed.starts_with("/**") || trimmed.starts_with("/*!");
             in_block_comment = true;
+            in_doc_comment = is_doc;
+            if is_doc {
+                out.push_str(line);
+                out.push('\n');
+            }
             i += 1;
             continue;
         }

@@ -14,6 +14,8 @@ const SYSTEM_PROMPT = `You are a precise release engineer for CodeScope, a Rust 
 
 You have access to CodeScope MCP tools. Use them to read changed files and understand the impact of changes before making decisions.
 
+You also have access to cs_semantic_search for intent-based code discovery — use it to find conceptually related code when keyword search isn't enough.
+
 Be thorough in your analysis but concise in your output.`;
 
 /**
@@ -36,7 +38,7 @@ ${diffStat}
 
 ## Instructions
 
-1. Use CodeScope tools (cs_find, cs_grep, cs_read_file, cs_read_context) to read the changed files and understand what was modified.
+1. Use CodeScope tools (cs_find, cs_grep, cs_read_file, cs_read_context, cs_semantic_search) to read the changed files and understand what was modified.
 2. Check if any public APIs, MCP tool interfaces, CLI flags, or config formats changed in breaking ways.
 3. Check if new features, tools, or capabilities were added.
 4. Determine the correct semver bump:

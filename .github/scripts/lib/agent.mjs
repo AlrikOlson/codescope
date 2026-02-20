@@ -32,6 +32,7 @@ export function codeScopeAllowedTools() {
     "mcp__codescope__cs_list_modules",
     "mcp__codescope__cs_get_module_files",
     "mcp__codescope__cs_find_imports",
+    "mcp__codescope__cs_semantic_search",
     "mcp__codescope__cs_status",
   ];
 }

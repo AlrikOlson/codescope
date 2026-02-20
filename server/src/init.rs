@@ -917,6 +917,8 @@ fn merge_global_repos_toml(root: &Path) -> Result<(), String> {
 
 pub fn run_init(args: &[String]) -> i32 {
     let global = args.iter().any(|a| a == "--global");
+    #[cfg(feature = "semantic")]
+    let build_semantic = args.iter().any(|a| a == "--semantic");
 
     // Find the path argument (skip "init", skip flags)
     let path_arg = args
@@ -1000,6 +1002,35 @@ pub fn run_init(args: &[String]) -> i32 {
     } else {
         eprintln!("  [WARN] No source files found with current settings.");
         eprintln!("         Try removing scan_dirs from .codescope.toml to scan everything.");
+    }
+
+    // Build semantic index if requested (pre-populates centralized cache)
+    #[cfg(feature = "semantic")]
+    if build_semantic {
+        eprintln!("  Building semantic index...");
+        let config = crate::load_codescope_config(&root);
+        let (all_files, _categories) = crate::scan::scan_files(&config);
+        let progress = crate::types::SemanticProgress::new();
+        let sem_model: Option<String> = config.semantic_model.clone();
+        let start = std::time::Instant::now();
+        match crate::semantic::build_semantic_index(
+            &all_files,
+            sem_model.as_deref(),
+            &progress,
+            &root,
+        ) {
+            Some(idx) => {
+                let chunks: usize = idx.chunk_meta.len();
+                eprintln!(
+                    "  Semantic index built: {} chunks in {:.1}s (cached to ~/.cache/codescope/)",
+                    chunks,
+                    start.elapsed().as_secs_f64()
+                );
+            }
+            None => {
+                eprintln!("  [WARN] Semantic index build failed (non-fatal)");
+            }
+        }
     }
 
     eprintln!();

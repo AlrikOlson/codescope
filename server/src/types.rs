@@ -186,6 +186,39 @@ pub struct CachedStub {
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "semantic")]
+pub struct SemanticProgress {
+    pub status: std::sync::atomic::AtomicU8, // 0=idle, 1=extracting, 2=embedding, 3=ready, 4=failed
+    pub total_chunks: std::sync::atomic::AtomicUsize,
+    pub total_batches: std::sync::atomic::AtomicUsize,
+    pub completed_batches: std::sync::atomic::AtomicUsize,
+    pub device: std::sync::RwLock<String>,
+}
+
+#[cfg(feature = "semantic")]
+impl SemanticProgress {
+    pub fn new() -> Self {
+        Self {
+            status: std::sync::atomic::AtomicU8::new(0),
+            total_chunks: std::sync::atomic::AtomicUsize::new(0),
+            total_batches: std::sync::atomic::AtomicUsize::new(0),
+            completed_batches: std::sync::atomic::AtomicUsize::new(0),
+            device: std::sync::RwLock::new(String::new()),
+        }
+    }
+
+    pub fn status_label(&self) -> &'static str {
+        match self.status.load(std::sync::atomic::Ordering::Relaxed) {
+            0 => "idle",
+            1 => "extracting chunks",
+            2 => "embedding",
+            3 => "ready",
+            4 => "failed",
+            _ => "unknown",
+        }
+    }
+}
+
+#[cfg(feature = "semantic")]
 pub struct SemanticIndex {
     /// Flat embedding storage: `n_chunks * dim` floats for SIMD-friendly access.
     pub embeddings: Vec<f32>,
@@ -198,6 +231,7 @@ pub struct SemanticIndex {
 }
 
 #[cfg(feature = "semantic")]
+#[derive(Clone)]
 pub struct ChunkMeta {
     pub file_path: String,
     pub start_line: usize,
@@ -244,6 +278,8 @@ pub struct RepoState {
     pub scan_time_ms: u64,
     #[cfg(feature = "semantic")]
     pub semantic_index: std::sync::Arc<std::sync::RwLock<Option<SemanticIndex>>>,
+    #[cfg(feature = "semantic")]
+    pub semantic_progress: std::sync::Arc<SemanticProgress>,
 }
 
 // ---------------------------------------------------------------------------
@@ -268,6 +304,10 @@ pub struct ServerState {
     pub default_repo: Option<String>,
     pub cross_repo_edges: Vec<CrossRepoEdge>,
     pub tokenizer: Arc<dyn crate::tokenizer::Tokenizer>,
+    #[cfg(feature = "semantic")]
+    pub semantic_enabled: bool,
+    #[cfg(feature = "semantic")]
+    pub semantic_model: Option<String>,
 }
 
 impl ServerState {

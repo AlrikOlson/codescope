@@ -35,8 +35,9 @@ Options:
   --from-source     Force compilation from source instead of downloading a binary
   --help, -h        Show this help
 
-All pre-built binaries include semantic search. Enable it at runtime
-with the --semantic flag when starting codescope-server.
+All pre-built binaries include semantic search, enabled by default.
+Disable with --no-semantic if needed. GPU acceleration is automatic
+when CUDA is available.
 
 Examples:
   # Standard install (downloads pre-built binary, ~10 seconds)
@@ -240,10 +241,16 @@ install_from_source() {
         ok "Rust installed: $(rustc --version)"
     fi
 
-    # Build
+    # Build — auto-detect CUDA for GPU acceleration
     cd "$script_dir"
+    FEATURES="semantic"
+    if command -v nvcc &>/dev/null || [ -f /usr/local/cuda/bin/nvcc ]; then
+        export PATH="/usr/local/cuda/bin:$PATH"
+        FEATURES="semantic,cuda"
+        info "CUDA detected — building with GPU acceleration"
+    fi
     info "Compiling from source (this takes a few minutes)..."
-    cargo build --release --features semantic
+    cargo build --release --features "$FEATURES"
 
     # Install binary
     mkdir -p "$INSTALL_DIR"
@@ -390,7 +397,7 @@ elif [ "$EDGE" = "1" ]; then
     ok "Edge channel — built from latest master commit"
     echo ""
 fi
-echo "  Semantic search included. Enable with: codescope-server --mcp --semantic --root ."
+echo "  Semantic search enabled by default. Disable with --no-semantic if needed."
 echo ""
 if [ "$EDGE" = "0" ] && [ "$DEV" = "0" ]; then
     echo "  Optional: re-run with --edge or --dev for pre-release builds"

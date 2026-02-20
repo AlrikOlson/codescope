@@ -62,6 +62,20 @@ fn data_dir() -> Option<PathBuf> {
     }
 }
 
+/// Platform-aware cache directory: $XDG_CACHE_HOME/codescope or ~/.cache/codescope on Unix,
+/// %LOCALAPPDATA%/codescope/cache on Windows
+pub(crate) fn cache_dir() -> Option<PathBuf> {
+    if cfg!(target_os = "windows") {
+        std::env::var("LOCALAPPDATA").ok().map(|a| PathBuf::from(a).join("codescope").join("cache"))
+    } else {
+        std::env::var("XDG_CACHE_HOME")
+            .ok()
+            .map(PathBuf::from)
+            .or_else(|| home_dir().map(|h| h.join(".cache")))
+            .map(|c| c.join("codescope"))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // .codescope.toml config loading
 // ---------------------------------------------------------------------------
@@ -158,6 +172,8 @@ pub fn scan_repo_with_options(
 
     #[cfg(feature = "semantic")]
     let semantic_index = std::sync::Arc::new(std::sync::RwLock::new(None));
+    #[cfg(feature = "semantic")]
+    let semantic_progress = std::sync::Arc::new(types::SemanticProgress::new());
 
     let scan_time_ms = start.elapsed().as_millis() as u64;
 
@@ -182,6 +198,8 @@ pub fn scan_repo_with_options(
         scan_time_ms,
         #[cfg(feature = "semantic")]
         semantic_index,
+        #[cfg(feature = "semantic")]
+        semantic_progress,
     }
 }
 
@@ -253,9 +271,7 @@ fn print_help() {
     eprintln!("  --tokenizer <NAME>    Token counter: bytes-estimate (default) or tiktoken");
     #[cfg(feature = "semantic")]
     {
-        eprintln!(
-            "  --semantic            Enable semantic code search (downloads ML model on first use)"
-        );
+        eprintln!("  --no-semantic         Disable semantic code search (enabled by default)");
         eprintln!(
             "  --semantic-model <N>  Embedding model: minilm (default), codebert, starencoder"
         );
@@ -389,11 +405,11 @@ async fn main() {
     }
 
     // ---------------------------------------------------------------------------
-    // Semantic search: opt-in at runtime via --semantic flag
+    // Semantic search: on by default, --no-semantic to disable
     // ---------------------------------------------------------------------------
 
     #[cfg(feature = "semantic")]
-    let enable_semantic = args.iter().any(|a| a == "--semantic");
+    let enable_semantic = !args.iter().any(|a| a == "--no-semantic");
     #[cfg(not(feature = "semantic"))]
     let enable_semantic = false;
 
@@ -443,7 +459,16 @@ async fn main() {
     );
 
     // Build unified ServerState (shared by MCP and HTTP modes)
-    let server_state = ServerState { repos, default_repo, cross_repo_edges, tokenizer: tok };
+    let server_state = ServerState {
+        repos,
+        default_repo,
+        cross_repo_edges,
+        tokenizer: tok,
+        #[cfg(feature = "semantic")]
+        semantic_enabled: enable_semantic,
+        #[cfg(feature = "semantic")]
+        semantic_model: semantic_model.clone(),
+    };
     let state = Arc::new(RwLock::new(server_state));
 
     // Spawn background semantic indexing — server starts immediately
@@ -456,21 +481,31 @@ async fn main() {
             // Collect (name, files, semantic_index_handle) for each repo
             let work: Vec<(
                 String,
+                PathBuf,
                 Vec<ScannedFile>,
                 std::sync::Arc<std::sync::RwLock<Option<types::SemanticIndex>>>,
+                std::sync::Arc<types::SemanticProgress>,
             )> = s
                 .repos
                 .values()
                 .map(|r| {
-                    (r.name.clone(), r.all_files.clone(), std::sync::Arc::clone(&r.semantic_index))
+                    (
+                        r.name.clone(),
+                        r.root.clone(),
+                        r.all_files.clone(),
+                        std::sync::Arc::clone(&r.semantic_index),
+                        std::sync::Arc::clone(&r.semantic_progress),
+                    )
                 })
                 .collect();
             drop(s); // release the read lock
 
-            for (name, files, sem_handle) in work {
+            for (name, root, files, sem_handle, progress) in work {
                 eprintln!("  [{name}] Building semantic index in background...");
                 let sem_start = std::time::Instant::now();
-                if let Some(idx) = semantic::build_semantic_index(&files, sem_model.as_deref()) {
+                if let Some(idx) =
+                    semantic::build_semantic_index(&files, sem_model.as_deref(), &progress, &root)
+                {
                     eprintln!(
                         "  [{name}] Semantic index ready: {} chunks ({}ms)",
                         idx.chunk_meta.len(),

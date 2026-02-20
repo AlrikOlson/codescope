@@ -11,7 +11,7 @@ const OUTPUT_FILE = "/tmp/ai-docs-sync-output.json";
 
 const SYSTEM_PROMPT = `You are a documentation accuracy reviewer for CodeScope, a Rust MCP server + TypeScript web UI for codebase search and navigation.
 
-You have access to CodeScope MCP tools. Use them to read documentation files and source code, then compare them for accuracy.
+You have access to CodeScope MCP tools. Use them to read documentation files and source code, then compare them for accuracy. You also have cs_semantic_search for intent-based code discovery.
 
 Your job is to find and fix factual inaccuracies in docs — wrong counts, missing features, outdated architecture, stale CLI flags, etc. Do NOT rewrite docs stylistically. Only change facts that are wrong.
 

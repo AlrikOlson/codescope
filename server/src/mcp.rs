@@ -1527,7 +1527,41 @@ fn handle_tool_call(
                 if !lang_str.is_empty() {
                     out.push_str(&format!("  Languages: {}\n", lang_str.join(" ")));
                 }
-                out.push_str(&format!("  Last scan: {}ms\n\n", repo.scan_time_ms));
+                out.push_str(&format!("  Last scan: {}ms\n", repo.scan_time_ms));
+
+                #[cfg(feature = "semantic")]
+                {
+                    use std::sync::atomic::Ordering::Relaxed;
+                    let sp = &repo.semantic_progress;
+                    let status = sp.status_label();
+                    match sp.status.load(Relaxed) {
+                        0 => out.push_str("  Semantic: disabled\n"),
+                        1 => {
+                            out.push_str("  Semantic: extracting chunks...\n");
+                        }
+                        2 => {
+                            let done = sp.completed_batches.load(Relaxed);
+                            let total = sp.total_batches.load(Relaxed);
+                            let chunks = sp.total_chunks.load(Relaxed);
+                            let device = sp.device.read().unwrap();
+                            let pct = if total > 0 { done * 100 / total } else { 0 };
+                            out.push_str(&format!(
+                                "  Semantic: embedding on {device} — {done}/{total} batches ({pct}%), {chunks} chunks\n",
+                            ));
+                        }
+                        3 => {
+                            let chunks = sp.total_chunks.load(Relaxed);
+                            let device = sp.device.read().unwrap();
+                            out.push_str(&format!(
+                                "  Semantic: ready ({chunks} chunks, {device})\n",
+                            ));
+                        }
+                        4 => out.push_str("  Semantic: failed\n"),
+                        _ => out.push_str(&format!("  Semantic: {status}\n")),
+                    }
+                }
+
+                out.push('\n');
             }
 
             if !state.cross_repo_edges.is_empty() {
@@ -1648,10 +1682,24 @@ fn handle_tool_call(
             let index = match sem_guard.as_ref() {
                 Some(idx) => idx,
                 None => {
-                    return (
-                        "Error: Semantic index not available. It may still be building in the background, or start the server with --semantic flag.".to_string(),
-                        true,
-                    );
+                    use std::sync::atomic::Ordering::Relaxed;
+                    let sp = &repo.semantic_progress;
+                    let msg = match sp.status.load(Relaxed) {
+                        1 => "Semantic index is extracting chunks — please try again shortly.".to_string(),
+                        2 => {
+                            let done = sp.completed_batches.load(Relaxed);
+                            let total = sp.total_batches.load(Relaxed);
+                            let chunks = sp.total_chunks.load(Relaxed);
+                            let device = sp.device.read().unwrap();
+                            let pct = if total > 0 { done * 100 / total } else { 0 };
+                            format!(
+                                "Semantic index is building: {done}/{total} batches ({pct}%) on {device}, {chunks} chunks. Try again shortly."
+                            )
+                        }
+                        4 => "Semantic index failed to build. Check server logs for details.".to_string(),
+                        _ => "Semantic index not available. This binary may not include semantic search support.".to_string(),
+                    };
+                    return (format!("Error: {msg}"), true);
                 }
             };
 
@@ -1752,12 +1800,46 @@ fn handle_add_repo(state: &mut ServerState, args: &serde_json::Value) -> (String
         new_state.import_graph.imports.len(),
         new_state.scan_time_ms,
     );
+
+    // Spawn background semantic indexing for the new repo
+    #[cfg(feature = "semantic")]
+    let semantic_summary = if state.semantic_enabled {
+        let files = new_state.all_files.clone();
+        let sem_handle = std::sync::Arc::clone(&new_state.semantic_index);
+        let progress = std::sync::Arc::clone(&new_state.semantic_progress);
+        let repo_root = root.clone();
+        let model = state.semantic_model.clone();
+        let thread_name = name.clone();
+        std::thread::spawn(move || {
+            eprintln!("  [{thread_name}] Building semantic index in background...");
+            let sem_start = std::time::Instant::now();
+            if let Some(idx) = crate::semantic::build_semantic_index(
+                &files,
+                model.as_deref(),
+                &progress,
+                &repo_root,
+            ) {
+                eprintln!(
+                    "  [{thread_name}] Semantic index ready: {} chunks ({}ms)",
+                    idx.chunk_meta.len(),
+                    sem_start.elapsed().as_millis()
+                );
+                *sem_handle.write().unwrap() = Some(idx);
+            }
+        });
+        " Semantic indexing started in background."
+    } else {
+        ""
+    };
+    #[cfg(not(feature = "semantic"))]
+    let semantic_summary = "";
+
     state.repos.insert(name, new_state);
 
     // Rebuild cross-repo edges
     state.cross_repo_edges = crate::scan::resolve_cross_repo_imports(&state.repos);
 
-    (summary, false)
+    (format!("{summary}{semantic_summary}"), false)
 }
 
 // ---------------------------------------------------------------------------

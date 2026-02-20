@@ -179,8 +179,8 @@ jobs:
           path: /usr/local/bin
       - run: chmod +x /usr/local/bin/codescope-server
 
-      - name: Initialize CodeScope index
-        run: codescope-server init .
+      - name: Initialize CodeScope index (with semantic)
+        run: codescope-server init . --semantic
 
       - name: AI release analysis
         id: ai
@@ -354,8 +354,8 @@ jobs:
           path: /usr/local/bin
       - run: chmod +x /usr/local/bin/codescope-server
 
-      - name: Initialize CodeScope index
-        run: codescope-server init .
+      - name: Initialize CodeScope index (with semantic)
+        run: codescope-server init . --semantic
 
       - name: AI documentation sync
         env:
