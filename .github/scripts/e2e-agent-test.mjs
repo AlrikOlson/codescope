@@ -13,7 +13,7 @@
 import { runAgent, parseAgentJson, writeStepSummary } from "./lib/agent.mjs";
 
 const MAX_TURNS = 6;
-const MAX_COST_USD = 1.0;
+const MAX_BUDGET_USD = 1.0;
 
 const systemPrompt = `You are a QA agent validating that CodeScope MCP tools work correctly.
 You have 4 tools: cs_status, cs_search, cs_grep, cs_read.
@@ -43,7 +43,7 @@ Be concise. Use each tool exactly once. Output ONLY the JSON at the end.`;
 const prompt = `Validate the CodeScope MCP server by testing all 4 tools against this codebase. Report your findings as the JSON object described in your instructions.`;
 
 async function main() {
-  console.error(`[e2e] Starting agent test (maxTurns=${MAX_TURNS}, maxCost=$${MAX_COST_USD})`);
+  console.error(`[e2e] Starting agent test (maxTurns=${MAX_TURNS}, maxBudget=$${MAX_BUDGET_USD})`);
   const start = Date.now();
 
   let agentResult;
@@ -52,7 +52,7 @@ async function main() {
       prompt,
       systemPrompt,
       maxTurns: MAX_TURNS,
-      maxCostUsd: MAX_COST_USD,
+      maxBudgetUsd: MAX_BUDGET_USD,
       codeScopeOnly: true,
       logLabel: "e2e-test",
     });

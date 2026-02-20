@@ -202,26 +202,36 @@ jobs:
         id: fallback
         run: |
           LAST_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "v0.0.0")
-          # Parse version and apply patch bump
-          VERSION="${LAST_TAG#v}"
+
+          # Scan commit messages for "release: vX.Y.Z" to find highest version
+          HIGHEST="$LAST_TAG"
+          for V in $(git log "$LAST_TAG"..HEAD --pretty=format:"%s" 2>/dev/null | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+'); do
+            if [ "$(printf '%s\n%s' "$HIGHEST" "$V" | sort -V | tail -1)" = "$V" ]; then
+              HIGHEST="$V"
+            fi
+          done
+
+          # Patch bump from the highest version found
+          VERSION="${HIGHEST#v}"
           IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
           PATCH=$((PATCH + 1))
           NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
           echo "new_tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
-          echo "Fallback: patch bump $LAST_TAG → $NEW_TAG"
+          echo "Fallback: highest=$HIGHEST → $NEW_TAG"
 
           # Write minimal release output for downstream steps
           DATE=$(date +%Y-%m-%d)
-          cat > /tmp/ai-release-output.json << FALLBACK_EOF
-          {
-            "bump": "patch",
-            "newTag": "$NEW_TAG",
-            "commitMessage": "release: $NEW_TAG",
-            "releaseBody": "",
-            "changelogEntry": "## [${MAJOR}.${MINOR}.${PATCH}] - ${DATE}\n\n### Changed\n- Release ${NEW_TAG}",
-            "reason": "AI analysis failed, used patch fallback"
-          }
-          FALLBACK_EOF
+          node -e "
+            const fs = require('fs');
+            fs.writeFileSync('/tmp/ai-release-output.json', JSON.stringify({
+              bump: 'patch',
+              newTag: '$NEW_TAG',
+              commitMessage: 'release: $NEW_TAG',
+              releaseBody: '',
+              changelogEntry: '## [${MAJOR}.${MINOR}.${PATCH}] - ${DATE}\n\n### Changed\n- Release $NEW_TAG',
+              reason: 'AI analysis failed, used patch fallback from $HIGHEST'
+            }, null, 2));
+          "
 
       - name: Resolve version tag
         id: resolve
@@ -265,32 +275,45 @@ jobs:
         needs.release-gate.outputs.action == 'channel_only'
       )
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             archive: codescope-server-linux-x86_64.tar.gz
             use_cross: true
+            features: semantic
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: codescope-server-linux-x86_64-cuda.tar.gz
+            use_cross: false
+            features: semantic,cuda
+            cuda: true
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             archive: codescope-server-linux-aarch64.tar.gz
             use_cross: true
+            features: semantic
           - target: x86_64-apple-darwin
             os: macos-latest
             archive: codescope-server-macos-x86_64.tar.gz
             use_cross: false
+            features: semantic
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: codescope-server-macos-aarch64.tar.gz
             use_cross: false
+            features: semantic
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             archive: codescope-server-windows-x86_64.zip
             use_cross: false
+            features: semantic
           - target: aarch64-pc-windows-msvc
             os: windows-latest
             archive: codescope-server-windows-aarch64.zip
             use_cross: false
+            features: semantic
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -336,12 +359,20 @@ jobs:
         if: matrix.use_cross
         uses: taiki-e/install-action@cross
 
+      - name: Install CUDA toolkit
+        if: matrix.cuda
+        uses: Jimver/cuda-toolkit@v0.2.19
+        with:
+          cuda: '12.6.3'
+          method: network
+          sub-packages: '["nvcc", "cudart"]'
+
       - name: Build binary
         shell: bash
         run: |
           BUILD_CMD="cargo"
           if [ "${{ matrix.use_cross }}" = "true" ]; then BUILD_CMD="cross"; fi
-          $BUILD_CMD build --release --manifest-path server/Cargo.toml --target ${{ matrix.target }} --features semantic
+          $BUILD_CMD build --release --manifest-path server/Cargo.toml --target ${{ matrix.target }} --features ${{ matrix.features }}
 
       - name: Free disk for packaging
         shell: bash

@@ -8,6 +8,33 @@ import { runAgent, parseAgentJson, writeStepSummary } from "./lib/agent.mjs";
 import { parseTag, applyBump, validateBump } from "./lib/version.mjs";
 import { setOutput, writeReleaseOutput } from "./lib/output.mjs";
 
+/**
+ * Find the highest version from commit messages and the last tag.
+ * Scans for "release: vX.Y.Z" patterns. Returns the highest version
+ * found (as a parsed object), which may be higher than the last tag
+ * if release commits exist that haven't been tagged yet.
+ * @param {string} commits - commit log text
+ * @param {string} lastTag - last git tag
+ * @returns {{ major: number, minor: number, patch: number }}
+ */
+function highestVersionFromCommits(commits, lastTag) {
+  const versionPattern = /release:?\s*v?(\d+\.\d+\.\d+)/gi;
+  let highest = parseTag(lastTag);
+
+  for (const match of commits.matchAll(versionPattern)) {
+    const candidate = parseTag(`v${match[1]}`);
+    if (
+      candidate.major > highest.major ||
+      (candidate.major === highest.major && candidate.minor > highest.minor) ||
+      (candidate.major === highest.major && candidate.minor === highest.minor && candidate.patch > highest.patch)
+    ) {
+      highest = candidate;
+    }
+  }
+
+  return highest;
+}
+
 const OUTPUT_FILE = "/tmp/ai-release-output.json";
 
 const SYSTEM_PROMPT = `You are a precise release engineer for CodeScope, a Rust MCP server + TypeScript web UI for codebase search and navigation.
@@ -126,14 +153,13 @@ async function main() {
       prompt: buildPrompt(lastTag, commits, diffStat),
       systemPrompt: SYSTEM_PROMPT,
       maxTurns: 8,
-      maxCostUsd: 2.0,
+      maxBudgetUsd: 2.0,
       codeScopeOnly: true,
       logLabel: "release",
     });
   } catch (err) {
     console.error(`Agent SDK error: ${err.message}`);
-    const version = parseTag(lastTag);
-    const newTag = applyBump(version, "patch");
+    const newTag = applyBump(highestVersionFromCommits(commits, lastTag), "patch");
     const fallback = defaults(newTag);
     writeStepSummary(`## AI Release Analysis\n\n**Status:** Failed — ${err.message}\n**Fallback:** patch bump to ${newTag}\n`);
     finalize("patch", newTag, fallback.commitMessage, fallback.releaseBody, fallback.changelogEntry, `Agent error: ${err.message}`);
@@ -158,8 +184,10 @@ async function main() {
   // Parse structured output
   const result = parseAgentJson(text, ["bump"]);
   const bump = validateBump(result?.bump);
-  const version = parseTag(lastTag);
-  const newTag = applyBump(version, bump);
+  // Apply bump from the highest known version (including release commits in the log)
+  // so we don't regress version numbers when last tag is behind
+  const baseVersion = highestVersionFromCommits(commits, lastTag);
+  const newTag = applyBump(baseVersion, bump);
   const fallback = defaults(newTag);
 
   const commitMessage = sanitizeForGit(result?.commitMessage) || fallback.commitMessage;

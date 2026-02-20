@@ -5,12 +5,7 @@ import { join } from "node:path";
 // Pin exact model versions to prevent behavior drift on updates
 const DEFAULT_MODEL = "claude-sonnet-4-20250514";
 const DEFAULT_MAX_TURNS = 10;
-const DEFAULT_MAX_COST_USD = 2.0;
-
-// Approximate per-token costs (USD) — Sonnet 4
-const COST_PER_INPUT_TOKEN = 3.0 / 1_000_000;
-const COST_PER_OUTPUT_TOKEN = 15.0 / 1_000_000;
-const COST_PER_CACHED_TOKEN = 0.3 / 1_000_000;
+const DEFAULT_MAX_BUDGET_USD = 2.0;
 
 /**
  * Resolve the codescope-server binary path.
@@ -44,11 +39,6 @@ export function codeScopeMcpConfig(cwd) {
  * Focused CodeScope tool set for CI agents.
  * Kept minimal to nudge the model toward semantic search as the primary
  * discovery tool. More tools = more decision paralysis = slower agents.
- *
- * - cs_search: unified discovery (PRIMARY — semantic + keyword fusion)
- * - cs_read: read specific files (supports mode=stubs for overviews)
- * - cs_grep: exact pattern matching (counting, specific strings)
- * - cs_status: verify indexed repo info
  *
  * @returns {string[]}
  */
@@ -105,19 +95,6 @@ export function codeScopeOnlyDisallowedTools() {
 }
 
 /**
- * Estimate cost from token usage.
- * @param {{ input_tokens?: number, output_tokens?: number, cache_read_input_tokens?: number }} usage
- * @returns {number} estimated cost in USD
- */
-function estimateCost(usage) {
-  if (!usage) return 0;
-  const input = (usage.input_tokens || 0) - (usage.cache_read_input_tokens || 0);
-  const cached = usage.cache_read_input_tokens || 0;
-  const output = usage.output_tokens || 0;
-  return input * COST_PER_INPUT_TOKEN + cached * COST_PER_CACHED_TOKEN + output * COST_PER_OUTPUT_TOKEN;
-}
-
-/**
  * Write a step summary to GITHUB_STEP_SUMMARY (visible in Actions UI).
  * No-op outside CI.
  * @param {string} markdown
@@ -131,27 +108,35 @@ export function writeStepSummary(markdown) {
 
 /**
  * Run a Claude Agent SDK query with CodeScope MCP.
- * Streams messages, logs tool usage to stderr, tracks cost, writes conversation
+ * Streams messages, logs tool usage to stderr, writes conversation
  * log to /tmp/agent-conversation-{label}.jsonl for debugging.
  *
- * @param {{ prompt: string, systemPrompt: string, model?: string, maxTurns?: number, maxCostUsd?: number, codeScopeOnly?: boolean, logLabel?: string }} params
- * @returns {Promise<{ text: string, usage: { inputTokens: number, outputTokens: number, cachedTokens: number, totalCostUsd: number, turns: number } }>}
+ * Uses the SDK's built-in maxBudgetUsd for cost control and reads
+ * authoritative usage from the SDKResultMessage.
+ *
+ * @param {{ prompt: string, systemPrompt: string, model?: string, maxTurns?: number, maxBudgetUsd?: number, codeScopeOnly?: boolean, logLabel?: string }} params
+ * @returns {Promise<{ text: string, usage: { inputTokens: number, outputTokens: number, cachedTokens: number, totalCostUsd: number, turns: number, logFile: string } }>}
  */
 export async function runAgent({
   prompt,
   systemPrompt,
   model = DEFAULT_MODEL,
   maxTurns = DEFAULT_MAX_TURNS,
-  maxCostUsd = DEFAULT_MAX_COST_USD,
+  maxBudgetUsd = DEFAULT_MAX_BUDGET_USD,
   codeScopeOnly = false,
   logLabel = "agent",
 }) {
   let lastText = "";
-  let turnCount = 0;
-  let totalInputTokens = 0;
-  let totalOutputTokens = 0;
-  let totalCachedTokens = 0;
-  let totalCostUsd = 0;
+  let toolCallCount = 0;
+
+  // Authoritative usage — filled from SDKResultMessage at the end
+  let finalUsage = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedTokens: 0,
+    totalCostUsd: 0,
+    turns: 0,
+  };
 
   const logFile = `/tmp/agent-conversation-${logLabel}.jsonl`;
   // Clear previous log
@@ -168,6 +153,7 @@ export async function runAgent({
   const opts = {
     model,
     maxTurns,
+    maxBudgetUsd,
     systemPrompt,
     mcpServers: codeScopeMcpConfig(process.cwd()),
     allowedTools: codeScopeAllowedTools(),
@@ -184,14 +170,18 @@ export async function runAgent({
     prompt,
     options: opts,
   })) {
+    // Assistant messages — log tool calls and capture text
     if (message.type === "assistant" && message.message?.content) {
-      turnCount++;
       const toolCalls = [];
 
       for (const block of message.message.content) {
         if (block.type === "tool_use") {
+          toolCallCount++;
           console.error(`[codescope] Using tool: ${block.name}`);
-          toolCalls.push({ name: block.name, args_preview: JSON.stringify(block.input || {}).substring(0, 500) });
+          toolCalls.push({
+            name: block.name,
+            args_preview: JSON.stringify(block.input || {}).substring(0, 500),
+          });
         }
         if (block.type === "text") {
           lastText = block.text;
@@ -199,51 +189,62 @@ export async function runAgent({
         }
       }
 
-      // Track token usage if available
-      const usage = message.message?.usage;
-      if (usage) {
-        totalInputTokens += usage.input_tokens || 0;
-        totalOutputTokens += usage.output_tokens || 0;
-        totalCachedTokens += usage.cache_read_input_tokens || 0;
-        totalCostUsd += estimateCost(usage);
-      }
-
-      // Log conversation turn
       logEntry({
         timestamp: new Date().toISOString(),
-        turn: turnCount,
+        type: "assistant",
         tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
         text_preview: lastText.substring(0, 300),
-        usage,
-        cumulative_cost_usd: Number(totalCostUsd.toFixed(4)),
       });
-
-      // Cost circuit breaker
-      if (totalCostUsd > maxCostUsd) {
-        console.error(`[agent] Cost limit exceeded: $${totalCostUsd.toFixed(2)} > $${maxCostUsd.toFixed(2)} — aborting`);
-        logEntry({ type: "abort", reason: "cost_limit", cost_usd: totalCostUsd });
-        break;
-      }
     }
 
-    if ("result" in message && message.subtype === "success") {
-      lastText = message.result;
-      console.error(`[result] ${message.result}`);
-    } else if ("result" in message) {
-      console.error(`[error] ${JSON.stringify(message)}`);
+    // Result message — authoritative usage and cost data from the SDK
+    if (message.type === "result") {
+      if (message.subtype === "success") {
+        lastText = message.result;
+        console.error(`[result] ${message.result?.substring(0, 200)}`);
+      } else {
+        console.error(`[result] ${message.subtype}: ${JSON.stringify(message.errors || [])}`);
+      }
+
+      // Extract authoritative usage from SDKResultMessage
+      finalUsage.turns = message.num_turns || 0;
+      finalUsage.totalCostUsd = message.total_cost_usd || 0;
+
+      // modelUsage has camelCase fields: { [model]: { inputTokens, outputTokens, ... } }
+      if (message.modelUsage) {
+        for (const mu of Object.values(message.modelUsage)) {
+          finalUsage.inputTokens += mu.inputTokens || 0;
+          finalUsage.outputTokens += mu.outputTokens || 0;
+          finalUsage.cachedTokens += mu.cacheReadInputTokens || 0;
+        }
+      }
+
+      logEntry({
+        timestamp: new Date().toISOString(),
+        type: "result",
+        subtype: message.subtype,
+        turns: finalUsage.turns,
+        cost_usd: finalUsage.totalCostUsd,
+        input_tokens: finalUsage.inputTokens,
+        output_tokens: finalUsage.outputTokens,
+        cached_tokens: finalUsage.cachedTokens,
+        tool_calls_total: toolCallCount,
+        errors: message.errors,
+      });
     }
   }
 
   const usageSummary = {
-    inputTokens: totalInputTokens,
-    outputTokens: totalOutputTokens,
-    cachedTokens: totalCachedTokens,
-    totalCostUsd: Number(totalCostUsd.toFixed(4)),
-    turns: turnCount,
+    ...finalUsage,
     logFile,
   };
 
-  console.error(`[agent] Done: ${turnCount} turns, ${totalInputTokens} in / ${totalOutputTokens} out, ~$${totalCostUsd.toFixed(2)}`);
+  console.error(
+    `[agent] Done: ${finalUsage.turns} turns, ` +
+    `${finalUsage.inputTokens.toLocaleString()} in / ${finalUsage.outputTokens.toLocaleString()} out ` +
+    `(${finalUsage.cachedTokens.toLocaleString()} cached), ` +
+    `~$${finalUsage.totalCostUsd.toFixed(2)}`
+  );
 
   return { text: lastText, usage: usageSummary };
 }
@@ -257,7 +258,7 @@ export async function runAgent({
  * @returns {object|null}
  */
 export function parseAgentJson(text, requiredKeys) {
-  // Match all JSON objects in the text
+  // Match all JSON objects in the text (handles nested objects)
   const jsonPattern = /\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g;
   const matches = text.match(jsonPattern);
   if (!matches) return null;

@@ -95,7 +95,7 @@ async function main() {
       prompt: buildPrompt(version),
       systemPrompt: SYSTEM_PROMPT,
       maxTurns: 8,
-      maxCostUsd: 2.0,
+      maxBudgetUsd: 2.0,
       codeScopeOnly: true,
       logLabel: "docs-sync",
     });
