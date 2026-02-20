@@ -38,9 +38,12 @@ ${diffStat}
 
 ## Instructions
 
-1. Use CodeScope tools (cs_find, cs_grep, cs_read_file, cs_read_context, cs_semantic_search) to read the changed files and understand what was modified.
-2. Check if any public APIs, MCP tool interfaces, CLI flags, or config formats changed in breaking ways.
-3. Check if new features, tools, or capabilities were added.
+1. Use CodeScope tools (cs_semantic_search, cs_read_file, cs_grep) to read the changed files and understand what was modified.
+2. CRITICAL: The commit messages are your PRIMARY source of truth for what changed. CodeScope shows the CURRENT state of the code, NOT what was added in this release. If a file like mcp.rs was MODIFIED (not created), the features in it ALREADY EXISTED — they were changed, not added. Only classify something as "new" if:
+   - The commit message explicitly says "add", "new", "introduce", or "implement"
+   - The file itself is newly created (check the diffstat for new files vs modified files)
+   - The diffstat shows the file went from 0 lines to N lines
+3. Check if any public APIs, MCP tool interfaces, CLI flags, or config formats changed in breaking ways.
 4. Determine the correct semver bump:
    - **MAJOR**: breaking changes to MCP protocol, CLI interface, API endpoints, or config format that would break existing users/integrations
    - **MINOR**: new features, new MCP tools, new CLI flags, new API endpoints, meaningful new capabilities
@@ -105,6 +108,7 @@ async function main() {
     text = await runAgent({
       prompt: buildPrompt(lastTag, commits, diffStat),
       systemPrompt: SYSTEM_PROMPT,
+      readOnly: true,
     });
   } catch (err) {
     console.error(`Agent SDK error: ${err.message}`);
