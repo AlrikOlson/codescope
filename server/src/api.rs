@@ -330,7 +330,7 @@ pub async fn api_grep(
         let mut results = Vec::new();
         let mut total_matches = 0usize;
         for (file_result, count) in file_results {
-            if total_matches >= limit {
+            if results.len() >= limit {
                 break;
             }
             total_matches += count;

@@ -302,6 +302,18 @@ fn is_structural_scope(line: &str, lines: &[&str], idx: usize) -> bool {
         while j > 0 && lines[j].trim().is_empty() {
             j -= 1;
         }
+        // Walk past C++ inheritance continuation lines (: public Base, , public Other)
+        while j > 0 {
+            let lt = lines[j].trim();
+            if lt.starts_with(',') || (lt.starts_with(':') && !lt.starts_with("::")) {
+                j -= 1;
+                while j > 0 && lines[j].trim().is_empty() {
+                    j -= 1;
+                }
+            } else {
+                break;
+            }
+        }
         if j < idx {
             return check(lines[j]);
         }
@@ -1177,4 +1189,51 @@ fn block_function_name(line: &str) -> String {
         return before.trim().to_string();
     }
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_multiline_class_declaration_preserved() {
+        let input = "class FSlateApplication\n\t: public FSlateApplicationBase\n\t, public FGenericApplicationMessageHandler\n{\npublic:\n\tvoid Tick(float DeltaTime) { /* body */ }\n\tvirtual void OnKeyDown(int Key);\n\tint32 GetCursorPos() const { return CursorPos; }\nprivate:\n\tint32 CursorPos;\n};";
+        let stubs = stub_brace_based(input);
+        assert!(
+            stubs.contains("void Tick("),
+            "Method Tick should be preserved in stubs, got:\n{stubs}"
+        );
+        assert!(
+            stubs.contains("void OnKeyDown("),
+            "Method OnKeyDown should be preserved, got:\n{stubs}"
+        );
+        assert!(
+            stubs.contains("GetCursorPos()"),
+            "Method GetCursorPos should be preserved, got:\n{stubs}"
+        );
+        assert!(
+            stubs.contains("int32 CursorPos"),
+            "Member variable should be preserved, got:\n{stubs}"
+        );
+        assert!(stubs.contains("public:"), "Access specifier should be preserved, got:\n{stubs}");
+    }
+
+    #[test]
+    fn test_single_line_class_preserved() {
+        let input = "class Foo : public Bar {\npublic:\n\tvoid DoThing();\n\tint x;\n};";
+        let stubs = stub_brace_based(input);
+        assert!(stubs.contains("void DoThing()"), "Method should be preserved, got:\n{stubs}");
+        assert!(stubs.contains("int x"), "Member should be preserved, got:\n{stubs}");
+    }
+
+    #[test]
+    fn test_constructor_init_list_not_structural() {
+        let input = "class Foo {\n\tFoo()\n\t\t: bar(1)\n\t\t, baz(2)\n\t{\n\t\tDoStuff();\n\t}\n\tint bar;\n\tint baz;\n};";
+        let stubs = stub_brace_based(input);
+        assert!(
+            !stubs.contains("DoStuff()"),
+            "Constructor body should be collapsed, got:\n{stubs}"
+        );
+        assert!(stubs.contains("int bar"), "Member should be preserved, got:\n{stubs}");
+    }
 }

@@ -406,6 +406,23 @@ fn score_file(f: &SearchFileEntry, tokens: &[TokenInfo]) -> Option<SearchFileRes
         let fname_text = if token.case_sensitive { &f.filename } else { &f.filename_lower };
         let fname_passes = (token.mask & f.filename_mask) == token.mask;
         if fname_passes {
+            // Exact filename match bonus: if the query matches the filename stem exactly,
+            // give a massive score so it always ranks first
+            let stem =
+                f.filename_lower.rsplit_once('.').map(|(s, _)| s).unwrap_or(&f.filename_lower);
+            if pattern == stem || pattern == &f.filename_lower {
+                // Exact match — give maximum possible score
+                total_score += 10000.0;
+                filename_indices.extend(0..f.filename.len());
+                continue;
+            }
+            // Prefix match bonus: "Actor" matching "Actor.h" stem "actor"
+            if stem.starts_with(pattern.as_str()) && pattern.len() >= 3 {
+                total_score += 5000.0 + (pattern.len() as f64 / stem.len() as f64) * 1000.0;
+                filename_indices.extend(0..pattern.len());
+                continue;
+            }
+
             if let Some((score, indices)) =
                 fuzzy_score_v2(fname_text, pattern, token.case_sensitive)
             {

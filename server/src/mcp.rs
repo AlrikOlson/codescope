@@ -111,7 +111,7 @@ fn tool_definitions() -> serde_json::Value {
                     "ext": { "type": "string", "description": "Comma-separated extensions to filter (e.g. 'h,cpp' or 'rs,go')" },
                     "path": { "type": "string", "description": "Path prefix to filter files (e.g. 'server/src' or 'src/components')" },
                     "category": { "type": "string", "description": "Module category prefix to filter" },
-                    "limit": { "type": "integer", "description": "Max total matches to return. Default: 100" },
+                    "limit": { "type": "integer", "description": "Max files to return. Default: 50" },
                     "max_per_file": { "type": "integer", "description": "Max matching lines shown per file. Default: 8, max: 50" },
                     "context": { "type": "integer", "description": "Lines of context before/after each match (0-10). Default: 2" },
                     "output": { "type": "string", "enum": ["full", "files_only"], "description": "Output mode. 'full' (default): matching lines with context. 'files_only': just filenames and match counts." },
@@ -122,13 +122,14 @@ fn tool_definitions() -> serde_json::Value {
         },
         {
             "name": "cs_list_modules",
-            "description": "List all modules/categories with file counts. Use to discover available modules before drilling into specific ones.",
+            "description": "List modules/categories with file counts. Use to discover available modules before drilling into specific ones.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
+                    "prefix": { "type": "string", "description": "Filter modules by prefix (e.g. 'Runtime' or 'Runtime > Engine')" },
+                    "limit": { "type": "integer", "description": "Max modules to return. Default: 100" },
                     "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
-                },
-                "additionalProperties": false
+                }
             }
         },
         {
@@ -305,6 +306,7 @@ fn tool_definitions() -> serde_json::Value {
                 "properties": {
                     "path": { "type": "string", "description": "File to analyze impact for" },
                     "max_depth": { "type": "integer", "description": "Max traversal depth (default: 5)" },
+                    "limit": { "type": "integer", "description": "Max files to show (default: 50). Remaining are counted but not listed." },
                     "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
                 },
                 "required": ["path"]
@@ -460,7 +462,7 @@ fn handle_tool_call(
                 return ("Error: Query must be at least 2 characters".to_string(), true);
             }
 
-            let limit = args["limit"].as_u64().unwrap_or(100).min(500) as usize;
+            let limit = args["limit"].as_u64().unwrap_or(50).min(200) as usize;
             let max_per_file = args["max_per_file"].as_u64().unwrap_or(8).min(50) as usize;
             let context_lines = args["context"].as_u64().unwrap_or(2).min(10) as usize;
             let ext_filter: Option<HashSet<String>> = args["ext"].as_str().map(|exts| {
@@ -475,32 +477,23 @@ fn handle_tool_call(
             let terms: Vec<&str> = query.split_whitespace().collect();
             let terms_lower: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
 
+            // For "all" mode with multiple terms, we use OR pattern + post-filter
+            // (Rust regex crate does not support lookahead assertions)
+            let require_all_terms = match_mode == "all" && terms.len() > 1;
+
             let pattern = match match_mode {
                 "exact" => RegexBuilder::new(&regex::escape(query)).case_insensitive(true).build(),
                 "regex" => RegexBuilder::new(query).case_insensitive(true).build(),
-                "any" => {
+                _ => {
+                    // "all" (multi-term), "any", or "all" (single-term) — use OR pattern
                     let pattern_str =
                         terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|");
                     RegexBuilder::new(&pattern_str).case_insensitive(true).build()
                 }
-                _ => {
-                    // "all" mode (default): build a pattern that requires all terms
-                    if terms.len() == 1 {
-                        RegexBuilder::new(&regex::escape(terms[0])).case_insensitive(true).build()
-                    } else {
-                        let lookaheads: String = terms
-                            .iter()
-                            .map(|t| format!("(?=.*(?i:{}))", regex::escape(t)))
-                            .collect::<Vec<_>>()
-                            .join("");
-                        let pattern_str = format!("^{}", lookaheads);
-                        RegexBuilder::new(&pattern_str).case_insensitive(true).build()
-                    }
-                }
             };
             let pattern = match pattern {
                 Ok(p) => p,
-                Err(_) => return ("Error: Invalid pattern".to_string(), true),
+                Err(e) => return (format!("Error: Invalid pattern: {e}"), true),
             };
 
             let start = std::time::Instant::now();
@@ -546,21 +539,28 @@ fn handle_tool_call(
                     })
                     .collect();
 
-                for file in &candidates {
-                    let content = match fs::read_to_string(&file.abs_path) {
-                        Ok(c) => c,
-                        Err(_) => continue,
-                    };
+                use rayon::prelude::*;
+                let mut par_hits: Vec<GrepFileHit> = candidates
+                    .par_iter()
+                    .filter_map(|file| {
+                        let content = fs::read_to_string(&file.abs_path).ok()?;
+                        let lines: Vec<&str> = content.lines().collect();
+                        let total_lines = lines.len().max(1);
 
-                    let lines: Vec<&str> = content.lines().collect();
-                    let total_lines = lines.len().max(1);
-
-                    let mut match_indices: Vec<usize> = Vec::new();
-                    let mut total_match_count = 0usize;
-                    let mut first_match_line_idx = usize::MAX;
-                    let mut terms_seen = std::collections::HashSet::new();
-                    for (i, line) in lines.iter().enumerate() {
-                        if pattern.is_match(line) {
+                        let mut match_indices: Vec<usize> = Vec::new();
+                        let mut total_match_count = 0usize;
+                        let mut first_match_line_idx = usize::MAX;
+                        let mut terms_seen = std::collections::HashSet::new();
+                        for (i, line) in lines.iter().enumerate() {
+                            if !pattern.is_match(line) {
+                                continue;
+                            }
+                            if require_all_terms {
+                                let line_lower = line.to_lowercase();
+                                if !terms_lower.iter().all(|t| line_lower.contains(t.as_str())) {
+                                    continue;
+                                }
+                            }
                             total_match_count += 1;
                             if first_match_line_idx == usize::MAX {
                                 first_match_line_idx = i;
@@ -575,43 +575,52 @@ fn handle_tool_call(
                                 match_indices.push(i);
                             }
                         }
-                    }
 
-                    if match_indices.is_empty() {
-                        continue;
-                    }
+                        if match_indices.is_empty() {
+                            return None;
+                        }
 
-                    let filename =
-                        file.rel_path.rsplit('/').next().unwrap_or(&file.rel_path).to_lowercase();
-                    let score = grep_relevance_score(
-                        total_match_count,
-                        total_lines,
-                        &filename,
-                        &file.ext,
-                        &terms_lower,
-                        terms_seen.len(),
-                        if first_match_line_idx == usize::MAX { 0 } else { first_match_line_idx },
-                        &idf_weights,
-                    );
+                        let filename = file
+                            .rel_path
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or(&file.rel_path)
+                            .to_lowercase();
+                        let score = grep_relevance_score(
+                            total_match_count,
+                            total_lines,
+                            &filename,
+                            &file.ext,
+                            &terms_lower,
+                            terms_seen.len(),
+                            if first_match_line_idx == usize::MAX {
+                                0
+                            } else {
+                                first_match_line_idx
+                            },
+                            &idf_weights,
+                        );
 
-                    file_hits.push(GrepFileHit {
-                        display_path: repo_path(repo, &file.rel_path, multi),
-                        desc: file.desc.clone(),
-                        match_indices,
-                        total_match_count,
-                        lines: lines.iter().map(|l| l.to_string()).collect(),
-                        score,
-                        terms_matched: terms_seen.len(),
-                        total_terms: terms_lower.len(),
-                    });
-                }
+                        Some(GrepFileHit {
+                            display_path: repo_path(repo, &file.rel_path, multi),
+                            desc: file.desc.clone(),
+                            match_indices,
+                            total_match_count,
+                            lines: lines.iter().map(|l| l.to_string()).collect(),
+                            score,
+                            terms_matched: terms_seen.len(),
+                            total_terms: terms_lower.len(),
+                        })
+                    })
+                    .collect();
+                file_hits.append(&mut par_hits);
             }
 
             // Sort by relevance score descending
             file_hits
                 .sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 
-            // Format top-N results within limit
+            // Format top-N results — limit caps number of FILES, not line matches
             let mut results = Vec::new();
             let mut total_matches: usize = 0;
 
@@ -624,7 +633,7 @@ fn handle_tool_call(
             };
 
             for hit in &file_hits {
-                if total_matches >= limit {
+                if results.len() >= limit {
                     break;
                 }
                 total_matches += hit.total_match_count;
@@ -710,11 +719,36 @@ fn handle_tool_call(
                 Ok(r) => r,
                 Err(e) => return (format!("Error: {e}"), true),
             };
+            let limit = args["limit"].as_u64().unwrap_or(100).min(1000) as usize;
+            let prefix = args["prefix"].as_str();
+
             let mut out = String::new();
+            let mut shown = 0usize;
+            let mut total = 0usize;
             for (cat, files) in &repo.manifest {
-                out.push_str(&format!("{cat}  ({} files)\n", files.len()));
+                if let Some(pfx) = prefix {
+                    if !cat.starts_with(pfx) {
+                        continue;
+                    }
+                }
+                total += 1;
+                if shown < limit {
+                    out.push_str(&format!("{cat}  ({} files)\n", files.len()));
+                    shown += 1;
+                }
             }
-            (format!("{} modules total\n\n{out}", repo.manifest.len()), false)
+            let truncated = if total > shown {
+                format!("\n... and {} more (use prefix filter to narrow)", total - shown)
+            } else {
+                String::new()
+            };
+            (
+                format!(
+                    "{total} modules{}\n\n{out}{truncated}",
+                    if prefix.is_some() { " matching" } else { " total" }
+                ),
+                false,
+            )
         }
         "cs_get_module_files" => {
             let repo = match resolve_repo(state, args) {
@@ -978,30 +1012,19 @@ fn handle_tool_call(
             // Content grep pattern
             let terms: Vec<&str> = raw_query.split_whitespace().collect();
             let terms_lower: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
+            let require_all_terms = match_mode == "all" && terms.len() > 1;
 
             let pattern = match match_mode {
                 "exact" => {
                     RegexBuilder::new(&regex::escape(raw_query)).case_insensitive(true).build()
                 }
                 "regex" => RegexBuilder::new(raw_query).case_insensitive(true).build(),
-                "any" => {
+                _ => {
+                    // "all" (multi-term), "any", or "all" (single-term) — use OR pattern
+                    // For "all" multi-term: post-filter ensures ALL terms are present
                     let pattern_str =
                         terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|");
                     RegexBuilder::new(&pattern_str).case_insensitive(true).build()
-                }
-                _ => {
-                    // "all" mode (default)
-                    if terms.len() == 1 {
-                        RegexBuilder::new(&regex::escape(terms[0])).case_insensitive(true).build()
-                    } else {
-                        let lookaheads: String = terms
-                            .iter()
-                            .map(|t| format!("(?=.*(?i:{}))", regex::escape(t)))
-                            .collect::<Vec<_>>()
-                            .join("");
-                        let pattern_str = format!("^{}", lookaheads);
-                        RegexBuilder::new(&pattern_str).case_insensitive(true).build()
-                    }
                 }
             };
 
@@ -1100,25 +1123,32 @@ fn handle_tool_call(
                         })
                         .collect();
 
-                    for file in &candidates {
-                        let content = match fs::read_to_string(&file.abs_path) {
-                            Ok(c) => c,
-                            Err(_) => continue,
-                        };
-                        let lines: Vec<&str> = content.lines().collect();
-                        let total_lines = lines.len().max(1);
-                        let mut match_count = 0usize;
-                        let mut best_snippet: Option<String> = None;
-                        let mut best_snippet_term_count: usize = 0;
-                        let mut first_match_line_idx = usize::MAX;
-                        let mut terms_seen = std::collections::HashSet::new();
-                        for (i, line) in lines.iter().enumerate() {
-                            if pattern.is_match(line) {
+                    use rayon::prelude::*;
+                    let grep_results: Vec<_> = candidates
+                        .par_iter()
+                        .filter_map(|file| {
+                            let content = fs::read_to_string(&file.abs_path).ok()?;
+                            let lines: Vec<&str> = content.lines().collect();
+                            let total_lines = lines.len().max(1);
+                            let mut match_count = 0usize;
+                            let mut best_snippet: Option<String> = None;
+                            let mut best_snippet_term_count: usize = 0;
+                            let mut first_match_line_idx = usize::MAX;
+                            let mut terms_seen = std::collections::HashSet::new();
+                            for (i, line) in lines.iter().enumerate() {
+                                if !pattern.is_match(line) {
+                                    continue;
+                                }
+                                let line_lower = line.to_lowercase();
+                                if require_all_terms
+                                    && !terms_lower.iter().all(|t| line_lower.contains(t.as_str()))
+                                {
+                                    continue;
+                                }
                                 match_count += 1;
                                 if first_match_line_idx == usize::MAX {
                                     first_match_line_idx = i;
                                 }
-                                let line_lower = line.to_lowercase();
                                 let line_term_count = terms_lower
                                     .iter()
                                     .filter(|t| line_lower.contains(t.as_str()))
@@ -1138,36 +1168,49 @@ fn handle_tool_call(
                                     best_snippet = Some(trimmed);
                                 }
                             }
-                        }
-                        if match_count == 0 {
-                            continue;
-                        }
+                            if match_count == 0 {
+                                return None;
+                            }
 
-                        let filename = file
-                            .rel_path
-                            .rsplit('/')
-                            .next()
-                            .unwrap_or(&file.rel_path)
-                            .to_lowercase();
-                        let grep_score = grep_relevance_score(
-                            match_count,
-                            total_lines,
-                            &filename,
-                            &file.ext,
-                            &terms_lower,
-                            terms_seen.len(),
-                            if first_match_line_idx == usize::MAX {
-                                0
-                            } else {
-                                first_match_line_idx
-                            },
-                            &idf_weights,
-                        );
+                            let filename = file
+                                .rel_path
+                                .rsplit('/')
+                                .next()
+                                .unwrap_or(&file.rel_path)
+                                .to_lowercase();
+                            let grep_score = grep_relevance_score(
+                                match_count,
+                                total_lines,
+                                &filename,
+                                &file.ext,
+                                &terms_lower,
+                                terms_seen.len(),
+                                if first_match_line_idx == usize::MAX {
+                                    0
+                                } else {
+                                    first_match_line_idx
+                                },
+                                &idf_weights,
+                            );
 
-                        let key = repo_path(repo, &file.rel_path, multi);
+                            let key = repo_path(repo, &file.rel_path, multi);
+                            Some((
+                                key,
+                                file.desc.clone(),
+                                grep_score,
+                                match_count,
+                                best_snippet,
+                                terms_seen.len(),
+                            ))
+                        })
+                        .collect();
+
+                    for (key, desc, grep_score, match_count, best_snippet, terms_matched) in
+                        grep_results
+                    {
                         let entry = merged.entry(key.clone()).or_insert_with(|| FindResult {
                             display_path: key,
-                            desc: file.desc.clone(),
+                            desc,
                             name_score: 0.0,
                             grep_score: 0.0,
                             grep_count: 0,
@@ -1178,7 +1221,7 @@ fn handle_tool_call(
                         entry.grep_score = grep_score;
                         entry.grep_count = match_count;
                         entry.top_match = best_snippet;
-                        entry.terms_matched = terms_seen.len();
+                        entry.terms_matched = terms_matched;
                     }
                 }
             }
@@ -1505,6 +1548,7 @@ fn handle_tool_call(
             };
             let path = args["path"].as_str().unwrap_or("");
             let max_depth = args["max_depth"].as_u64().unwrap_or(5).min(20) as usize;
+            let file_limit = args["limit"].as_u64().unwrap_or(50).min(500) as usize;
 
             if path.is_empty() {
                 return ("Error: path is required".to_string(), true);
@@ -1554,6 +1598,7 @@ fn handle_tool_call(
 
             let mut out = format!("Impact analysis for {path}\n\n");
             let max_depth_found = *by_depth.keys().max().unwrap_or(&0);
+            let mut shown = 0usize;
             for depth in 1..=max_depth_found {
                 if let Some(files) = by_depth.get(&depth) {
                     let label = if depth == 1 { "direct dependents" } else { "" };
@@ -1565,7 +1610,14 @@ fn handle_tool_call(
                         if files.len() == 1 { "" } else { "s" }
                     ));
                     for f in files {
-                        out.push_str(&format!("  {f}\n"));
+                        if shown < file_limit {
+                            out.push_str(&format!("  {f}\n"));
+                            shown += 1;
+                        }
+                    }
+                    if shown >= file_limit && depth < max_depth_found {
+                        out.push_str(&format!("\n  ... output capped at {file_limit} files (use limit param to increase)\n"));
+                        break;
                     }
                     out.push('\n');
                 }
