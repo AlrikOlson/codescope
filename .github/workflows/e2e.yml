@@ -97,7 +97,7 @@ jobs:
         run: cargo build --release --manifest-path server/Cargo.toml
 
       - name: Initialize CodeScope index
-        run: server/target/release/codescope-server init --root .
+        run: server/target/release/codescope-server init .
 
       - name: Install Node dependencies
         run: npm ci
