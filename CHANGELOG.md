@@ -4,6 +4,31 @@ All notable changes to CodeScope will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.0] - 2026-02-20
+
+### Added
+- `cs_blame`: git blame for any file with optional line-range scoping
+- `cs_file_history`: recent commits that touched a specific file
+- `cs_changed_since`: files changed since a given commit, branch, or tag
+- `cs_hot_files`: churn ranking of most frequently modified files over a time window
+- `cs_session_info`: files read and tokens served in the current MCP session
+- `cs_impact`: transitive reverse-dependency BFS analysis up to configurable depth
+- `cs_status`: indexed repo overview with file counts, language breakdown, and scan time
+- `cs_rescan`: re-index one or all repos at runtime without server restart
+- `cs_add_repo`: dynamically add a repository to the live index at runtime
+
+### Fixed
+- `cs_grep` "all" mode: multi-term queries now require ALL terms per matching line (was OR-only)
+- `cs_find`: added `match_mode` parameter with `require_all_terms` post-filter
+- `cs_grep` context output: proper range merging with `---` separators between non-contiguous blocks
+- `cs_grep` `files_only` output mode now emits correct per-file summary lines
+- Stub extraction: multi-line C++ class declarations with inheritance continuations no longer collapsed into function stubs
+- Stub extraction: constructor initializer lists no longer misidentified as structural scopes
+
+### Changed
+- MCP protocol version updated to `2025-06-18`
+- `KNOWN_EXTS` in `preprocess_search_query` expanded to cover more file types
+
 ## [0.5.0] - 2026-02-20
 
 ### Added
