@@ -168,10 +168,6 @@ jobs:
     if: needs.release-gate.outputs.action == 'full'
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Global concurrency: only one AI agent job at a time across all workflows
-    concurrency:
-      group: anthropic-api-release
-      cancel-in-progress: false
     outputs:
       new_tag: ${{ steps.resolve.outputs.new_tag }}
     steps:

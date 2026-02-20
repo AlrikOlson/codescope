@@ -73,10 +73,6 @@ jobs:
     if: needs.changes.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Serialize API access across all CI e2e runs
-    concurrency:
-      group: anthropic-api-ci
-      cancel-in-progress: false
     steps:
       - name: Force-cancel older e2e runs
         env:
