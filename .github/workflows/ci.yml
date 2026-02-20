@@ -159,6 +159,7 @@ jobs:
 
       - name: Bake release version into manifests
         if: needs.version.result == 'success' && needs.version.outputs.skip != 'true'
+        shell: bash
         run: |
           VERSION="${{ needs.version.outputs.new_tag }}"
           VERSION="${VERSION#v}"
@@ -184,6 +185,7 @@ jobs:
         uses: taiki-e/install-action@cross
 
       - name: Build binary
+        shell: bash
         run: |
           BUILD_CMD="cargo"
           if [ "${{ matrix.use_cross }}" = "true" ]; then BUILD_CMD="cross"; fi
