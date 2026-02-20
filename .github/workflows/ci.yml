@@ -191,6 +191,15 @@ jobs:
           if [ "${{ matrix.use_cross }}" = "true" ]; then BUILD_CMD="cross"; fi
           $BUILD_CMD build --release --manifest-path server/Cargo.toml --target ${{ matrix.target }} --features semantic
 
+      - name: Free disk for packaging
+        shell: bash
+        run: |
+          # Cross builds produce multi-GB intermediates that can exhaust runner disk
+          rm -rf server/target/${{ matrix.target }}/release/build
+          rm -rf server/target/${{ matrix.target }}/release/deps
+          rm -rf server/target/${{ matrix.target }}/release/.fingerprint
+          rm -rf server/target/${{ matrix.target }}/release/incremental
+
       - name: Package archive
         run: |
           mkdir -p staging
