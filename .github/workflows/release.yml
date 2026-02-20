@@ -182,7 +182,7 @@ jobs:
 
       - name: AI release analysis
         id: ai
-        timeout-minutes: 5
+        timeout-minutes: 8
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: node .github/scripts/ai-release.mjs

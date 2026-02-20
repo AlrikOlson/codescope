@@ -87,6 +87,9 @@ export function codeScopeOnlyDisallowedTools() {
     "EnterPlanMode",
     "EnterWorktree",
     "Skill",
+    // Block planning/todo tools (wastes agent turns)
+    "TodoRead",
+    "TodoWrite",
     // Block built-in read tools — force use of CodeScope MCP tools
     "Read",
     "Glob",
