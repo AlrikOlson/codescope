@@ -272,9 +272,29 @@ jobs:
             }
           "
 
+          # Update CHANGELOG.md with AI-generated entry
+          node -e "
+            const fs = require('fs');
+            const data = JSON.parse(fs.readFileSync('/tmp/ai-release-output.json', 'utf8'));
+            const entry = data.changelogEntry || '';
+            if (entry) {
+              const changelog = fs.readFileSync('CHANGELOG.md', 'utf8');
+              // Insert after the header line ('# Changelog\n...\n')
+              const marker = changelog.indexOf('\n## ');
+              if (marker !== -1) {
+                const updated = changelog.slice(0, marker) + '\n' + entry + '\n' + changelog.slice(marker);
+                fs.writeFileSync('CHANGELOG.md', updated);
+              } else {
+                // No existing entries — append after header
+                fs.writeFileSync('CHANGELOG.md', changelog.trimEnd() + '\n\n' + entry + '\n');
+              }
+              console.error('Updated CHANGELOG.md');
+            }
+          "
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add server/Cargo.toml package.json package-lock.json
+          git add server/Cargo.toml package.json package-lock.json CHANGELOG.md
           git diff --cached --quiet || git commit -m "$COMMIT_MSG"
           git tag -f "$NEW_TAG"
           git push origin HEAD:master --tags --force

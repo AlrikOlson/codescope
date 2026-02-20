@@ -49,9 +49,14 @@ ${diffStat}
    - A "What's Changed" section grouping changes by category (Features, Fixes, Improvements, Internal)
    - Specific file/module references from your CodeScope analysis
    - Keep it concise but informative
+7. Write a CHANGELOG.md entry following Keep a Changelog format. The entry should:
+   - Start with "## [X.Y.Z] - YYYY-MM-DD" using today's date
+   - Group changes under ### Added, ### Changed, ### Fixed, ### Removed as appropriate
+   - Be concise bullet points (one line per change)
+   - Only include sections that have changes
 
 After your analysis, your FINAL line of output must be EXACTLY one JSON object (no markdown fencing, no text after):
-{"bump":"patch","reason":"one sentence explanation","commitMessage":"release: vX.Y.Z \u2014 summary","releaseBody":"## What's Changed\\n\\n### Fixes\\n- ..."}`;
+{"bump":"patch","reason":"one sentence explanation","commitMessage":"release: vX.Y.Z \u2014 summary","releaseBody":"## What's Changed\\n\\n### Fixes\\n- ...","changelogEntry":"## [X.Y.Z] - YYYY-MM-DD\\n\\n### Fixed\\n- ..."}`;
 }
 
 /**
@@ -60,9 +65,12 @@ After your analysis, your FINAL line of output must be EXACTLY one JSON object (
  * @returns {{ commitMessage: string, releaseBody: string, reason: string }}
  */
 function defaults(newTag) {
+  const version = newTag.replace(/^v/, "");
+  const date = new Date().toISOString().slice(0, 10);
   return {
     commitMessage: `release: ${newTag}`,
     releaseBody: "",
+    changelogEntry: `## [${version}] - ${date}\n\n### Changed\n- Release ${newTag}`,
     reason: "AI output incomplete, used defaults",
   };
 }
@@ -114,15 +122,16 @@ async function main() {
 
   const commitMessage = result?.commitMessage || fallback.commitMessage;
   const releaseBody = result?.releaseBody || fallback.releaseBody;
+  const changelogEntry = result?.changelogEntry || fallback.changelogEntry;
   const reason = result?.reason || fallback.reason;
 
-  finalize(bump, newTag, commitMessage, releaseBody, reason);
+  finalize(bump, newTag, commitMessage, releaseBody, changelogEntry, reason);
 }
 
 /**
  * Write all outputs and log the result.
  */
-function finalize(bump, newTag, commitMessage, releaseBody, reason) {
+function finalize(bump, newTag, commitMessage, releaseBody, changelogEntry, reason) {
   setOutput("new_tag", newTag);
   setOutput("skip", "false");
   setOutput("bump", bump);
@@ -132,6 +141,7 @@ function finalize(bump, newTag, commitMessage, releaseBody, reason) {
     newTag,
     commitMessage,
     releaseBody,
+    changelogEntry,
     reason,
   });
 
@@ -143,14 +153,16 @@ main().catch((err) => {
   // Don't fail the workflow — write patch defaults
   const version = parseTag(process.argv[2] || "v0.0.0");
   const newTag = applyBump(version, "patch");
+  const fallback = defaults(newTag);
   setOutput("new_tag", newTag);
   setOutput("skip", "false");
   setOutput("bump", "patch");
   writeReleaseOutput(OUTPUT_FILE, {
     bump: "patch",
     newTag,
-    commitMessage: `release: ${newTag}`,
+    commitMessage: fallback.commitMessage,
     releaseBody: "",
+    changelogEntry: fallback.changelogEntry,
     reason: `Fatal error: ${err.message}`,
   });
 });
