@@ -22,8 +22,8 @@ export function codeScopeMcpConfig(cwd) {
  * Kept minimal to nudge the model toward semantic search as the primary
  * discovery tool. More tools = more decision paralysis = slower agents.
  *
- * - cs_semantic_search: intent-based discovery (PRIMARY — use first)
- * - cs_read_file: read specific files (supports mode=stubs for overviews)
+ * - cs_search: unified discovery (PRIMARY — semantic + keyword fusion)
+ * - cs_read: read specific files (supports mode=stubs for overviews)
  * - cs_grep: exact pattern matching (counting, specific strings)
  * - cs_status: verify indexed repo info
  *
@@ -31,21 +31,31 @@ export function codeScopeMcpConfig(cwd) {
  */
 export function codeScopeAllowedTools() {
   return [
-    "mcp__codescope__cs_semantic_search",
-    "mcp__codescope__cs_read_file",
+    "mcp__codescope__cs_search",
+    "mcp__codescope__cs_read",
     "mcp__codescope__cs_grep",
     "mcp__codescope__cs_status",
   ];
 }
 
 /**
- * Built-in tools to block for read-only agents (prevents sub-agent spawning, file writes, etc.).
+ * Built-in tools to block for CodeScope-only agents.
+ * MUST be comprehensive — with bypassPermissions, any tool not blocked is callable.
  * @returns {string[]}
  */
 export function codeScopeOnlyDisallowedTools() {
   return [
-    // Block sub-agent spawning
+    // Block sub-agent spawning and team tools
     "Task",
+    "TaskCreate",
+    "TaskUpdate",
+    "TaskGet",
+    "TaskList",
+    "TaskOutput",
+    "TaskStop",
+    "TeamCreate",
+    "TeamDelete",
+    "SendMessage",
     // Block shell execution
     "Bash",
     // Block file writes
@@ -55,11 +65,13 @@ export function codeScopeOnlyDisallowedTools() {
     // Block web access
     "WebSearch",
     "WebFetch",
-    // Block interactive tools
+    // Block interactive/mode tools
     "AskUserQuestion",
     "ExitPlanMode",
-    "TodoWrite",
-    // Block built-in read tools — force use of CodeScope MCP tools instead
+    "EnterPlanMode",
+    "EnterWorktree",
+    "Skill",
+    // Block built-in read tools — force use of CodeScope MCP tools
     "Read",
     "Glob",
     "Grep",

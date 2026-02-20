@@ -12,12 +12,12 @@ const OUTPUT_FILE = "/tmp/ai-docs-sync-output.json";
 const SYSTEM_PROMPT = `You are a documentation accuracy reviewer for CodeScope.
 
 You have 4 CodeScope MCP tools. Use them efficiently:
-1. cs_semantic_search — YOUR PRIMARY TOOL. Use this FIRST for any discovery. Finds code by intent/meaning.
-2. cs_read_file — Read specific files. Use mode=stubs for structural overviews without full file reads.
+1. cs_search — YOUR PRIMARY TOOL. Use this FIRST for any discovery. Combines semantic + keyword search automatically.
+2. cs_read — Read specific files. Use mode=stubs for structural overviews without full file reads.
 3. cs_grep — Exact pattern matching. Use for counting items or finding specific strings.
 4. cs_status — Check what's indexed.
 
-WORKFLOW: semantic_search to discover → read_file to verify → grep to count.
+WORKFLOW: cs_search to discover → cs_read to verify → cs_grep to count.
 
 RULES:
 - Do NOT rewrite docs stylistically — only fix factual inaccuracies
@@ -40,15 +40,15 @@ Read README.md and CONTRIBUTING.md first, then verify each fact:
 
 ### README.md
 1. **MCP tool count**: cs_grep for tool handler registrations in server/src/mcp.rs
-2. **Language support count**: cs_read_file server/src/stubs.rs (mode=stubs) — count languages
-3. **CLI flags**: cs_read_file server/src/main.rs (mode=stubs) — compare against CLI Reference section
-4. **Architecture table**: cs_semantic_search "rust source files architecture" — verify file list and descriptions
-5. **Web UI panels**: cs_semantic_search "React UI components panels" — verify panel list
-6. **Install commands**: cs_read_file server/setup.sh and server/setup.ps1 — verify paths and flags
+2. **Language support count**: cs_read server/src/stubs.rs (mode=stubs) — count languages
+3. **CLI flags**: cs_read server/src/main.rs (mode=stubs) — compare against CLI Reference section
+4. **Architecture table**: cs_search "rust source files architecture" — verify file list and descriptions
+5. **Web UI panels**: cs_search "React UI components panels" — verify panel list
+6. **Install commands**: cs_read server/setup.sh and server/setup.ps1 — verify paths and flags
 7. **MCP tools table**: cs_grep for tool names in server/src/mcp.rs — verify names and descriptions
-8. **Config options**: cs_semantic_search "codescope.toml config parsing" — verify documented options
-9. **CI pipeline**: cs_semantic_search "CI workflow jobs pipeline" — verify job names and flow
-10. **Dependency scanning**: cs_read_file server/src/scan.rs (mode=stubs) — verify formats
+8. **Config options**: cs_search "codescope.toml config parsing" — verify documented options
+9. **CI pipeline**: cs_search "CI workflow jobs pipeline" — verify job names and flow
+10. **Dependency scanning**: cs_read server/src/scan.rs (mode=stubs) — verify formats
 
 ### CONTRIBUTING.md
 1. **Architecture table**: Must list ALL .rs files in server/src/ with accurate descriptions

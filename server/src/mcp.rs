@@ -62,47 +62,33 @@ fn repo_path(repo: &RepoState, path: &str, multi: bool) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Tool definitions
+// Tool definitions (consolidated: 9 tools)
 // ---------------------------------------------------------------------------
 
 fn tool_definitions() -> serde_json::Value {
-    #[allow(unused_mut)]
-    let mut tools = serde_json::json!([
+    serde_json::json!([
         {
-            "name": "cs_read_file",
-            "description": "Read a source file.\n\nModes:\n- stubs (recommended first): structural outline with class/function signatures, no bodies. Use to understand file structure.\n- full: complete content. For large files, use start_line/end_line to read specific sections.\n\nWorkflow: cs_grep -> find line number -> cs_read_file with start_line/end_line for details.",
+            "name": "cs_search",
+            "description": "YOUR PRIMARY DISCOVERY TOOL. Combined search: fuzzy filename + content grep + semantic search (when available) in one call. Returns a unified ranked list. Use this first for discovering files and modules.\n\nReturns files ranked by combined relevance. When semantic search is available, results are automatically fused with keyword matches for better accuracy. Use fileLimit/moduleLimit to control result counts.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "path": { "type": "string", "description": "Relative path from project root" },
-                    "mode": { "type": "string", "enum": ["full", "stubs"], "description": "full = complete file, stubs = structural outline only. Default: full" },
-                    "start_line": { "type": "integer", "description": "First line to return (1-based). Only applies to mode='full'." },
-                    "end_line": { "type": "integer", "description": "Last line to return (1-based, inclusive). Only applies to mode='full'." },
-                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
+                    "query": { "type": "string", "description": "Search terms (e.g. 'VolumetricCloud', 'config parser', 'resource cleanup')" },
+                    "match_mode": { "type": "string", "enum": ["all", "any", "exact", "regex"], "description": "How to match multi-word queries. 'all' (default): line must contain ALL terms. 'any': line contains ANY term (OR). 'exact': treat query as literal phrase. 'regex': raw regex pattern." },
+                    "ext": { "type": "string", "description": "Comma-separated extensions to filter (e.g. 'h,cpp' or 'rs,ts')" },
+                    "path": { "type": "string", "description": "Path prefix to filter files (e.g. 'server/src' or 'src/components')" },
+                    "category": { "type": "string", "description": "Module category prefix to filter" },
+                    "limit": { "type": "integer", "description": "Max file results (default: 20)" },
+                    "fileLimit": { "type": "integer", "description": "Max file results (default: 30, alias for limit)" },
+                    "moduleLimit": { "type": "integer", "description": "Max module results (default: 5)" },
+                    "repo": { "type": "string", "description": "Repository name (searches all repos if omitted)" }
                 },
-                "required": ["path"]
-            }
-        },
-        {
-            "name": "cs_read_files",
-            "description": "Batch read multiple source files (max 50). Use mode='stubs' to read many files efficiently. For targeted reading of specific sections, use cs_read_file with start_line/end_line instead.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "paths": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Array of relative paths from project root"
-                    },
-                    "mode": { "type": "string", "enum": ["full", "stubs"], "description": "full = complete files, stubs = structural outlines. Default: full" },
-                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
-                },
-                "required": ["paths"]
+                "required": ["query"]
             }
         },
         {
             "name": "cs_grep",
-            "description": "Search source file contents (case-insensitive). Default match_mode='all' requires ALL terms present in a line. Use 'any' for OR, 'exact' for literal phrases, 'regex' for patterns.\n\nTips: Filter with ext='rs,go', path='server/src' prefix, or category. Follow up with cs_read_file for full context.",
+            "description": "Search source file contents (case-insensitive). Default match_mode='all' requires ALL terms present in a line. Use 'any' for OR, 'exact' for literal phrases, 'regex' for patterns.\n\nTips: Filter with ext='rs,go', path='server/src' prefix, or category. Follow up with cs_read for full context.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -121,95 +107,78 @@ fn tool_definitions() -> serde_json::Value {
             }
         },
         {
-            "name": "cs_list_modules",
-            "description": "List modules/categories with file counts. Use to discover available modules before drilling into specific ones.",
+            "name": "cs_read",
+            "description": "Read source files. Use 'path' for a single file, 'paths' for batch reads.\n\nModes:\n- stubs (recommended first): structural outline with class/function signatures, no bodies.\n- full: complete content. For large files, use start_line/end_line.\n\nWith 'paths' + 'budget': budget-aware batch read with importance-weighted allocation.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "prefix": { "type": "string", "description": "Filter modules by prefix (e.g. 'Runtime' or 'Runtime > Engine')" },
-                    "limit": { "type": "integer", "description": "Max modules to return. Default: 100" },
+                    "path": { "type": "string", "description": "Relative path from project root (single file)" },
+                    "paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Array of relative paths (batch read, max 50)"
+                    },
+                    "mode": { "type": "string", "enum": ["full", "stubs"], "description": "full = complete file, stubs = structural outline only. Default: full" },
+                    "start_line": { "type": "integer", "description": "First line to return (1-based). Single file + mode='full' only." },
+                    "end_line": { "type": "integer", "description": "Last line to return (1-based, inclusive). Single file + mode='full' only." },
+                    "budget": { "type": "integer", "description": "Max token budget for batch reads. Triggers smart compression. Default: 50000" },
+                    "ordering": { "type": "string", "enum": ["importance", "attention"], "description": "Output ordering for budget mode. 'importance' (default): descending by relevance. 'attention': primacy/recency optimized." },
+                    "include_seen": { "type": "boolean", "description": "If true, don't deprioritize previously-read files in budget mode. Default: false" },
                     "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
                 }
             }
         },
         {
-            "name": "cs_get_module_files",
-            "description": "Get all files in a specific module/category. Use the exact module name from cs_list_modules.",
+            "name": "cs_modules",
+            "description": "Explore module/category structure. Actions:\n- list (default): list modules with file counts\n- files: get all files in a specific module\n- deps: get public/private dependencies for a module",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "module": { "type": "string", "description": "Module category path (e.g. 'Runtime > Renderer > Nanite')" },
+                    "action": { "type": "string", "enum": ["list", "files", "deps"], "description": "What to do. Default: list" },
+                    "module": { "type": "string", "description": "Module name (required for 'files' and 'deps' actions)" },
+                    "prefix": { "type": "string", "description": "Filter modules by prefix (for 'list' action)" },
+                    "limit": { "type": "integer", "description": "Max modules to return (for 'list' action). Default: 100" },
                     "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
-                },
-                "required": ["module"]
+                }
             }
         },
         {
-            "name": "cs_get_deps",
-            "description": "Get public/private dependencies for a module.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "module": { "type": "string", "description": "Module name (e.g. 'Renderer', 'Core', 'my-library')" },
-                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
-                },
-                "required": ["module"]
-            }
-        },
-        {
-            "name": "cs_read_context",
-            "description": "Budget-aware batch read. Reads multiple files, compresses to fit token budget via importance-weighted allocation with block-level pruning (full stubs -> pruned -> manifest). Use instead of multiple cs_read_file calls when reading 3+ related files.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "paths": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Array of relative paths from project root"
-                    },
-                    "budget": { "type": "integer", "description": "Max token budget. Default: 50000" },
-                    "ordering": { "type": "string", "enum": ["importance", "attention"], "description": "Output ordering. 'importance' (default): descending by relevance. 'attention': primacy/recency optimized — high-importance at start and end, medium in middle, exploiting LLM attention patterns." },
-                    "include_seen": { "type": "boolean", "description": "If true, don't deprioritize files already read in this session. Default: false (previously-read files get lower priority to maximize new information)." },
-                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
-                },
-                "required": ["paths"]
-            }
-        },
-        {
-            "name": "cs_find_imports",
-            "description": "Find import/include relationships for a file. Shows what a file imports and/or what files import it. Use to explore dependency chains and discover related files.",
+            "name": "cs_imports",
+            "description": "Find import/include relationships for a file. Shows what a file imports and/or what imports it.\n\nSet transitive=true for impact analysis: finds everything that depends on the file (directly or transitively) via BFS over the import graph.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Relative path from project root" },
                     "direction": { "type": "string", "enum": ["imports", "imported_by", "both"], "description": "Which direction to query. Default: both" },
+                    "transitive": { "type": "boolean", "description": "If true, perform full impact analysis (BFS traversal). Default: false" },
+                    "max_depth": { "type": "integer", "description": "Max traversal depth for impact analysis (default: 5)" },
+                    "limit": { "type": "integer", "description": "Max files to show in impact analysis (default: 50)" },
                     "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
                 },
                 "required": ["path"]
             }
         },
         {
-            "name": "cs_find",
-            "description": "Combined search: fuzzy filename + content grep in one call. Returns a unified ranked list. Use this as your primary search tool for discovering files and modules.\n\nReturns files ranked by combined name relevance and content match density. Use fileLimit/moduleLimit to control result counts.",
+            "name": "cs_git",
+            "description": "Git history analysis. Actions:\n- blame: who last modified each line of a file\n- history: recent commits that touched a file\n- changed: files changed since a commit/branch/tag\n- hotspots: most frequently changed files (churn ranking)",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "description": "Search terms (e.g. 'VolumetricCloud', 'config parser')" },
-                    "match_mode": { "type": "string", "enum": ["all", "any", "exact", "regex"], "description": "How to match multi-word queries. 'all' (default): line must contain ALL terms. 'any': line contains ANY term (OR). 'exact': treat query as literal phrase. 'regex': raw regex pattern." },
-                    "ext": { "type": "string", "description": "Comma-separated extensions to filter (e.g. 'h,cpp' or 'rs,ts')" },
-                    "path": { "type": "string", "description": "Path prefix to filter files (e.g. 'server/src' or 'src/components')" },
-                    "category": { "type": "string", "description": "Module category prefix to filter" },
-                    "fileLimit": { "type": "integer", "description": "Max file results (default: 30)" },
-                    "moduleLimit": { "type": "integer", "description": "Max module results (default: 5)" },
-                    "repo": { "type": "string", "description": "Repository name (searches all repos if omitted)" }
+                    "action": { "type": "string", "enum": ["blame", "history", "changed", "hotspots"], "description": "What to do (required)" },
+                    "path": { "type": "string", "description": "File path (required for blame/history)" },
+                    "since": { "type": "string", "description": "Commit/branch/tag to diff against (required for 'changed')" },
+                    "start_line": { "type": "integer", "description": "First line for blame (1-based, optional)" },
+                    "end_line": { "type": "integer", "description": "Last line for blame (1-based, optional)" },
+                    "limit": { "type": "integer", "description": "Max results (default: 10 for history, 20 for hotspots)" },
+                    "days": { "type": "integer", "description": "Look back N days for hotspots (default: 90)" },
+                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
                 },
-                "required": ["query"]
+                "required": ["action"]
             }
         },
-        // ---- New tools ----
         {
             "name": "cs_status",
-            "description": "Show indexed repositories, file counts, language breakdown, and scan time.",
+            "description": "Show indexed repositories, file counts, language breakdown, scan time, and session info (files read, tokens served).",
             "inputSchema": {
                 "type": "object",
                 "properties": {},
@@ -237,103 +206,68 @@ fn tool_definitions() -> serde_json::Value {
                 },
                 "required": ["name", "root"]
             }
-        },
-        {
-            "name": "cs_blame",
-            "description": "Git blame for a file. Shows who last modified each line, when, and in which commit. Optionally scope to a line range.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Relative path from project root" },
-                    "start_line": { "type": "integer", "description": "First line (1-based, optional)" },
-                    "end_line": { "type": "integer", "description": "Last line (1-based, inclusive, optional)" },
-                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
-                },
-                "required": ["path"]
-            }
-        },
-        {
-            "name": "cs_file_history",
-            "description": "Recent commits that touched a specific file. Shows commit hash, author, date, message, and which other files were changed in the same commit.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "Relative path from project root" },
-                    "limit": { "type": "integer", "description": "Max commits to return (default: 10)" },
-                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
-                },
-                "required": ["path"]
-            }
-        },
-        {
-            "name": "cs_changed_since",
-            "description": "Files changed since a commit, branch, or tag. Use to see what changed between two points in history. Supports commit hashes (full or short), branch names (main, origin/main), and tags.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "since": { "type": "string", "description": "Commit hash, branch name, or tag to diff against HEAD" },
-                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
-                },
-                "required": ["since"]
-            }
-        },
-        {
-            "name": "cs_hot_files",
-            "description": "Most frequently changed files (churn ranking). Identifies code hotspots by counting how many commits touched each file within a time window. High-churn files often indicate areas needing refactoring or close review.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "limit": { "type": "integer", "description": "Max files to return (default: 20)" },
-                    "days": { "type": "integer", "description": "Look back N days (default: 90)" },
-                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
-                }
-            }
-        },
-        {
-            "name": "cs_session_info",
-            "description": "Show what files have been read in this MCP session. Useful for understanding context consumption and avoiding redundant reads.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": false
-            }
-        },
-        {
-            "name": "cs_impact",
-            "description": "Impact analysis: given a file, find everything that depends on it (directly or transitively). Shows the full dependency chain with depth levels. Use to answer 'what breaks if I change this?'",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "path": { "type": "string", "description": "File to analyze impact for" },
-                    "max_depth": { "type": "integer", "description": "Max traversal depth (default: 5)" },
-                    "limit": { "type": "integer", "description": "Max files to show (default: 50). Remaining are counted but not listed." },
-                    "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
-                },
-                "required": ["path"]
-            }
         }
-    ]);
+    ])
+}
 
-    #[cfg(feature = "semantic")]
-    {
-        if let Some(arr) = tools.as_array_mut() {
-            arr.push(serde_json::json!({
-                "name": "cs_semantic_search",
-                "description": "Search code by intent using semantic embeddings. Finds conceptually similar code even without keyword overlap. Requires --semantic flag at startup.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": { "type": "string", "description": "Natural language description of what you're looking for" },
-                        "limit": { "type": "integer", "description": "Max results (default: 10)" },
-                        "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
-                    },
-                    "required": ["query"]
-                }
-            }));
+// ---------------------------------------------------------------------------
+// Legacy tool name translation (backward compatibility)
+// ---------------------------------------------------------------------------
+
+fn translate_legacy_tool<'a>(
+    name: &'a str,
+    args: &serde_json::Value,
+) -> (&'a str, serde_json::Value) {
+    match name {
+        "cs_find" | "cs_semantic_search" => ("cs_search", args.clone()),
+        "cs_read_file" => ("cs_read", args.clone()),
+        "cs_read_files" => ("cs_read", args.clone()),
+        "cs_read_context" => ("cs_read", args.clone()),
+        "cs_list_modules" => {
+            let mut a = args.clone();
+            a.as_object_mut().map(|m| m.insert("action".to_string(), serde_json::json!("list")));
+            ("cs_modules", a)
         }
+        "cs_get_module_files" => {
+            let mut a = args.clone();
+            a.as_object_mut().map(|m| m.insert("action".to_string(), serde_json::json!("files")));
+            ("cs_modules", a)
+        }
+        "cs_get_deps" => {
+            let mut a = args.clone();
+            a.as_object_mut().map(|m| m.insert("action".to_string(), serde_json::json!("deps")));
+            ("cs_modules", a)
+        }
+        "cs_find_imports" => ("cs_imports", args.clone()),
+        "cs_impact" => {
+            let mut a = args.clone();
+            a.as_object_mut().map(|m| m.insert("transitive".to_string(), serde_json::json!(true)));
+            ("cs_imports", a)
+        }
+        "cs_blame" => {
+            let mut a = args.clone();
+            a.as_object_mut().map(|m| m.insert("action".to_string(), serde_json::json!("blame")));
+            ("cs_git", a)
+        }
+        "cs_file_history" => {
+            let mut a = args.clone();
+            a.as_object_mut().map(|m| m.insert("action".to_string(), serde_json::json!("history")));
+            ("cs_git", a)
+        }
+        "cs_changed_since" => {
+            let mut a = args.clone();
+            a.as_object_mut().map(|m| m.insert("action".to_string(), serde_json::json!("changed")));
+            ("cs_git", a)
+        }
+        "cs_hot_files" => {
+            let mut a = args.clone();
+            a.as_object_mut()
+                .map(|m| m.insert("action".to_string(), serde_json::json!("hotspots")));
+            ("cs_git", a)
+        }
+        "cs_session_info" => ("cs_status", args.clone()),
+        _ => (name, args.clone()),
     }
-
-    tools
 }
 
 // ---------------------------------------------------------------------------
@@ -342,116 +276,230 @@ fn tool_definitions() -> serde_json::Value {
 
 fn handle_tool_call(
     state: &ServerState,
-    name: &str,
-    args: &serde_json::Value,
+    original_name: &str,
+    original_args: &serde_json::Value,
     session: &mut Option<SessionState>,
 ) -> (String, bool) {
+    let (name, args) = translate_legacy_tool(original_name, original_args);
     match name {
-        "cs_read_file" => {
-            let repo = match resolve_repo(state, args) {
-                Ok(r) => r,
-                Err(e) => return (format!("Error: {e}"), true),
-            };
-            let path = args["path"].as_str().unwrap_or("");
-            let mode = args["mode"].as_str().unwrap_or("full");
-            let start_line = args["start_line"].as_u64().map(|n| n.max(1) as usize);
-            let end_line = args["end_line"].as_u64().map(|n| n as usize);
-            match validate_path(&repo.root, path) {
-                Err(e) => (format!("Error: {e}"), true),
-                Ok(full_path) => match fs::read_to_string(&full_path) {
-                    Err(_) => ("Error: Could not read file".to_string(), true),
-                    Ok(raw) => {
-                        // Record read in session
-                        if let Some(ref mut s) = session {
-                            let approx_tokens = raw.len() / 4;
-                            s.record_read(path, approx_tokens);
-                        }
-                        if mode == "stubs" {
-                            let ext = path.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
-                            let content = extract_stubs(&raw, ext);
-                            let lines = content.lines().count();
-                            (format!("# {path}\n({lines} lines, stubs)\n\n{content}"), false)
-                        } else if start_line.is_some() || end_line.is_some() {
-                            let all_lines: Vec<&str> = raw.lines().collect();
-                            let total = all_lines.len();
-                            let s = start_line.unwrap_or(1).min(total).max(1);
-                            let e = end_line.unwrap_or(total).min(total);
-                            if s > e {
-                                return (format!("Error: start_line ({s}) > end_line ({e})"), true);
-                            }
-                            let width = format!("{}", e).len();
-                            let mut content = String::new();
-                            for i in s..=e {
-                                content.push_str(&format!(
-                                    "{:>w$}: {}\n",
-                                    i,
-                                    all_lines[i - 1],
-                                    w = width
-                                ));
-                            }
-                            (format!("# {path} (lines {s}-{e} of {total})\n\n{content}"), false)
-                        } else {
-                            let content = if raw.len() > MAX_FILE_READ {
-                                let mut end = MAX_FILE_READ;
-                                while !raw.is_char_boundary(end) && end > 0 {
-                                    end -= 1;
-                                }
-                                format!("{}\n\n[truncated at 512KB]", &raw[..end])
-                            } else {
-                                raw
-                            };
-                            let lines = content.lines().count();
-                            (format!("# {path}\n({lines} lines)\n\n{content}"), false)
-                        }
-                    }
-                },
-            }
-        }
-        "cs_read_files" => {
-            let repo = match resolve_repo(state, args) {
-                Ok(r) => r,
-                Err(e) => return (format!("Error: {e}"), true),
-            };
-            let paths: Vec<&str> = args["paths"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
-                .unwrap_or_default();
-            let mode = args["mode"].as_str().unwrap_or("full");
-
-            if paths.len() > 50 {
-                return ("Error: Max 50 files per call".to_string(), true);
-            }
-
-            let mut out = String::new();
-            for p in &paths {
-                match validate_path(&repo.root, p) {
-                    Err(e) => {
-                        out.push_str(&format!("# {p}\nError: {e}\n\n"));
-                    }
+        // =================================================================
+        // cs_read — unified file reading
+        // =================================================================
+        "cs_read" => {
+            // Dispatch based on params:
+            // - path (string) → single file read
+            // - paths (array) + budget → budget-aware batch read
+            // - paths (array) without budget → simple batch read
+            if let Some(path_val) = args.get("path").and_then(|v| v.as_str()) {
+                // Single file read (was cs_read_file)
+                let repo = match resolve_repo(state, &args) {
+                    Ok(r) => r,
+                    Err(e) => return (format!("Error: {e}"), true),
+                };
+                let path = path_val;
+                let mode = args["mode"].as_str().unwrap_or("full");
+                let start_line = args["start_line"].as_u64().map(|n| n.max(1) as usize);
+                let end_line = args["end_line"].as_u64().map(|n| n as usize);
+                match validate_path(&repo.root, path) {
+                    Err(e) => (format!("Error: {e}"), true),
                     Ok(full_path) => match fs::read_to_string(&full_path) {
-                        Err(_) => {
-                            out.push_str(&format!("# {p}\nError: Could not read file\n\n"));
-                        }
+                        Err(_) => ("Error: Could not read file".to_string(), true),
                         Ok(raw) => {
                             if let Some(ref mut s) = session {
                                 let approx_tokens = raw.len() / 4;
-                                s.record_read(p, approx_tokens);
+                                s.record_read(path, approx_tokens);
                             }
-                            let content = if mode == "stubs" {
-                                let ext = p.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
-                                extract_stubs(&raw, ext)
+                            if mode == "stubs" {
+                                let ext = path.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+                                let content = extract_stubs(&raw, ext);
+                                let lines = content.lines().count();
+                                (format!("# {path}\n({lines} lines, stubs)\n\n{content}"), false)
+                            } else if start_line.is_some() || end_line.is_some() {
+                                let all_lines: Vec<&str> = raw.lines().collect();
+                                let total = all_lines.len();
+                                let s = start_line.unwrap_or(1).min(total).max(1);
+                                let e = end_line.unwrap_or(total).min(total);
+                                if s > e {
+                                    return (
+                                        format!("Error: start_line ({s}) > end_line ({e})"),
+                                        true,
+                                    );
+                                }
+                                let width = format!("{}", e).len();
+                                let mut content = String::new();
+                                for i in s..=e {
+                                    content.push_str(&format!(
+                                        "{:>w$}: {}\n",
+                                        i,
+                                        all_lines[i - 1],
+                                        w = width
+                                    ));
+                                }
+                                (format!("# {path} (lines {s}-{e} of {total})\n\n{content}"), false)
                             } else {
-                                raw
-                            };
-                            out.push_str(&format!("# {p}\n{content}\n\n"));
+                                let content = if raw.len() > MAX_FILE_READ {
+                                    let mut end = MAX_FILE_READ;
+                                    while !raw.is_char_boundary(end) && end > 0 {
+                                        end -= 1;
+                                    }
+                                    format!("{}\n\n[truncated at 512KB]", &raw[..end])
+                                } else {
+                                    raw
+                                };
+                                let lines = content.lines().count();
+                                (format!("# {path}\n({lines} lines)\n\n{content}"), false)
+                            }
                         }
                     },
                 }
+            } else if let Some(paths_arr) = args.get("paths").and_then(|v| v.as_array()) {
+                // Batch read
+                let has_budget = args.get("budget").is_some();
+                if has_budget {
+                    // Budget-aware batch read (was cs_read_context)
+                    let repo = match resolve_repo(state, &args) {
+                        Ok(r) => r,
+                        Err(e) => return (format!("Error: {e}"), true),
+                    };
+                    let paths: Vec<String> = paths_arr
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect();
+                    let budget =
+                        args["budget"].as_u64().unwrap_or(DEFAULT_TOKEN_BUDGET as u64) as usize;
+                    let unit = match args["unit"].as_str() {
+                        Some("chars") => BudgetUnit::Chars,
+                        _ => BudgetUnit::Tokens,
+                    };
+
+                    if paths.is_empty() {
+                        return ("Error: paths array is empty".to_string(), true);
+                    }
+
+                    let query = args["query"].as_str();
+                    let ordering = args["ordering"].as_str();
+                    let include_seen = args["include_seen"].as_bool().unwrap_or(false);
+                    let seen =
+                        if include_seen { None } else { session.as_ref().map(|s| s.seen_paths()) };
+                    let resp = allocate_budget(
+                        &repo.root,
+                        &paths,
+                        &repo.all_files,
+                        budget,
+                        &unit,
+                        query,
+                        ordering,
+                        seen.as_ref(),
+                        &repo.deps,
+                        &repo.stub_cache,
+                        &*state.tokenizer,
+                        &repo.config,
+                    );
+
+                    if let Some(ref mut s) = session {
+                        for (path, entry) in &resp.files {
+                            if !path.starts_with('_') {
+                                s.record_read(path, entry.tokens);
+                            }
+                        }
+                    }
+
+                    let tier_names = |t: u8| match t {
+                        1 => "full stubs",
+                        2 => "pruned",
+                        3 => "TOC",
+                        4 => "manifest",
+                        _ => "error",
+                    };
+
+                    let mut out = format!(
+                        "Context: {} files, ~{} tokens (budget: {})\n",
+                        resp.summary.total_files, resp.summary.total_tokens, resp.summary.budget
+                    );
+
+                    let mut tier_parts: Vec<String> = Vec::new();
+                    for tier in 1..=4u8 {
+                        let key = tier.to_string();
+                        if let Some(&count) = resp.summary.tier_counts.get(&key) {
+                            if count > 0 {
+                                tier_parts.push(format!("{} {}", count, tier_names(tier)));
+                            }
+                        }
+                    }
+                    if !tier_parts.is_empty() {
+                        out.push_str(&format!("Tiers: {}\n\n", tier_parts.join(", ")));
+                    }
+
+                    let mut sorted_paths: Vec<&String> = resp.files.keys().collect();
+                    sorted_paths.sort();
+
+                    for path in sorted_paths {
+                        if let Some(entry) = resp.files.get(path) {
+                            if entry.tier == 0 {
+                                out.push_str(&format!("# {path}\n{}\n\n", entry.content));
+                            } else {
+                                let tier_label = if entry.tier > 1 {
+                                    format!(" [{}]", tier_names(entry.tier))
+                                } else {
+                                    String::new()
+                                };
+                                out.push_str(&format!("# {path}{tier_label}\n{}\n", entry.content));
+                            }
+                        }
+                    }
+
+                    (out, false)
+                } else {
+                    // Simple batch read (was cs_read_files)
+                    let repo = match resolve_repo(state, &args) {
+                        Ok(r) => r,
+                        Err(e) => return (format!("Error: {e}"), true),
+                    };
+                    let paths: Vec<&str> = paths_arr.iter().filter_map(|v| v.as_str()).collect();
+                    let mode = args["mode"].as_str().unwrap_or("full");
+
+                    if paths.len() > 50 {
+                        return ("Error: Max 50 files per call".to_string(), true);
+                    }
+
+                    let mut out = String::new();
+                    for p in &paths {
+                        match validate_path(&repo.root, p) {
+                            Err(e) => {
+                                out.push_str(&format!("# {p}\nError: {e}\n\n"));
+                            }
+                            Ok(full_path) => match fs::read_to_string(&full_path) {
+                                Err(_) => {
+                                    out.push_str(&format!("# {p}\nError: Could not read file\n\n"));
+                                }
+                                Ok(raw) => {
+                                    if let Some(ref mut s) = session {
+                                        let approx_tokens = raw.len() / 4;
+                                        s.record_read(p, approx_tokens);
+                                    }
+                                    let content = if mode == "stubs" {
+                                        let ext = p.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+                                        extract_stubs(&raw, ext)
+                                    } else {
+                                        raw
+                                    };
+                                    out.push_str(&format!("# {p}\n{content}\n\n"));
+                                }
+                            },
+                        }
+                    }
+                    (out, false)
+                }
+            } else {
+                ("Error: Either 'path' (string) or 'paths' (array) is required".to_string(), true)
             }
-            (out, false)
         }
+
+        // =================================================================
+        // cs_grep — exact pattern matching (unchanged)
+        // =================================================================
         "cs_grep" => {
-            let repos = resolve_repos_for_search(state, args);
+            let repos = resolve_repos_for_search(state, &args);
             if repos.is_empty() {
                 return ("Error: No matching repos found".to_string(), true);
             }
@@ -473,19 +521,14 @@ fn handle_tool_call(
             let match_mode = args["match_mode"].as_str().unwrap_or("all");
             let output_mode = args["output"].as_str().unwrap_or("full");
 
-            // Build match pattern based on match_mode
             let terms: Vec<&str> = query.split_whitespace().collect();
             let terms_lower: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
-
-            // For "all" mode with multiple terms, we use OR pattern + post-filter
-            // (Rust regex crate does not support lookahead assertions)
             let require_all_terms = match_mode == "all" && terms.len() > 1;
 
             let pattern = match match_mode {
                 "exact" => RegexBuilder::new(&regex::escape(query)).case_insensitive(true).build(),
                 "regex" => RegexBuilder::new(query).case_insensitive(true).build(),
                 _ => {
-                    // "all" (multi-term), "any", or "all" (single-term) — use OR pattern
                     let pattern_str =
                         terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|");
                     RegexBuilder::new(&pattern_str).case_insensitive(true).build()
@@ -616,11 +659,9 @@ fn handle_tool_call(
                 file_hits.append(&mut par_hits);
             }
 
-            // Sort by relevance score descending
             file_hits
                 .sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 
-            // Format top-N results — limit caps number of FILES, not line matches
             let mut results = Vec::new();
             let mut total_matches: usize = 0;
 
@@ -714,279 +755,295 @@ fn handle_tool_call(
             );
             (format!("{header}{}", results.join("\n\n")), false)
         }
-        "cs_list_modules" => {
-            let repo = match resolve_repo(state, args) {
-                Ok(r) => r,
-                Err(e) => return (format!("Error: {e}"), true),
-            };
-            let limit = args["limit"].as_u64().unwrap_or(100).min(1000) as usize;
-            let prefix = args["prefix"].as_str();
 
-            let mut out = String::new();
-            let mut shown = 0usize;
-            let mut total = 0usize;
-            for (cat, files) in &repo.manifest {
-                if let Some(pfx) = prefix {
-                    if !cat.starts_with(pfx) {
+        // =================================================================
+        // cs_modules — list/files/deps
+        // =================================================================
+        "cs_modules" => {
+            let action = args["action"].as_str().unwrap_or("list");
+            match action {
+                "files" => {
+                    // Was cs_get_module_files
+                    let repo = match resolve_repo(state, &args) {
+                        Ok(r) => r,
+                        Err(e) => return (format!("Error: {e}"), true),
+                    };
+                    let module = args["module"].as_str().unwrap_or("");
+                    let prefix_dot = format!("{module} > ");
+                    let mut out = String::new();
+                    let mut count = 0;
+                    for (cat, files) in &repo.manifest {
+                        if cat != module && !cat.starts_with(&prefix_dot) {
+                            continue;
+                        }
+                        for f in files {
+                            out.push_str(&format!("{}  ({}, {} bytes)\n", f.path, f.desc, f.size));
+                            count += 1;
+                        }
+                    }
+                    if count == 0 {
+                        (format!("No files found for module '{module}'"), true)
+                    } else {
+                        (format!("{count} files in {module}\n\n{out}"), false)
+                    }
+                }
+                "deps" => {
+                    // Was cs_get_deps
+                    let repo = match resolve_repo(state, &args) {
+                        Ok(r) => r,
+                        Err(e) => return (format!("Error: {e}"), true),
+                    };
+                    let module = args["module"].as_str().unwrap_or("");
+                    match repo.deps.get(module) {
+                        None => (format!("No dependency info found for '{module}'"), true),
+                        Some(dep) => {
+                            let mut out =
+                                format!("Module: {module}\nCategory: {}\n\n", dep.category_path);
+                            if !dep.public.is_empty() {
+                                out.push_str("Public dependencies:\n");
+                                for d in &dep.public {
+                                    out.push_str(&format!("  - {d}\n"));
+                                }
+                            }
+                            if !dep.private.is_empty() {
+                                out.push_str("Private dependencies:\n");
+                                for d in &dep.private {
+                                    out.push_str(&format!("  - {d}\n"));
+                                }
+                            }
+                            (out, false)
+                        }
+                    }
+                }
+                _ => {
+                    // "list" (default) — was cs_list_modules
+                    let repo = match resolve_repo(state, &args) {
+                        Ok(r) => r,
+                        Err(e) => return (format!("Error: {e}"), true),
+                    };
+                    let limit = args["limit"].as_u64().unwrap_or(100).min(1000) as usize;
+                    let prefix = args["prefix"].as_str();
+
+                    let mut out = String::new();
+                    let mut shown = 0usize;
+                    let mut total = 0usize;
+                    for (cat, files) in &repo.manifest {
+                        if let Some(pfx) = prefix {
+                            if !cat.starts_with(pfx) {
+                                continue;
+                            }
+                        }
+                        total += 1;
+                        if shown < limit {
+                            out.push_str(&format!("{cat}  ({} files)\n", files.len()));
+                            shown += 1;
+                        }
+                    }
+                    let truncated = if total > shown {
+                        format!("\n... and {} more (use prefix filter to narrow)", total - shown)
+                    } else {
+                        String::new()
+                    };
+                    (
+                        format!(
+                            "{total} modules{}\n\n{out}{truncated}",
+                            if prefix.is_some() { " matching" } else { " total" }
+                        ),
+                        false,
+                    )
+                }
+            }
+        }
+
+        // =================================================================
+        // cs_imports — imports + impact analysis
+        // =================================================================
+        "cs_imports" => {
+            let transitive = args["transitive"].as_bool().unwrap_or(false);
+            if transitive {
+                // Impact analysis (was cs_impact)
+                let repo = match resolve_repo(state, &args) {
+                    Ok(r) => r,
+                    Err(e) => return (format!("Error: {e}"), true),
+                };
+                let path = args["path"].as_str().unwrap_or("");
+                let max_depth = args["max_depth"].as_u64().unwrap_or(5).min(20) as usize;
+                let file_limit = args["limit"].as_u64().unwrap_or(50).min(500) as usize;
+
+                if path.is_empty() {
+                    return ("Error: path is required".to_string(), true);
+                }
+
+                let mut visited: HashSet<String> = HashSet::new();
+                let mut queue: VecDeque<(String, usize)> = VecDeque::new();
+                let mut by_depth: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+
+                visited.insert(path.to_string());
+                queue.push_back((path.to_string(), 0));
+
+                while let Some((current, depth)) = queue.pop_front() {
+                    if depth > 0 {
+                        by_depth.entry(depth).or_default().push(current.clone());
+                    }
+                    if depth >= max_depth {
                         continue;
                     }
-                }
-                total += 1;
-                if shown < limit {
-                    out.push_str(&format!("{cat}  ({} files)\n", files.len()));
-                    shown += 1;
-                }
-            }
-            let truncated = if total > shown {
-                format!("\n... and {} more (use prefix filter to narrow)", total - shown)
-            } else {
-                String::new()
-            };
-            (
-                format!(
-                    "{total} modules{}\n\n{out}{truncated}",
-                    if prefix.is_some() { " matching" } else { " total" }
-                ),
-                false,
-            )
-        }
-        "cs_get_module_files" => {
-            let repo = match resolve_repo(state, args) {
-                Ok(r) => r,
-                Err(e) => return (format!("Error: {e}"), true),
-            };
-            let module = args["module"].as_str().unwrap_or("");
-            let prefix_dot = format!("{module} > ");
-            let mut out = String::new();
-            let mut count = 0;
-            for (cat, files) in &repo.manifest {
-                if cat != module && !cat.starts_with(&prefix_dot) {
-                    continue;
-                }
-                for f in files {
-                    out.push_str(&format!("{}  ({}, {} bytes)\n", f.path, f.desc, f.size));
-                    count += 1;
-                }
-            }
-            if count == 0 {
-                (format!("No files found for module '{module}'"), true)
-            } else {
-                (format!("{count} files in {module}\n\n{out}"), false)
-            }
-        }
-        "cs_get_deps" => {
-            let repo = match resolve_repo(state, args) {
-                Ok(r) => r,
-                Err(e) => return (format!("Error: {e}"), true),
-            };
-            let module = args["module"].as_str().unwrap_or("");
-            match repo.deps.get(module) {
-                None => (format!("No dependency info found for '{module}'"), true),
-                Some(dep) => {
-                    let mut out = format!("Module: {module}\nCategory: {}\n\n", dep.category_path);
-                    if !dep.public.is_empty() {
-                        out.push_str("Public dependencies:\n");
-                        for d in &dep.public {
-                            out.push_str(&format!("  - {d}\n"));
+                    if let Some(dependents) = repo.import_graph.imported_by.get(&current) {
+                        for dep in dependents {
+                            if visited.insert(dep.clone()) {
+                                queue.push_back((dep.clone(), depth + 1));
+                            }
                         }
                     }
-                    if !dep.private.is_empty() {
-                        out.push_str("Private dependencies:\n");
-                        for d in &dep.private {
-                            out.push_str(&format!("  - {d}\n"));
+                    for edge in &state.cross_repo_edges {
+                        if edge.to_repo == repo.name && edge.to_file == current {
+                            let key = format!("[{}] {}", edge.from_repo, edge.from_file);
+                            if visited.insert(key.clone()) {
+                                by_depth.entry(depth + 1).or_default().push(key);
+                            }
                         }
                     }
-                    (out, false)
                 }
-            }
-        }
-        "cs_read_context" => {
-            let repo = match resolve_repo(state, args) {
-                Ok(r) => r,
-                Err(e) => return (format!("Error: {e}"), true),
-            };
-            let paths: Vec<String> = args["paths"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-                .unwrap_or_default();
-            let budget = args["budget"].as_u64().unwrap_or(DEFAULT_TOKEN_BUDGET as u64) as usize;
-            let unit = match args["unit"].as_str() {
-                Some("chars") => BudgetUnit::Chars,
-                _ => BudgetUnit::Tokens,
-            };
 
-            if paths.is_empty() {
-                return ("Error: paths array is empty".to_string(), true);
-            }
+                let total: usize = by_depth.values().map(|v| v.len()).sum();
+                if total == 0 {
+                    return (
+                        format!("No dependents found for '{path}'. This file is not imported by any other file."),
+                        false,
+                    );
+                }
 
-            let query = args["query"].as_str();
-            let ordering = args["ordering"].as_str();
-            let include_seen = args["include_seen"].as_bool().unwrap_or(false);
-            let seen = if include_seen { None } else { session.as_ref().map(|s| s.seen_paths()) };
-            let resp = allocate_budget(
-                &repo.root,
-                &paths,
-                &repo.all_files,
-                budget,
-                &unit,
-                query,
-                ordering,
-                seen.as_ref(),
-                &repo.deps,
-                &repo.stub_cache,
-                &*state.tokenizer,
-                &repo.config,
-            );
-
-            // Record reads in session
-            if let Some(ref mut s) = session {
-                for (path, entry) in &resp.files {
-                    if !path.starts_with('_') {
-                        s.record_read(path, entry.tokens);
+                let mut out = format!("Impact analysis for {path}\n\n");
+                let max_depth_found = *by_depth.keys().max().unwrap_or(&0);
+                let mut shown = 0usize;
+                for depth in 1..=max_depth_found {
+                    if let Some(files) = by_depth.get(&depth) {
+                        let label = if depth == 1 { "direct dependents" } else { "" };
+                        out.push_str(&format!(
+                            "Depth {}{}: {} file{}\n",
+                            depth,
+                            if label.is_empty() { String::new() } else { format!(" ({label})") },
+                            files.len(),
+                            if files.len() == 1 { "" } else { "s" }
+                        ));
+                        for f in files {
+                            if shown < file_limit {
+                                out.push_str(&format!("  {f}\n"));
+                                shown += 1;
+                            }
+                        }
+                        if shown >= file_limit && depth < max_depth_found {
+                            out.push_str(&format!("\n  ... output capped at {file_limit} files (use limit param to increase)\n"));
+                            break;
+                        }
+                        out.push('\n');
                     }
                 }
-            }
-
-            // Format as human-readable text for MCP
-            let tier_names = |t: u8| match t {
-                1 => "full stubs",
-                2 => "pruned",
-                3 => "TOC",
-                4 => "manifest",
-                _ => "error",
-            };
-
-            let mut out = format!(
-                "Context: {} files, ~{} tokens (budget: {})\n",
-                resp.summary.total_files, resp.summary.total_tokens, resp.summary.budget
-            );
-
-            // Tier breakdown
-            let mut tier_parts: Vec<String> = Vec::new();
-            for tier in 1..=4u8 {
-                let key = tier.to_string();
-                if let Some(&count) = resp.summary.tier_counts.get(&key) {
-                    if count > 0 {
-                        tier_parts.push(format!("{} {}", count, tier_names(tier)));
-                    }
-                }
-            }
-            if !tier_parts.is_empty() {
-                out.push_str(&format!("Tiers: {}\n\n", tier_parts.join(", ")));
-            }
-
-            // Sort paths for consistent output
-            let mut sorted_paths: Vec<&String> = resp.files.keys().collect();
-            sorted_paths.sort();
-
-            for path in sorted_paths {
-                if let Some(entry) = resp.files.get(path) {
-                    if entry.tier == 0 {
-                        out.push_str(&format!("# {path}\n{}\n\n", entry.content));
-                    } else {
-                        let tier_label = if entry.tier > 1 {
-                            format!(" [{}]", tier_names(entry.tier))
-                        } else {
-                            String::new()
-                        };
-                        out.push_str(&format!("# {path}{tier_label}\n{}\n", entry.content));
-                    }
-                }
-            }
-
-            (out, false)
-        }
-        "cs_find_imports" => {
-            let repo = match resolve_repo(state, args) {
-                Ok(r) => r,
-                Err(e) => return (format!("Error: {e}"), true),
-            };
-            let path = args["path"].as_str().unwrap_or("");
-            let direction = args["direction"].as_str().unwrap_or("both");
-
-            let imports: Vec<String> = if direction == "both" || direction == "imports" {
-                repo.import_graph.imports.get(path).cloned().unwrap_or_default()
-            } else {
-                vec![]
-            };
-            let imported_by: Vec<String> = if direction == "both" || direction == "imported_by" {
-                repo.import_graph.imported_by.get(path).cloned().unwrap_or_default()
-            } else {
-                vec![]
-            };
-
-            // Add cross-repo edges
-            let mut cross_imports = Vec::new();
-            let mut cross_imported_by = Vec::new();
-            for edge in &state.cross_repo_edges {
-                if edge.from_repo == repo.name
-                    && edge.from_file == path
-                    && (direction == "both" || direction == "imports")
-                {
-                    cross_imports.push(format!("[{}] {}", edge.to_repo, edge.to_file));
-                }
-                if edge.to_repo == repo.name
-                    && edge.to_file == path
-                    && (direction == "both" || direction == "imported_by")
-                {
-                    cross_imported_by.push(format!("[{}] {}", edge.from_repo, edge.from_file));
-                }
-            }
-
-            if imports.is_empty()
-                && imported_by.is_empty()
-                && cross_imports.is_empty()
-                && cross_imported_by.is_empty()
-            {
-                return (format!("No import relationships found for '{path}'"), false);
-            }
-
-            let mut out = format!("# {path}\n\n");
-            if !imports.is_empty() {
-                out.push_str(&format!("Imports ({} files):\n", imports.len()));
-                for inc in &imports {
-                    let desc = repo
-                        .all_files
-                        .iter()
-                        .find(|f| f.rel_path == *inc)
-                        .map(|f| f.desc.as_str())
-                        .unwrap_or("");
-                    out.push_str(&format!("  {inc}  ({desc})\n"));
-                }
-                out.push('\n');
-            }
-            if !cross_imports.is_empty() {
-                out.push_str(&format!("Cross-repo imports ({} files):\n", cross_imports.len()));
-                for inc in &cross_imports {
-                    out.push_str(&format!("  {inc}\n"));
-                }
-                out.push('\n');
-            }
-            if !imported_by.is_empty() {
-                out.push_str(&format!("Imported by ({} files):\n", imported_by.len()));
-                for inc in &imported_by {
-                    let desc = repo
-                        .all_files
-                        .iter()
-                        .find(|f| f.rel_path == *inc)
-                        .map(|f| f.desc.as_str())
-                        .unwrap_or("");
-                    out.push_str(&format!("  {inc}  ({desc})\n"));
-                }
-            }
-            if !cross_imported_by.is_empty() {
                 out.push_str(&format!(
-                    "Cross-repo imported by ({} files):\n",
-                    cross_imported_by.len()
+                    "Total: {} file{} affected across {} depth level{}",
+                    total,
+                    if total == 1 { "" } else { "s" },
+                    max_depth_found,
+                    if max_depth_found == 1 { "" } else { "s" }
                 ));
-                for inc in &cross_imported_by {
-                    out.push_str(&format!("  {inc}\n"));
+                (out, false)
+            } else {
+                // Direct imports (was cs_find_imports)
+                let repo = match resolve_repo(state, &args) {
+                    Ok(r) => r,
+                    Err(e) => return (format!("Error: {e}"), true),
+                };
+                let path = args["path"].as_str().unwrap_or("");
+                let direction = args["direction"].as_str().unwrap_or("both");
+
+                let imports: Vec<String> = if direction == "both" || direction == "imports" {
+                    repo.import_graph.imports.get(path).cloned().unwrap_or_default()
+                } else {
+                    vec![]
+                };
+                let imported_by: Vec<String> = if direction == "both" || direction == "imported_by"
+                {
+                    repo.import_graph.imported_by.get(path).cloned().unwrap_or_default()
+                } else {
+                    vec![]
+                };
+
+                let mut cross_imports = Vec::new();
+                let mut cross_imported_by = Vec::new();
+                for edge in &state.cross_repo_edges {
+                    if edge.from_repo == repo.name
+                        && edge.from_file == path
+                        && (direction == "both" || direction == "imports")
+                    {
+                        cross_imports.push(format!("[{}] {}", edge.to_repo, edge.to_file));
+                    }
+                    if edge.to_repo == repo.name
+                        && edge.to_file == path
+                        && (direction == "both" || direction == "imported_by")
+                    {
+                        cross_imported_by.push(format!("[{}] {}", edge.from_repo, edge.from_file));
+                    }
                 }
+
+                if imports.is_empty()
+                    && imported_by.is_empty()
+                    && cross_imports.is_empty()
+                    && cross_imported_by.is_empty()
+                {
+                    return (format!("No import relationships found for '{path}'"), false);
+                }
+
+                let mut out = format!("# {path}\n\n");
+                if !imports.is_empty() {
+                    out.push_str(&format!("Imports ({} files):\n", imports.len()));
+                    for inc in &imports {
+                        let desc = repo
+                            .all_files
+                            .iter()
+                            .find(|f| f.rel_path == *inc)
+                            .map(|f| f.desc.as_str())
+                            .unwrap_or("");
+                        out.push_str(&format!("  {inc}  ({desc})\n"));
+                    }
+                    out.push('\n');
+                }
+                if !cross_imports.is_empty() {
+                    out.push_str(&format!("Cross-repo imports ({} files):\n", cross_imports.len()));
+                    for inc in &cross_imports {
+                        out.push_str(&format!("  {inc}\n"));
+                    }
+                    out.push('\n');
+                }
+                if !imported_by.is_empty() {
+                    out.push_str(&format!("Imported by ({} files):\n", imported_by.len()));
+                    for inc in &imported_by {
+                        let desc = repo
+                            .all_files
+                            .iter()
+                            .find(|f| f.rel_path == *inc)
+                            .map(|f| f.desc.as_str())
+                            .unwrap_or("");
+                        out.push_str(&format!("  {inc}  ({desc})\n"));
+                    }
+                }
+                if !cross_imported_by.is_empty() {
+                    out.push_str(&format!(
+                        "Cross-repo imported by ({} files):\n",
+                        cross_imported_by.len()
+                    ));
+                    for inc in &cross_imported_by {
+                        out.push_str(&format!("  {inc}\n"));
+                    }
+                }
+                (out, false)
             }
-            (out, false)
         }
-        "cs_find" => {
-            let repos = resolve_repos_for_search(state, args);
+
+        // =================================================================
+        // cs_search — unified search with semantic fusion
+        // =================================================================
+        "cs_search" => {
+            let repos = resolve_repos_for_search(state, &args);
             if repos.is_empty() {
                 return ("Error: No matching repos found".to_string(), true);
             }
@@ -1020,8 +1077,6 @@ fn handle_tool_call(
                 }
                 "regex" => RegexBuilder::new(raw_query).case_insensitive(true).build(),
                 _ => {
-                    // "all" (multi-term), "any", or "all" (single-term) — use OR pattern
-                    // For "all" multi-term: post-filter ensures ALL terms are present
                     let pattern_str =
                         terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|");
                     RegexBuilder::new(&pattern_str).case_insensitive(true).build()
@@ -1056,12 +1111,10 @@ fn handle_tool_call(
                     module_limit,
                 );
 
-                // Collect module results
                 for m in search_resp.modules {
                     all_modules.push((repo, m));
                 }
 
-                // Add fuzzy search results
                 for f in &search_resp.files {
                     if let Some(prefix) = path_filter {
                         if !f.path.starts_with(prefix) {
@@ -1230,7 +1283,6 @@ fn handle_tool_call(
             let (name_w, grep_w) = if terms.len() > 1 { (0.4, 0.6) } else { (0.6, 0.4) };
             let mut ranked: Vec<FindResult> = merged.into_values().collect();
 
-            // Normalize scores to 0-1 range so weighting works correctly
             let max_name = ranked.iter().map(|r| r.name_score).fold(0.0f64, f64::max).max(1.0);
             let max_grep = ranked.iter().map(|r| r.grep_score).fold(0.0f64, f64::max).max(1.0);
 
@@ -1239,7 +1291,6 @@ fn handle_tool_call(
                     (a.name_score / max_name) * name_w + (a.grep_score / max_grep) * grep_w;
                 let norm_b =
                     (b.name_score / max_name) * name_w + (b.grep_score / max_grep) * grep_w;
-                // Dual-match boost: files matching both name AND content get 1.25x
                 let boost_a = if a.name_score > 0.0 && a.grep_count > 0 { 1.25 } else { 1.0 };
                 let boost_b = if b.name_score > 0.0 && b.grep_count > 0 { 1.25 } else { 1.0 };
                 (norm_b * boost_b)
@@ -1248,11 +1299,114 @@ fn handle_tool_call(
             });
             ranked.truncate(file_limit);
 
+            // Semantic fusion: if semantic index is available, merge results
+            #[cfg(feature = "semantic")]
+            let has_semantic = {
+                let mut fused = false;
+                // Collect semantic results from each repo
+                for repo in &repos {
+                    let sem_guard = repo.semantic_index.read().unwrap();
+                    if let Some(ref index) = *sem_guard {
+                        let sem_limit = file_limit * 2;
+                        if let Ok(sem_results) =
+                            crate::semantic::semantic_search(index, raw_query, sem_limit)
+                        {
+                            if !sem_results.is_empty() {
+                                fused = true;
+                                // Build a set of file paths already in keyword results
+                                let keyword_paths: HashSet<String> =
+                                    ranked.iter().map(|r| r.display_path.clone()).collect();
+
+                                // For results in both: boost score by 1.3x
+                                for r in &mut ranked {
+                                    // Strip repo prefix for comparison
+                                    let bare_path = if multi {
+                                        r.display_path.split("] ").last().unwrap_or(&r.display_path)
+                                    } else {
+                                        &r.display_path
+                                    };
+                                    let in_semantic =
+                                        sem_results.iter().any(|sr| sr.file_path == bare_path);
+                                    if in_semantic {
+                                        // Boost: increase both name and grep scores
+                                        r.name_score *= 1.3;
+                                        r.grep_score *= 1.3;
+                                    }
+                                }
+
+                                // Add semantic-only results
+                                let max_sem_score = sem_results
+                                    .iter()
+                                    .map(|r| r.score)
+                                    .fold(0.0f32, f32::max)
+                                    .max(0.001);
+                                for sr in &sem_results {
+                                    let display = repo_path(repo, &sr.file_path, multi);
+                                    if !keyword_paths.contains(&display) {
+                                        // Normalize semantic score to keyword score range
+                                        let norm_score =
+                                            (sr.score / max_sem_score) as f64 * max_grep * 0.8;
+                                        ranked.push(FindResult {
+                                            display_path: display,
+                                            desc: format!("line ~{}", sr.start_line),
+                                            name_score: 0.0,
+                                            grep_score: norm_score,
+                                            grep_count: 0,
+                                            top_match: Some(
+                                                sr.snippet.lines().next().unwrap_or("").to_string(),
+                                            ),
+                                            terms_matched: 0,
+                                            total_terms: terms_lower.len(),
+                                        });
+                                    }
+                                }
+
+                                // Re-sort after fusion
+                                let max_name2 = ranked
+                                    .iter()
+                                    .map(|r| r.name_score)
+                                    .fold(0.0f64, f64::max)
+                                    .max(1.0);
+                                let max_grep2 = ranked
+                                    .iter()
+                                    .map(|r| r.grep_score)
+                                    .fold(0.0f64, f64::max)
+                                    .max(1.0);
+                                ranked.sort_by(|a, b| {
+                                    let norm_a = (a.name_score / max_name2) * name_w
+                                        + (a.grep_score / max_grep2) * grep_w;
+                                    let norm_b = (b.name_score / max_name2) * name_w
+                                        + (b.grep_score / max_grep2) * grep_w;
+                                    let boost_a = if a.name_score > 0.0 && a.grep_count > 0 {
+                                        1.25
+                                    } else {
+                                        1.0
+                                    };
+                                    let boost_b = if b.name_score > 0.0 && b.grep_count > 0 {
+                                        1.25
+                                    } else {
+                                        1.0
+                                    };
+                                    (norm_b * boost_b)
+                                        .partial_cmp(&(norm_a * boost_a))
+                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                                ranked.truncate(file_limit);
+                            }
+                        }
+                    }
+                }
+                fused
+            };
+            #[cfg(not(feature = "semantic"))]
+            let has_semantic = false;
+
             let query_time = start.elapsed().as_millis();
             let mut out = format!(
-                "Found {} results for \"{}\" ({query_time}ms)\n\n",
+                "Found {} results for \"{}\" ({query_time}ms{})\n\n",
                 ranked.len(),
-                raw_query
+                raw_query,
+                if has_semantic { ", semantic+keyword" } else { "" }
             );
 
             // Module results
@@ -1276,12 +1430,27 @@ fn handle_tool_call(
             for r in &ranked {
                 let has_name = r.name_score > 0.0;
                 let has_content = r.grep_count > 0;
-                let source = match (has_name, has_content) {
-                    (true, true) => "name+content",
-                    (true, false) => "name",
-                    (false, true) => "content",
-                    (false, false) => "",
+
+                // Determine source tag
+                // When semantic fusion is active, tag results by source:
+                // - [semantic]: only found via semantic search (no keyword match)
+                // - [both]: found by both semantic and keyword search
+                // - [keyword]: found by keyword/filename only
+                let source = if has_semantic {
+                    if !has_name && !has_content {
+                        "[semantic]"
+                    } else {
+                        "[both]"
+                    }
+                } else {
+                    match (has_name, has_content) {
+                        (true, true) => "name+content",
+                        (true, false) => "name",
+                        (false, true) => "content",
+                        (false, false) => "",
+                    }
                 };
+
                 let tag_str = if source.is_empty() {
                     String::new()
                 } else if r.total_terms > 1 && has_content {
@@ -1303,184 +1472,163 @@ fn handle_tool_call(
             (out, false)
         }
 
-        // =====================================================================
-        // Git-aware tools
-        // =====================================================================
-        "cs_blame" => {
-            let repo = match resolve_repo(state, args) {
-                Ok(r) => r,
-                Err(e) => return (format!("Error: {e}"), true),
-            };
-            let path = args["path"].as_str().unwrap_or("");
-            if path.is_empty() {
-                return ("Error: 'path' is required".to_string(), true);
-            }
-            let start_line = args["start_line"].as_u64().map(|n| n as usize);
-            let end_line = args["end_line"].as_u64().map(|n| n as usize);
-
-            match crate::git::blame(&repo.root, path, start_line, end_line) {
-                Ok(lines) => {
-                    if lines.is_empty() {
-                        return (format!("No blame data for '{path}'"), false);
-                    }
-                    let range_str = match (start_line, end_line) {
-                        (Some(s), Some(e)) => format!(" (lines {s}-{e})"),
-                        (Some(s), None) => format!(" (from line {s})"),
-                        (None, Some(e)) => format!(" (to line {e})"),
-                        _ => String::new(),
+        // =================================================================
+        // cs_git — blame/history/changed/hotspots
+        // =================================================================
+        "cs_git" => {
+            let action = args["action"].as_str().unwrap_or("");
+            match action {
+                "blame" => {
+                    let repo = match resolve_repo(state, &args) {
+                        Ok(r) => r,
+                        Err(e) => return (format!("Error: {e}"), true),
                     };
-                    let mut out = format!("# {path}{range_str}\n\n");
-                    let width = lines.last().map(|l| format!("{}", l.line).len()).unwrap_or(1);
-                    for bl in &lines {
-                        out.push_str(&format!(
-                            "{:>w$}: {} | {} | {} | {}\n",
-                            bl.line,
-                            bl.commit,
-                            bl.author,
-                            bl.date,
-                            bl.content,
-                            w = width
-                        ));
+                    let path = args["path"].as_str().unwrap_or("");
+                    if path.is_empty() {
+                        return ("Error: 'path' is required".to_string(), true);
                     }
-                    out.push_str(&format!("\n{} lines", lines.len()));
-                    (out, false)
-                }
-                Err(e) => (format!("Error: {e}"), true),
-            }
-        }
-        "cs_file_history" => {
-            let repo = match resolve_repo(state, args) {
-                Ok(r) => r,
-                Err(e) => return (format!("Error: {e}"), true),
-            };
-            let path = args["path"].as_str().unwrap_or("");
-            if path.is_empty() {
-                return ("Error: 'path' is required".to_string(), true);
-            }
-            let limit = args["limit"].as_u64().unwrap_or(10).min(100) as usize;
+                    let start_line = args["start_line"].as_u64().map(|n| n as usize);
+                    let end_line = args["end_line"].as_u64().map(|n| n as usize);
 
-            match crate::git::file_history(&repo.root, path, limit) {
-                Ok(commits) => {
-                    if commits.is_empty() {
-                        return (format!("No commit history found for '{path}'"), false);
-                    }
-                    let mut out = format!("# {path} — {} recent commits\n\n", commits.len());
-                    for c in &commits {
-                        out.push_str(&format!(
-                            "{} | {} | {} | {}\n",
-                            c.hash, c.author, c.date, c.message
-                        ));
-                        if c.files_changed.len() > 1 {
-                            let others: Vec<&str> = c
-                                .files_changed
-                                .iter()
-                                .filter(|f| f.as_str() != path)
-                                .map(|f| f.as_str())
-                                .take(10)
-                                .collect();
-                            if !others.is_empty() {
-                                out.push_str(&format!("  also: {}\n", others.join(", ")));
+                    match crate::git::blame(&repo.root, path, start_line, end_line) {
+                        Ok(lines) => {
+                            if lines.is_empty() {
+                                return (format!("No blame data for '{path}'"), false);
                             }
+                            let range_str = match (start_line, end_line) {
+                                (Some(s), Some(e)) => format!(" (lines {s}-{e})"),
+                                (Some(s), None) => format!(" (from line {s})"),
+                                (None, Some(e)) => format!(" (to line {e})"),
+                                _ => String::new(),
+                            };
+                            let mut out = format!("# {path}{range_str}\n\n");
+                            let width = lines.last().map(|l| format!("{}", l.line).len()).unwrap_or(1);
+                            for bl in &lines {
+                                out.push_str(&format!(
+                                    "{:>w$}: {} | {} | {} | {}\n",
+                                    bl.line,
+                                    bl.commit,
+                                    bl.author,
+                                    bl.date,
+                                    bl.content,
+                                    w = width
+                                ));
+                            }
+                            out.push_str(&format!("\n{} lines", lines.len()));
+                            (out, false)
                         }
+                        Err(e) => (format!("Error: {e}"), true),
                     }
-                    (out, false)
                 }
-                Err(e) => (format!("Error: {e}"), true),
-            }
-        }
-        "cs_changed_since" => {
-            let repo = match resolve_repo(state, args) {
-                Ok(r) => r,
-                Err(e) => return (format!("Error: {e}"), true),
-            };
-            let since = args["since"].as_str().unwrap_or("");
-            if since.is_empty() {
-                return ("Error: 'since' is required".to_string(), true);
-            }
+                "history" => {
+                    let repo = match resolve_repo(state, &args) {
+                        Ok(r) => r,
+                        Err(e) => return (format!("Error: {e}"), true),
+                    };
+                    let path = args["path"].as_str().unwrap_or("");
+                    if path.is_empty() {
+                        return ("Error: 'path' is required".to_string(), true);
+                    }
+                    let limit = args["limit"].as_u64().unwrap_or(10).min(100) as usize;
 
-            match crate::git::changed_since(&repo.root, since) {
-                Ok(files) => {
-                    if files.is_empty() {
-                        return (format!("No changes since '{since}'"), false);
-                    }
-                    let mut out = format!("Files changed since {since}: {}\n\n", files.len());
-                    // Group by status
-                    let mut by_status: BTreeMap<String, Vec<&str>> = BTreeMap::new();
-                    for f in &files {
-                        by_status.entry(f.status.clone()).or_default().push(&f.path);
-                    }
-                    for (status, paths) in &by_status {
-                        out.push_str(&format!("{} ({}):\n", status, paths.len()));
-                        for p in paths {
-                            out.push_str(&format!("  {p}\n"));
+                    match crate::git::file_history(&repo.root, path, limit) {
+                        Ok(commits) => {
+                            if commits.is_empty() {
+                                return (format!("No commit history found for '{path}'"), false);
+                            }
+                            let mut out = format!("# {path} — {} recent commits\n\n", commits.len());
+                            for c in &commits {
+                                out.push_str(&format!(
+                                    "{} | {} | {} | {}\n",
+                                    c.hash, c.author, c.date, c.message
+                                ));
+                                if c.files_changed.len() > 1 {
+                                    let others: Vec<&str> = c
+                                        .files_changed
+                                        .iter()
+                                        .filter(|f| f.as_str() != path)
+                                        .map(|f| f.as_str())
+                                        .take(10)
+                                        .collect();
+                                    if !others.is_empty() {
+                                        out.push_str(&format!("  also: {}\n", others.join(", ")));
+                                    }
+                                }
+                            }
+                            (out, false)
                         }
-                        out.push('\n');
+                        Err(e) => (format!("Error: {e}"), true),
                     }
-                    (out, false)
                 }
-                Err(e) => (format!("Error: {e}"), true),
+                "changed" => {
+                    let repo = match resolve_repo(state, &args) {
+                        Ok(r) => r,
+                        Err(e) => return (format!("Error: {e}"), true),
+                    };
+                    let since = args["since"].as_str().unwrap_or("");
+                    if since.is_empty() {
+                        return ("Error: 'since' is required".to_string(), true);
+                    }
+
+                    match crate::git::changed_since(&repo.root, since) {
+                        Ok(files) => {
+                            if files.is_empty() {
+                                return (format!("No changes since '{since}'"), false);
+                            }
+                            let mut out = format!("Files changed since {since}: {}\n\n", files.len());
+                            let mut by_status: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+                            for f in &files {
+                                by_status.entry(f.status.clone()).or_default().push(&f.path);
+                            }
+                            for (status, paths) in &by_status {
+                                out.push_str(&format!("{} ({}):\n", status, paths.len()));
+                                for p in paths {
+                                    out.push_str(&format!("  {p}\n"));
+                                }
+                                out.push('\n');
+                            }
+                            (out, false)
+                        }
+                        Err(e) => (format!("Error: {e}"), true),
+                    }
+                }
+                "hotspots" => {
+                    let repo = match resolve_repo(state, &args) {
+                        Ok(r) => r,
+                        Err(e) => return (format!("Error: {e}"), true),
+                    };
+                    let limit = args["limit"].as_u64().unwrap_or(20).min(200) as usize;
+                    let days = args["days"].as_u64().unwrap_or(90).min(365) as usize;
+
+                    match crate::git::hot_files(&repo.root, limit, days) {
+                        Ok(files) => {
+                            if files.is_empty() {
+                                return (format!("No file changes found in the last {days} days"), false);
+                            }
+                            let mut out = format!("Hot files (last {days} days, top {})\n\n", files.len());
+                            let max_commits = files.first().map(|f| f.commits).unwrap_or(1);
+                            let width = format!("{}", max_commits).len();
+                            for (i, f) in files.iter().enumerate() {
+                                out.push_str(&format!(
+                                    "{:>3}. {:>w$} commits  {}\n",
+                                    i + 1,
+                                    f.commits,
+                                    f.path,
+                                    w = width
+                                ));
+                            }
+                            (out, false)
+                        }
+                        Err(e) => (format!("Error: {e}"), true),
+                    }
+                }
+                _ => (format!("Error: Unknown cs_git action '{action}'. Use: blame, history, changed, hotspots"), true),
             }
         }
-        "cs_hot_files" => {
-            let repo = match resolve_repo(state, args) {
-                Ok(r) => r,
-                Err(e) => return (format!("Error: {e}"), true),
-            };
-            let limit = args["limit"].as_u64().unwrap_or(20).min(200) as usize;
-            let days = args["days"].as_u64().unwrap_or(90).min(365) as usize;
 
-            match crate::git::hot_files(&repo.root, limit, days) {
-                Ok(files) => {
-                    if files.is_empty() {
-                        return (format!("No file changes found in the last {days} days"), false);
-                    }
-                    let mut out = format!("Hot files (last {days} days, top {})\n\n", files.len());
-                    let max_commits = files.first().map(|f| f.commits).unwrap_or(1);
-                    let width = format!("{}", max_commits).len();
-                    for (i, f) in files.iter().enumerate() {
-                        out.push_str(&format!(
-                            "{:>3}. {:>w$} commits  {}\n",
-                            i + 1,
-                            f.commits,
-                            f.path,
-                            w = width
-                        ));
-                    }
-                    (out, false)
-                }
-                Err(e) => (format!("Error: {e}"), true),
-            }
-        }
-
-        "cs_session_info" => match session {
-            Some(ref s) => {
-                let elapsed = s.started_at.elapsed();
-                let mins = elapsed.as_secs() / 60;
-                let secs = elapsed.as_secs() % 60;
-                let mut out = format!(
-                    "Session: {}m {}s, {} files read, ~{} tokens served\n\n",
-                    mins,
-                    secs,
-                    s.files_read.len(),
-                    s.total_tokens_served
-                );
-                if !s.files_read.is_empty() {
-                    out.push_str("Files read:\n");
-                    let mut sorted: Vec<(&String, &std::time::Instant)> =
-                        s.files_read.iter().collect();
-                    sorted.sort_by_key(|(_, t)| *t);
-                    for (path, _) in sorted {
-                        out.push_str(&format!("  {path}\n"));
-                    }
-                }
-                (out, false)
-            }
-            None => ("Session tracking not available (HTTP mode)".to_string(), false),
-        },
-
-        // =====================================================================
-        // Status & management tools
-        // =====================================================================
+        // =================================================================
+        // cs_status — merged status + session info
+        // =================================================================
         "cs_status" => {
             let version = env!("CARGO_PKG_VERSION");
             let repo_count = state.repos.len();
@@ -1572,161 +1720,31 @@ fn handle_tool_call(
             }
 
             out.push_str(&format!("Total: {} files across {} repo(s)", total_files, repo_count));
+
+            // Append session info (was cs_session_info)
+            if let Some(ref s) = session {
+                let elapsed = s.started_at.elapsed();
+                let mins = elapsed.as_secs() / 60;
+                let secs = elapsed.as_secs() % 60;
+                out.push_str(&format!(
+                    "\n\nSession: {}m {}s, {} files read, ~{} tokens served",
+                    mins,
+                    secs,
+                    s.files_read.len(),
+                    s.total_tokens_served
+                ));
+                if !s.files_read.is_empty() {
+                    out.push_str("\nFiles read:\n");
+                    let mut sorted: Vec<(&String, &std::time::Instant)> =
+                        s.files_read.iter().collect();
+                    sorted.sort_by_key(|(_, t)| *t);
+                    for (path, _) in sorted {
+                        out.push_str(&format!("  {path}\n"));
+                    }
+                }
+            }
+
             (out, false)
-        }
-
-        "cs_impact" => {
-            let repo = match resolve_repo(state, args) {
-                Ok(r) => r,
-                Err(e) => return (format!("Error: {e}"), true),
-            };
-            let path = args["path"].as_str().unwrap_or("");
-            let max_depth = args["max_depth"].as_u64().unwrap_or(5).min(20) as usize;
-            let file_limit = args["limit"].as_u64().unwrap_or(50).min(500) as usize;
-
-            if path.is_empty() {
-                return ("Error: path is required".to_string(), true);
-            }
-
-            // BFS over imported_by graph
-            let mut visited: HashSet<String> = HashSet::new();
-            let mut queue: VecDeque<(String, usize)> = VecDeque::new();
-            let mut by_depth: BTreeMap<usize, Vec<String>> = BTreeMap::new();
-
-            visited.insert(path.to_string());
-            queue.push_back((path.to_string(), 0));
-
-            while let Some((current, depth)) = queue.pop_front() {
-                if depth > 0 {
-                    by_depth.entry(depth).or_default().push(current.clone());
-                }
-                if depth >= max_depth {
-                    continue;
-                }
-                // Local imports
-                if let Some(dependents) = repo.import_graph.imported_by.get(&current) {
-                    for dep in dependents {
-                        if visited.insert(dep.clone()) {
-                            queue.push_back((dep.clone(), depth + 1));
-                        }
-                    }
-                }
-                // Cross-repo imports (files that import this file from other repos)
-                for edge in &state.cross_repo_edges {
-                    if edge.to_repo == repo.name && edge.to_file == current {
-                        let key = format!("[{}] {}", edge.from_repo, edge.from_file);
-                        if visited.insert(key.clone()) {
-                            by_depth.entry(depth + 1).or_default().push(key);
-                        }
-                    }
-                }
-            }
-
-            let total: usize = by_depth.values().map(|v| v.len()).sum();
-            if total == 0 {
-                return (
-                    format!("No dependents found for '{path}'. This file is not imported by any other file."),
-                    false,
-                );
-            }
-
-            let mut out = format!("Impact analysis for {path}\n\n");
-            let max_depth_found = *by_depth.keys().max().unwrap_or(&0);
-            let mut shown = 0usize;
-            for depth in 1..=max_depth_found {
-                if let Some(files) = by_depth.get(&depth) {
-                    let label = if depth == 1 { "direct dependents" } else { "" };
-                    out.push_str(&format!(
-                        "Depth {}{}: {} file{}\n",
-                        depth,
-                        if label.is_empty() { String::new() } else { format!(" ({label})") },
-                        files.len(),
-                        if files.len() == 1 { "" } else { "s" }
-                    ));
-                    for f in files {
-                        if shown < file_limit {
-                            out.push_str(&format!("  {f}\n"));
-                            shown += 1;
-                        }
-                    }
-                    if shown >= file_limit && depth < max_depth_found {
-                        out.push_str(&format!("\n  ... output capped at {file_limit} files (use limit param to increase)\n"));
-                        break;
-                    }
-                    out.push('\n');
-                }
-            }
-            out.push_str(&format!(
-                "Total: {} file{} affected across {} depth level{}",
-                total,
-                if total == 1 { "" } else { "s" },
-                max_depth_found,
-                if max_depth_found == 1 { "" } else { "s" }
-            ));
-            (out, false)
-        }
-
-        #[cfg(feature = "semantic")]
-        "cs_semantic_search" => {
-            let repo = match resolve_repo(state, args) {
-                Ok(r) => r,
-                Err(e) => return (format!("Error: {e}"), true),
-            };
-            let query = args["query"].as_str().unwrap_or("");
-            if query.is_empty() {
-                return ("Error: 'query' is required".to_string(), true);
-            }
-            let limit = args["limit"].as_u64().unwrap_or(10).min(50) as usize;
-
-            let sem_guard = repo.semantic_index.read().unwrap();
-            let index = match sem_guard.as_ref() {
-                Some(idx) => idx,
-                None => {
-                    use std::sync::atomic::Ordering::Relaxed;
-                    let sp = &repo.semantic_progress;
-                    let msg = match sp.status.load(Relaxed) {
-                        1 => "Semantic index is extracting chunks — please try again shortly.".to_string(),
-                        2 => {
-                            let done = sp.completed_batches.load(Relaxed);
-                            let total = sp.total_batches.load(Relaxed);
-                            let chunks = sp.total_chunks.load(Relaxed);
-                            let device = sp.device.read().unwrap();
-                            let pct = if total > 0 { done * 100 / total } else { 0 };
-                            format!(
-                                "Semantic index is building: {done}/{total} batches ({pct}%) on {device}, {chunks} chunks. Try again shortly."
-                            )
-                        }
-                        4 => "Semantic index failed to build. Check server logs for details.".to_string(),
-                        _ => "Semantic index not available. This binary may not include semantic search support.".to_string(),
-                    };
-                    return (format!("Error: {msg}"), true);
-                }
-            };
-
-            let start = std::time::Instant::now();
-            match crate::semantic::semantic_search(index, query, limit) {
-                Ok(results) => {
-                    let query_time = start.elapsed().as_millis();
-                    let mut out = format!(
-                        "Semantic search: {} results for \"{}\" ({}ms)\n\n",
-                        results.len(),
-                        query,
-                        query_time
-                    );
-                    for (i, r) in results.iter().enumerate() {
-                        out.push_str(&format!(
-                            "{}. {} (line ~{}, score {:.3})\n   {}\n\n",
-                            i + 1,
-                            r.file_path,
-                            r.start_line,
-                            r.score,
-                            r.snippet.replace('\n', "\n   ")
-                        ));
-                    }
-                    (out, false)
-                }
-                Err(e) => (format!("Error: Semantic search failed: {e}"), true),
-            }
         }
 
         _ => (format!("Unknown tool: {name}"), true),
@@ -1897,7 +1915,7 @@ pub(crate) fn dispatch_jsonrpc(
                         "name": "codescope",
                         "version": env!("CARGO_PKG_VERSION")
                     },
-                    "instructions": "CodeScope — search, browse, and read source files in any codebase. Start with cs_find (combined filename + content search) for discovery. Use cs_find_imports to trace import dependencies. Use cs_grep for targeted content search with context. Use cs_read_file to read specific files or line ranges. Use cs_read_context for budget-aware batch reads of 3+ files."
+                    "instructions": "CodeScope — search, browse, and read source code. Start with cs_search for discovery (uses semantic search when available, keyword matching as fallback). Use cs_grep for exact pattern matching. Use cs_read to read files. Use cs_imports to trace dependencies. Use cs_git for history analysis."
                 }
             })
         }
