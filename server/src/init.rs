@@ -873,8 +873,8 @@ fn write_or_merge_mcp_json(root: &Path) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 fn merge_global_repos_toml(root: &Path) -> Result<(), String> {
-    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
-    let dir = PathBuf::from(&home).join(".codescope");
+    let dir = crate::config_dir()
+        .ok_or_else(|| "Could not determine config directory (HOME/APPDATA not set)".to_string())?;
     let toml_path = dir.join("repos.toml");
 
     let repo_name = root.file_name().and_then(|n| n.to_str()).unwrap_or("default");

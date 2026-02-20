@@ -9,9 +9,17 @@ Works as an MCP server for [Claude Code](https://docs.anthropic.com/en/docs/agen
 
 ## Install
 
+**Linux / macOS:**
 ```bash
 curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash
 ```
+
+**Windows (Git Bash or MSYS2):**
+```bash
+curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash
+```
+
+Or download manually from [Releases](https://github.com/AlrikOlson/codescope/releases) and add to PATH.
 
 Pre-built binary, ~5MB.
 

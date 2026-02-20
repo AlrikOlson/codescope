@@ -18,7 +18,11 @@ if ! command -v codescope-server >/dev/null 2>&1; then
 fi
 
 # Find dist directory
-DIST_DIR="$HOME/.local/share/codescope/dist"
+if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* || "$(uname -s)" == CYGWIN* ]]; then
+    DIST_DIR="${LOCALAPPDATA:-$APPDATA}/codescope/dist"
+else
+    DIST_DIR="$HOME/.local/share/codescope/dist"
+fi
 if [ ! -d "$DIST_DIR" ] || [ ! -f "$DIST_DIR/index.html" ]; then
     echo "Error: Web UI not installed at $DIST_DIR" >&2
     echo "Re-run setup.sh with Node.js available to build the web UI." >&2
@@ -31,6 +35,10 @@ open_browser() {
         xdg-open "$url" 2>/dev/null || true
     elif command -v open >/dev/null 2>&1; then
         open "$url" 2>/dev/null || true
+    elif command -v start >/dev/null 2>&1; then
+        start "$url" 2>/dev/null || true
+    elif command -v explorer.exe >/dev/null 2>&1; then
+        explorer.exe "$url" 2>/dev/null || true
     fi
 }
 

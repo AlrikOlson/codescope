@@ -9,7 +9,11 @@ set -euo pipefail
 #   curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- /path/to/project
 #   curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --edge
 
-INSTALL_DIR="$HOME/.local/bin"
+if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* || "$(uname -s)" == CYGWIN* ]]; then
+    INSTALL_DIR="${LOCALAPPDATA:-$APPDATA}/codescope/bin"
+else
+    INSTALL_DIR="$HOME/.local/bin"
+fi
 REPO="AlrikOlson/codescope"
 BRANCH="master"
 
@@ -73,10 +77,11 @@ detect_platform() {
     os="$(uname -s)"
     arch="$(uname -m)"
     case "$os" in
-        Linux)  os="linux" ;;
-        Darwin) os="macos" ;;
+        Linux)                os="linux" ;;
+        Darwin)               os="macos" ;;
+        MINGW*|MSYS*|CYGWIN*) os="windows" ;;
         *)
-            err "Unsupported OS: $os (CodeScope supports Linux and macOS)"
+            err "Unsupported OS: $os (CodeScope supports Linux, macOS, and Windows)"
             return 1
             ;;
     esac
@@ -119,7 +124,16 @@ download_binary() {
         return 1
     fi
 
-    local archive="codescope-server-${platform}.tar.gz"
+    # Determine archive format and binary name based on platform
+    local os_part="${platform%%-*}"
+    local archive binary_name
+    if [ "$os_part" = "windows" ]; then
+        archive="codescope-server-${platform}.zip"
+        binary_name="codescope-server.exe"
+    else
+        archive="codescope-server-${platform}.tar.gz"
+        binary_name="codescope-server"
+    fi
     local url="https://github.com/$REPO/releases/download/$tag/$archive"
 
     info "Downloading CodeScope $tag ($platform)..."
@@ -134,32 +148,42 @@ download_binary() {
 
     # Extract
     mkdir -p "$tmpdir/extracted"
-    if ! tar xzf "$tmpdir/$archive" -C "$tmpdir/extracted" 2>/dev/null; then
-        rm -rf "$tmpdir"
-        err "Failed to extract downloaded archive"
-        return 1
+    if [ "$os_part" = "windows" ]; then
+        if ! unzip -q "$tmpdir/$archive" -d "$tmpdir/extracted" 2>/dev/null; then
+            rm -rf "$tmpdir"
+            err "Failed to extract downloaded archive"
+            return 1
+        fi
+    else
+        if ! tar xzf "$tmpdir/$archive" -C "$tmpdir/extracted" 2>/dev/null; then
+            rm -rf "$tmpdir"
+            err "Failed to extract downloaded archive"
+            return 1
+        fi
     fi
 
     # Install binary
     mkdir -p "$INSTALL_DIR"
     local binary
-    binary="$(find "$tmpdir/extracted" -name codescope-server -type f | head -1)"
+    binary="$(find "$tmpdir/extracted" -name "$binary_name" -type f | head -1)"
     if [ -z "$binary" ]; then
         rm -rf "$tmpdir"
-        err "Archive did not contain codescope-server"
+        err "Archive did not contain $binary_name"
         return 1
     fi
     # Remove old binary first — avoids "Text file busy" if it's running (e.g., as MCP server)
-    rm -f "$INSTALL_DIR/codescope-server"
-    cp "$binary" "$INSTALL_DIR/codescope-server"
-    chmod +x "$INSTALL_DIR/codescope-server"
+    rm -f "$INSTALL_DIR/$binary_name"
+    cp "$binary" "$INSTALL_DIR/$binary_name"
+    if [ "$os_part" != "windows" ]; then
+        chmod +x "$INSTALL_DIR/$binary_name"
+    fi
 
     # macOS: clear Gatekeeper quarantine
     if [ "$(uname -s)" = "Darwin" ]; then
-        xattr -d com.apple.quarantine "$INSTALL_DIR/codescope-server" 2>/dev/null || true
+        xattr -d com.apple.quarantine "$INSTALL_DIR/$binary_name" 2>/dev/null || true
     fi
 
-    ok "Installed codescope-server -> $INSTALL_DIR/"
+    ok "Installed $binary_name -> $INSTALL_DIR/"
 
     # Install helper scripts from tarball if present
     for script in codescope-init codescope-web; do
@@ -243,7 +267,12 @@ install_from_source() {
         cd "$repo_root"
         npm install --no-audit --no-fund 2>&1 | tail -1
         npm run build 2>&1 | tail -1
-        local dist_install="$HOME/.local/share/codescope/dist"
+        local dist_install
+        if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* || "$(uname -s)" == CYGWIN* ]]; then
+            dist_install="${LOCALAPPDATA:-$APPDATA}/codescope/dist"
+        else
+            dist_install="$HOME/.local/share/codescope/dist"
+        fi
         if [ -d "$repo_root/dist" ]; then
             mkdir -p "$dist_install"
             rm -rf "$dist_install"
@@ -260,6 +289,18 @@ install_from_source() {
 
 # --- PATH setup ---
 ensure_path() {
+    # Windows Git Bash / MSYS2: use setx to persist PATH
+    if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
+        if ! echo "$PATH" | tr ':' '\n' | grep -qi "codescope"; then
+            local winpath
+            winpath="$(cygpath -w "$INSTALL_DIR")"
+            setx PATH "%PATH%;$winpath" 2>/dev/null || true
+            export PATH="$INSTALL_DIR:$PATH"
+            info "Added $winpath to Windows PATH (takes effect in new terminals)"
+        fi
+        return 0
+    fi
+
     if echo "$PATH" | tr ':' '\n' | grep -q "$HOME/.local/bin"; then
         return 0
     fi

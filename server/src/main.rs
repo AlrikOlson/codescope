@@ -33,6 +33,36 @@ use scan::*;
 use types::*;
 
 // ---------------------------------------------------------------------------
+// Cross-platform path helpers
+// ---------------------------------------------------------------------------
+
+/// Platform-aware home directory: HOME on Unix, USERPROFILE on Windows
+fn home_dir() -> Option<PathBuf> {
+    std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).ok().map(PathBuf::from)
+}
+
+/// Platform-aware config directory: ~/.codescope on Unix, %APPDATA%/codescope on Windows
+pub(crate) fn config_dir() -> Option<PathBuf> {
+    if cfg!(target_os = "windows") {
+        std::env::var("APPDATA").ok().map(|a| PathBuf::from(a).join("codescope"))
+    } else {
+        home_dir().map(|h| h.join(".codescope"))
+    }
+}
+
+/// Platform-aware data directory: ~/.local/share/codescope on Unix, %LOCALAPPDATA%/codescope on Windows
+fn data_dir() -> Option<PathBuf> {
+    if cfg!(target_os = "windows") {
+        std::env::var("LOCALAPPDATA")
+            .or_else(|_| std::env::var("APPDATA"))
+            .ok()
+            .map(|a| PathBuf::from(a).join("codescope"))
+    } else {
+        home_dir().map(|h| h.join(".local/share/codescope"))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // .codescope.toml config loading
 // ---------------------------------------------------------------------------
 
@@ -336,9 +366,7 @@ async fn main() {
             }
         } else {
             // Check global config fallback
-            let global_config = std::env::var("HOME")
-                .map(|h| PathBuf::from(h).join(".codescope/repos.toml"))
-                .unwrap_or_default();
+            let global_config = config_dir().map(|d| d.join("repos.toml")).unwrap_or_default();
             if global_config.exists() && mcp_mode {
                 let parsed = parse_repos_toml(&global_config);
                 repo_specs.extend(parsed);
@@ -487,9 +515,7 @@ async fn main() {
         }
     } else {
         let cwd = std::env::current_dir().unwrap();
-        let home_dist = std::env::var("HOME")
-            .map(|h| PathBuf::from(h).join(".local/share/codescope/dist"))
-            .unwrap_or_default();
+        let home_dist = data_dir().map(|d| d.join("dist")).unwrap_or_default();
         let candidates = [cwd.join("dist"), cwd.join("../dist"), home_dist];
         candidates
             .into_iter()

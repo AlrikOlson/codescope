@@ -142,6 +142,14 @@ jobs:
             os: macos-latest
             archive: codescope-server-macos-aarch64.tar.gz
             use_cross: false
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: codescope-server-windows-x86_64.zip
+            use_cross: false
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            archive: codescope-server-windows-aarch64.zip
+            use_cross: false
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -181,18 +189,33 @@ jobs:
           if [ "${{ matrix.use_cross }}" = "true" ]; then BUILD_CMD="cross"; fi
           $BUILD_CMD build --release --manifest-path server/Cargo.toml --target ${{ matrix.target }} --features semantic
 
-      - name: Package tarball
+      - name: Package archive
         run: |
           mkdir -p staging
-          cp server/target/${{ matrix.target }}/release/codescope-server staging/
-          cp server/codescope-init staging/
-          cp server/codescope-web staging/
-          chmod +x staging/codescope-init staging/codescope-web
-          cp LICENSE README.md staging/
-          tar czf ${{ matrix.archive }} -C staging .
+          if [[ "${{ matrix.archive }}" == *.zip ]]; then
+            cp server/target/${{ matrix.target }}/release/codescope-server.exe staging/
+            cp server/codescope-init staging/
+            cp server/codescope-web staging/
+            cp LICENSE README.md staging/
+            cd staging && 7z a -tzip ../${{ matrix.archive }} . && cd ..
+          else
+            cp server/target/${{ matrix.target }}/release/codescope-server staging/
+            cp server/codescope-init staging/
+            cp server/codescope-web staging/
+            chmod +x staging/codescope-init staging/codescope-web
+            cp LICENSE README.md staging/
+            tar czf ${{ matrix.archive }} -C staging .
+          fi
+        shell: bash
 
-      - name: Verify tarball
-        run: tar tzf ${{ matrix.archive }} | grep -q codescope-server
+      - name: Verify archive
+        run: |
+          if [[ "${{ matrix.archive }}" == *.zip ]]; then
+            7z l ${{ matrix.archive }} | grep -q codescope-server
+          else
+            tar tzf ${{ matrix.archive }} | grep -q codescope-server
+          fi
+        shell: bash
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -287,7 +310,9 @@ jobs:
         with:
           tag_name: ${{ needs.version.outputs.new_tag }}
           body: ${{ steps.notes.outputs.body }}
-          files: artifacts/*.tar.gz
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
 
       - name: Create GitHub Release (auto-generated)
         if: steps.notes.outputs.use_generated == 'true'
@@ -295,7 +320,9 @@ jobs:
         with:
           tag_name: ${{ needs.version.outputs.new_tag }}
           generate_release_notes: true
-          files: artifacts/*.tar.gz
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
 
   # ──────────────────────────────────────────────
   # Channel release (edge/dev) — master/dev only
@@ -346,4 +373,6 @@ jobs:
             Install: `curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- ${{ steps.channel.outputs.install_flag }}`
           prerelease: true
           make_latest: false
-          files: artifacts/*.tar.gz
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
