@@ -107,6 +107,20 @@ export function writeStepSummary(markdown) {
 }
 
 /**
+ * Prepend turn budget awareness to a system prompt.
+ * Ensures all agents know their limits without each script templating it.
+ * @param {string} systemPrompt
+ * @param {number} maxTurns
+ * @returns {string}
+ */
+function injectTurnBudget(systemPrompt, maxTurns) {
+  const budget = `TURN BUDGET: You have ${maxTurns} turns total. Each tool call costs 1 turn. ` +
+    `You MUST stop calling tools and produce your structured output before exhausting all ${maxTurns} turns, ` +
+    `otherwise your output will be lost. Reserve your final turn for producing the structured response.\n\n`;
+  return budget + systemPrompt;
+}
+
+/**
  * Run a Claude Agent SDK query with CodeScope MCP.
  * Streams messages, logs tool usage to stderr, writes conversation
  * log to /tmp/agent-conversation-{label}.jsonl for debugging.
@@ -152,11 +166,13 @@ export async function runAgent({
     }
   }
 
+  const enrichedSystemPrompt = injectTurnBudget(systemPrompt, maxTurns);
+
   const opts = {
     model,
     maxTurns,
     maxBudgetUsd,
-    systemPrompt,
+    systemPrompt: enrichedSystemPrompt,
     mcpServers: codeScopeMcpConfig(process.cwd()),
     allowedTools: codeScopeAllowedTools(),
     permissionMode: "bypassPermissions",

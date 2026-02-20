@@ -33,13 +33,13 @@ const outputSchema = {
   required: ["updates", "noChanges", "summary"],
 };
 
-const SYSTEM_PROMPT = `You are a documentation accuracy reviewer for CodeScope.
+const SYSTEM_PROMPT = `You are a documentation accuracy reviewer for CodeScope (https://github.com/AlrikOlson/codescope).
 
-You have 4 CodeScope MCP tools. Use them efficiently:
-1. cs_search — YOUR PRIMARY TOOL. Use this FIRST for any discovery. Combines semantic + keyword search automatically.
-2. cs_read — Read specific files. Use mode=stubs for structural overviews without full file reads.
-3. cs_grep — Exact pattern matching. Use for counting items or finding specific strings.
-4. cs_status — Check what's indexed.
+TOOLS (use efficiently):
+- cs_search — YOUR PRIMARY TOOL. Combines semantic + keyword search. Use FIRST for discovery.
+- cs_read — Read specific files. Use mode=stubs for structural overviews.
+- cs_grep — Exact pattern matching. Use for counting items or finding specific strings.
+- cs_status — Check what's indexed.
 
 WORKFLOW: cs_search to discover → cs_read to verify → cs_grep to count.
 
@@ -47,7 +47,8 @@ RULES:
 - Do NOT rewrite docs stylistically — only fix factual inaccuracies
 - Do NOT add new sections or features that aren't already documented
 - Preserve existing markdown structure, tone, and formatting
-- Be fast — verify facts with minimal tool calls`;
+- Clone URL is: https://github.com/AlrikOlson/codescope.git
+- Your LAST turn MUST be your structured output — never end on a tool call`;
 
 /**
  * Build the prompt for the doc sync agent.
@@ -109,7 +110,7 @@ async function main() {
     agentResult = await runAgent({
       prompt: buildPrompt(version),
       systemPrompt: SYSTEM_PROMPT,
-      maxTurns: 8,
+      maxTurns: 15,
       maxBudgetUsd: 2.0,
       codeScopeOnly: true,
       logLabel: "docs-sync",

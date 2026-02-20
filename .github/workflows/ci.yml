@@ -78,7 +78,7 @@ jobs:
             if [ "$CODE" = "true" ] || [ "$TESTS" = "true" ] || [ "$CI" = "true" ]; then
               SHOULD_LINT=true
             fi
-            if [ "$CODE" = "true" ] || [ "$TESTS" = "true" ]; then
+            if [ "$CODE" = "true" ] || [ "$TESTS" = "true" ] || [ "$CI" = "true" ]; then
               SHOULD_TEST=true
             fi
           fi
