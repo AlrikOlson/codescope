@@ -222,9 +222,9 @@ jobs:
       - name: Verify archive
         run: |
           if [[ "${{ matrix.archive }}" == *.zip ]]; then
-            7z l ${{ matrix.archive }} | grep -q codescope-server
+            7z l ${{ matrix.archive }} | grep codescope-server > /dev/null
           else
-            tar tzf ${{ matrix.archive }} | grep -q codescope-server
+            tar tzf ${{ matrix.archive }} | grep codescope-server > /dev/null
           fi
         shell: bash
 
