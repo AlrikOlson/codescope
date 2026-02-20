@@ -1,0 +1,65 @@
+name: Setup CodeScope Server
+description: >
+  Restore cached codescope-server binary and BERT model, or build from source
+  if cache misses. Eliminates redundant builds across workflow jobs when server
+  source hasn't changed.
+
+inputs:
+  init-args:
+    description: 'Arguments for codescope-server init (e.g. ". --semantic")'
+    required: false
+    default: ''
+
+outputs:
+  binary-path:
+    description: Path to the codescope-server binary
+    value: ${{ steps.paths.outputs.binary }}
+  cache-hit:
+    description: Whether the binary was restored from cache
+    value: ${{ steps.binary-cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve paths
+      id: paths
+      shell: bash
+      run: |
+        echo "binary=${{ github.workspace }}/server/target/release/codescope-server" >> "$GITHUB_OUTPUT"
+
+    # ── Binary cache ──
+    - name: Restore codescope-server binary
+      id: binary-cache
+      uses: actions/cache@v4
+      with:
+        path: server/target/release/codescope-server
+        key: codescope-server-linux-x64-${{ hashFiles('server/src/**', 'server/Cargo.toml', 'server/Cargo.lock') }}
+
+    - name: Install Rust toolchain
+      if: steps.binary-cache.outputs.cache-hit != 'true'
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Restore Cargo build cache
+      if: steps.binary-cache.outputs.cache-hit != 'true'
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: server
+
+    - name: Build codescope-server
+      if: steps.binary-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: cargo build --release --manifest-path server/Cargo.toml
+
+    # ── BERT model cache ──
+    - name: Restore BERT model cache
+      if: inputs.init-args != ''
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2
+        key: bert-all-MiniLM-L6-v2-v1
+
+    # ── Initialize index ──
+    - name: Initialize CodeScope index
+      if: inputs.init-args != ''
+      shell: bash
+      run: ${{ steps.paths.outputs.binary }} init ${{ inputs.init-args }}
