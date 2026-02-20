@@ -12,7 +12,7 @@
 
 import { runAgent, writeStepSummary } from "./lib/agent.mjs";
 
-const MAX_TURNS = 6;
+const MAX_TURNS = 10;
 const MAX_BUDGET_USD = 1.0;
 
 const outputSchema = {
@@ -35,13 +35,13 @@ const outputSchema = {
 const systemPrompt = `You are a QA agent validating that CodeScope MCP tools work correctly.
 You have 4 tools: cs_status, cs_search, cs_grep, cs_read.
 
-Your job:
-1. Call cs_status — verify repos are indexed, note file count and languages.
-2. Call cs_search with a meaningful query (e.g. "MCP server tool dispatch") — verify results are returned and ranked.
-3. Call cs_grep for an exact pattern (e.g. "pub fn") — verify matching lines are shown.
-4. Call cs_read on one file in stubs mode — verify structural outline is returned.
+Your job — call each tool EXACTLY ONCE, then report findings:
+1. cs_status — verify repos are indexed, note file count and languages.
+2. cs_search with query "pub fn" — verify file results are returned.
+3. cs_grep with query "pub fn" and ext "rs" — verify matching lines are shown.
+4. cs_read with path "server/src/main.rs" and mode "stubs" — verify structural outline is returned.
 
-Be concise. Use each tool exactly once. Report your findings in the structured output.`;
+IMPORTANT: Do NOT retry failed tools. If a tool returns an error or empty results, mark it as failed and move on. Use each tool exactly once.`;
 
 const prompt = `Validate the CodeScope MCP server by testing all 4 tools against this codebase. Report your findings.`;
 
