@@ -10,9 +10,89 @@ permissions:
 
 jobs:
   # ──────────────────────────────────────────────
+  # Change detection — skip unnecessary jobs
+  # ──────────────────────────────────────────────
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    outputs:
+      should_lint: ${{ steps.decide.outputs.should_lint }}
+      should_test: ${{ steps.decide.outputs.should_test }}
+      should_release: ${{ steps.decide.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: detect
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
+
+          if [[ "$BASE" == 0000* ]]; then
+            CHANGED=$(git ls-files)
+          else
+            CHANGED=$(git diff --name-only "$BASE" HEAD)
+          fi
+
+          echo "--- Changed files ---"
+          echo "$CHANGED"
+          echo "---"
+
+          CODE=false; TESTS=false; CI=false
+
+          if echo "$CHANGED" | grep -qE '^server/(src/|Cargo\.)'; then CODE=true; fi
+          if echo "$CHANGED" | grep -qE '^(src/|package\.json$|package-lock\.json$|tsconfig|vite\.config)'; then CODE=true; fi
+          if echo "$CHANGED" | grep -qE '^server/(setup\.sh$|codescope-)'; then CODE=true; fi
+          if echo "$CHANGED" | grep -qE '^tests/'; then TESTS=true; fi
+          if echo "$CHANGED" | grep -qE '^\.github/'; then CI=true; fi
+
+          IS_BOT=false
+          AUTHOR=$(git log -1 --format='%an')
+          if [ "$AUTHOR" = "github-actions[bot]" ]; then IS_BOT=true; fi
+
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "tests=$TESTS" >> "$GITHUB_OUTPUT"
+          echo "ci=$CI" >> "$GITHUB_OUTPUT"
+          echo "is_bot=$IS_BOT" >> "$GITHUB_OUTPUT"
+
+      - id: decide
+        run: |
+          CODE="${{ steps.detect.outputs.code }}"
+          TESTS="${{ steps.detect.outputs.tests }}"
+          CI="${{ steps.detect.outputs.ci }}"
+          IS_BOT="${{ steps.detect.outputs.is_bot }}"
+
+          SHOULD_LINT=false
+          if [ "$CODE" = "true" ] || [ "$TESTS" = "true" ] || [ "$CI" = "true" ]; then
+            SHOULD_LINT=true
+          fi
+
+          SHOULD_TEST=false
+          if [ "$CODE" = "true" ] || [ "$TESTS" = "true" ]; then
+            SHOULD_TEST=true
+          fi
+
+          SHOULD_RELEASE=false
+          if [ "$CODE" = "true" ] && [ "$IS_BOT" = "false" ]; then
+            SHOULD_RELEASE=true
+          fi
+
+          echo "should_lint=$SHOULD_LINT" >> "$GITHUB_OUTPUT"
+          echo "should_test=$SHOULD_TEST" >> "$GITHUB_OUTPUT"
+          echo "should_release=$SHOULD_RELEASE" >> "$GITHUB_OUTPUT"
+
+          echo "lint=$SHOULD_LINT test=$SHOULD_TEST release=$SHOULD_RELEASE"
+
+  # ──────────────────────────────────────────────
   # Lint — fast, no build needed, runs in parallel
   # ──────────────────────────────────────────────
   lint:
+    needs: changes
+    if: needs.changes.outputs.should_lint == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -36,6 +116,8 @@ jobs:
   # Build + test — runs in parallel with lint
   # ──────────────────────────────────────────────
   test:
+    needs: changes
+    if: needs.changes.outputs.should_test == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -70,8 +152,10 @@ jobs:
   # AI version analysis — master only
   # ──────────────────────────────────────────────
   version:
-    needs: [lint, test]
-    if: github.ref == 'refs/heads/master'
+    needs: [changes, lint, test]
+    if: |
+      needs.changes.outputs.should_release == 'true' &&
+      github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     outputs:
       new_tag: ${{ steps.ai.outputs.new_tag }}
@@ -117,11 +201,12 @@ jobs:
   # Pre-built cross binary for Linux, native for macOS.
   # ──────────────────────────────────────────────
   build:
-    needs: [lint, test, version]
+    needs: [changes, lint, test, version]
     if: |
       always() &&
-      needs.lint.result == 'success' &&
-      needs.test.result == 'success' &&
+      needs.changes.outputs.should_release == 'true' &&
+      (needs.lint.result == 'success' || needs.lint.result == 'skipped') &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
       (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/dev')
     strategy:
       matrix:
