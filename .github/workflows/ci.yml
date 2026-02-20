@@ -51,6 +51,7 @@ jobs:
           if echo "$CHANGED" | grep -qE '^server/(src/|Cargo\.)'; then CODE=true; fi
           if echo "$CHANGED" | grep -qE '^(src/|package\.json$|package-lock\.json$|tsconfig|vite\.config)'; then CODE=true; fi
           if echo "$CHANGED" | grep -qE '^server/(setup\.sh$|setup\.ps1$|codescope-)'; then CODE=true; fi
+          if echo "$CHANGED" | grep -qE '^\.github/scripts/'; then CODE=true; fi
           if echo "$CHANGED" | grep -qE '^tests/'; then TESTS=true; fi
           if echo "$CHANGED" | grep -qE '^\.github/'; then CI=true; fi
 
