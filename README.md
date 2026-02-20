@@ -245,14 +245,14 @@ npx tsc --noEmit
 Single workflow (`ci.yml`):
 
 ```
-PR:      lint ─┐ (parallel)
-         test ─┘
+PR:      changes → lint ─┐ (parallel)
+                   test ─┘
 
-master:  lint ─┬─→ version (AI) ─→ build (6 platforms) ─→ stable-release
-         test ─┘                                         ─→ channel-release (edge)
+master:  changes → lint ─┬─→ version (AI) ─→ build (6 platforms) ─→ stable-release
+                   test ─┘                                         ─→ channel-release (edge)
 
-dev:     lint ─┬─→ build (6 platforms) ─→ channel-release (dev)
-         test ─┘
+dev:     changes → lint ─┬─→ build (6 platforms) ─→ channel-release (dev)
+                   test ─┘
 ```
 
 Version analysis uses the [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/sdk) with CodeScope's own MCP tools to analyze changes and determine semantic version bumps, commit messages, and release notes. All version files (`Cargo.toml`, `package.json`, `package-lock.json`) are updated atomically during release.
@@ -286,11 +286,11 @@ src/               React 18 frontend (Vite + TypeScript)
 ├── selectionActions.ts   Unified selection logic (module toggle, dep selection)
 ├── treemap/              Squarified treemap visualization (Canvas 2D)
 │   ├── CodebaseMap.tsx   Treemap view component
-│   ├── buildTreemapData  Tree → treemap node conversion with value dampening
+│   ├── buildTreemapData.ts  Tree → treemap node conversion with value dampening
 │   ├── layout.ts         Squarified layout algorithm
 │   └── render.ts         Canvas rendering with zoom/pan viewport
 └── depgraph/             3D dependency graph (Three.js)
-    ├── DependencyGraph   Graph view component with inspect panels
+    ├── DependencyGraph.tsx   Graph view component with inspect panels
     ├── simulation.ts     Force-directed layout (spatial hash, cluster gravity)
     ├── nodeRenderer.ts   Instanced mesh rendering with LOD geometry
     ├── edgeRenderer.ts   Edge lines with public/private styling

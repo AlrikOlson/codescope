@@ -45,7 +45,7 @@ npx tsc --noEmit
 bash tests/integration.sh
 ```
 
-CI runs all of these automatically on every pull request.
+CI runs all of these automatically on pull requests that change code.
 
 ## Pull Requests
 
@@ -60,7 +60,7 @@ CI runs all of these automatically on every pull request.
 The backend lives in `server/src/` with these modules:
 
 | Module | Purpose |
-|--------|---------|
+|--------|-------|
 | `main.rs` | CLI parsing, HTTP server (Axum), MCP entry |
 | `mcp.rs` | MCP stdio server, 19 tools |
 | `api.rs` | HTTP API handlers |

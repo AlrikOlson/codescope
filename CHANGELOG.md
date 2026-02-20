@@ -4,6 +4,11 @@ All notable changes to CodeScope will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.2] - 2026-02-20
+
+### Changed
+- CI workflow now uses path-based change detection to skip unnecessary lint, test, and release jobs when unrelated files are modified
+
 ## [0.6.1] - 2026-02-20
 
 ### Added
