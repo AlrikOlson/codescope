@@ -4,6 +4,24 @@ All notable changes to CodeScope will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.8.0] - 2026-02-20
+
+### Added
+- MCP Streamable HTTP transport for HTTP-based MCP clients (`server/src/mcp_http.rs`)
+- OAuth 2.0 discovery and spec-compliant authorization support (`server/src/auth.rs`)
+- PowerShell installer for Windows and WSL environments (`server/setup.ps1`)
+- Dedicated `release.yml` CI/CD workflow split from `ci.yml`
+
+### Changed
+- Consolidated MCP tools from 19 → 4 with unified semantic search interface (`server/src/mcp.rs`)
+- `main.rs` updated to register HTTP transport routes and OAuth endpoints
+- AI agent blocks built-in Read/Glob/Grep tools to enforce CodeScope MCP usage
+
+### Fixed
+- `setup.sh` `dirname` resolution error; improved WSL and PowerShell environment detection
+- AI release agent misclassifying existing features as new additions
+- AI doc-sync performance; pinned checkout refs; blocked runaway sub-agent spawning
+
 ## [0.7.0] - 2026-02-20
 
 ### Added
