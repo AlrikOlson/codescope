@@ -6,11 +6,11 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   # ──────────────────────────────────────────────
@@ -22,7 +22,7 @@ jobs:
     outputs:
       should_lint: ${{ steps.decide.outputs.should_lint }}
       should_test: ${{ steps.decide.outputs.should_test }}
-      should_release: ${{ steps.decide.outputs.should_release }}
+      has_code_changes: ${{ steps.decide.outputs.has_code_changes }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,7 +50,7 @@ jobs:
 
           if echo "$CHANGED" | grep -qE '^server/(src/|Cargo\.)'; then CODE=true; fi
           if echo "$CHANGED" | grep -qE '^(src/|package\.json$|package-lock\.json$|tsconfig|vite\.config)'; then CODE=true; fi
-          if echo "$CHANGED" | grep -qE '^server/(setup\.sh$|codescope-)'; then CODE=true; fi
+          if echo "$CHANGED" | grep -qE '^server/(setup\.sh$|setup\.ps1$|codescope-)'; then CODE=true; fi
           if echo "$CHANGED" | grep -qE '^tests/'; then TESTS=true; fi
           if echo "$CHANGED" | grep -qE '^\.github/'; then CI=true; fi
 
@@ -70,29 +70,26 @@ jobs:
           CI="${{ steps.detect.outputs.ci }}"
           IS_BOT="${{ steps.detect.outputs.is_bot }}"
 
+          # Skip lint/test on bot version-bump commits
           SHOULD_LINT=false
-          if [ "$CODE" = "true" ] || [ "$TESTS" = "true" ] || [ "$CI" = "true" ]; then
-            SHOULD_LINT=true
-          fi
-
           SHOULD_TEST=false
-          if [ "$CODE" = "true" ] || [ "$TESTS" = "true" ]; then
-            SHOULD_TEST=true
-          fi
-
-          SHOULD_RELEASE=false
-          if [ "$CODE" = "true" ] && [ "$IS_BOT" = "false" ]; then
-            SHOULD_RELEASE=true
+          if [ "$IS_BOT" = "false" ]; then
+            if [ "$CODE" = "true" ] || [ "$TESTS" = "true" ] || [ "$CI" = "true" ]; then
+              SHOULD_LINT=true
+            fi
+            if [ "$CODE" = "true" ] || [ "$TESTS" = "true" ]; then
+              SHOULD_TEST=true
+            fi
           fi
 
           echo "should_lint=$SHOULD_LINT" >> "$GITHUB_OUTPUT"
           echo "should_test=$SHOULD_TEST" >> "$GITHUB_OUTPUT"
-          echo "should_release=$SHOULD_RELEASE" >> "$GITHUB_OUTPUT"
+          echo "has_code_changes=$CODE" >> "$GITHUB_OUTPUT"
 
-          echo "lint=$SHOULD_LINT test=$SHOULD_TEST release=$SHOULD_RELEASE"
+          echo "lint=$SHOULD_LINT test=$SHOULD_TEST code=$CODE bot=$IS_BOT"
 
   # ──────────────────────────────────────────────
-  # Lint — fast, no build needed, runs in parallel
+  # Lint — fast, no build needed
   # ──────────────────────────────────────────────
   lint:
     needs: changes
@@ -117,7 +114,7 @@ jobs:
         run: npx tsc --noEmit
 
   # ──────────────────────────────────────────────
-  # Build + test — runs in parallel with lint
+  # Build + test
   # ──────────────────────────────────────────────
   test:
     needs: changes
@@ -143,388 +140,3 @@ jobs:
         run: npm run build
       - name: Run integration tests
         run: bash tests/integration.sh
-
-      - name: Upload server binary
-        if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/dev'
-        uses: actions/upload-artifact@v4
-        with:
-          name: codescope-server-ci
-          path: server/target/release/codescope-server
-          retention-days: 1
-
-  # ──────────────────────────────────────────────
-  # AI version analysis — master only
-  # ──────────────────────────────────────────────
-  version:
-    needs: [changes, lint, test]
-    if: |
-      needs.changes.outputs.should_release == 'true' &&
-      github.ref == 'refs/heads/master'
-    runs-on: ubuntu-latest
-    outputs:
-      new_tag: ${{ steps.ai.outputs.new_tag }}
-      skip: ${{ steps.ai.outputs.skip }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install Claude Agent SDK
-        run: npm install @anthropic-ai/claude-agent-sdk
-
-      - name: Download server binary from test
-        uses: actions/download-artifact@v4
-        with:
-          name: codescope-server-ci
-          path: /usr/local/bin
-      - run: chmod +x /usr/local/bin/codescope-server
-
-      - name: Initialize CodeScope index (with semantic)
-        run: codescope-server init . --semantic
-
-      - name: AI release analysis
-        id: ai
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: node .github/scripts/ai-release.mjs
-
-      - name: Upload AI release output
-        if: steps.ai.outputs.skip != 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ai-release-output
-          path: /tmp/ai-release-output.json
-          retention-days: 1
-
-  # ──────────────────────────────────────────────
-  # Cross-platform builds — master/dev only
-  # Pre-built cross binary for Linux, native for macOS.
-  # ──────────────────────────────────────────────
-  build:
-    needs: [changes, lint, test, version]
-    if: |
-      always() &&
-      needs.changes.outputs.should_release == 'true' &&
-      (needs.lint.result == 'success' || needs.lint.result == 'skipped') &&
-      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
-      (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/dev')
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            archive: codescope-server-linux-x86_64.tar.gz
-            use_cross: true
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
-            archive: codescope-server-linux-aarch64.tar.gz
-            use_cross: true
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            archive: codescope-server-macos-x86_64.tar.gz
-            use_cross: false
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            archive: codescope-server-macos-aarch64.tar.gz
-            use_cross: false
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            archive: codescope-server-windows-x86_64.zip
-            use_cross: false
-          - target: aarch64-pc-windows-msvc
-            os: windows-latest
-            archive: codescope-server-windows-aarch64.zip
-            use_cross: false
-
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Bake release version into manifests
-        if: needs.version.result == 'success' && needs.version.outputs.skip != 'true'
-        shell: bash
-        run: |
-          VERSION="${{ needs.version.outputs.new_tag }}"
-          VERSION="${VERSION#v}"
-          perl -i -pe "s/^version = \".*\"/version = \"$VERSION\"/" server/Cargo.toml
-          node -e "
-            const fs = require('fs');
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = '$VERSION';
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: server
-          key: ${{ matrix.target }}
-
-      - name: Install cross
-        if: matrix.use_cross
-        uses: taiki-e/install-action@cross
-
-      - name: Build binary
-        shell: bash
-        run: |
-          BUILD_CMD="cargo"
-          if [ "${{ matrix.use_cross }}" = "true" ]; then BUILD_CMD="cross"; fi
-          $BUILD_CMD build --release --manifest-path server/Cargo.toml --target ${{ matrix.target }} --features semantic
-
-      - name: Free disk for packaging
-        shell: bash
-        run: |
-          # Cross builds produce multi-GB intermediates that can exhaust runner disk
-          rm -rf server/target/${{ matrix.target }}/release/build
-          rm -rf server/target/${{ matrix.target }}/release/deps
-          rm -rf server/target/${{ matrix.target }}/release/.fingerprint
-          rm -rf server/target/${{ matrix.target }}/release/incremental
-
-      - name: Package archive
-        run: |
-          mkdir -p staging
-          if [[ "${{ matrix.archive }}" == *.zip ]]; then
-            cp server/target/${{ matrix.target }}/release/codescope-server.exe staging/
-            cp server/codescope-init staging/
-            cp server/codescope-web staging/
-            cp LICENSE README.md staging/
-            cd staging && 7z a -tzip ../${{ matrix.archive }} . && cd ..
-          else
-            cp server/target/${{ matrix.target }}/release/codescope-server staging/
-            cp server/codescope-init staging/
-            cp server/codescope-web staging/
-            chmod +x staging/codescope-init staging/codescope-web
-            cp LICENSE README.md staging/
-            tar czf ${{ matrix.archive }} -C staging .
-          fi
-        shell: bash
-
-      - name: Verify archive
-        run: |
-          if [[ "${{ matrix.archive }}" == *.zip ]]; then
-            7z l ${{ matrix.archive }} | grep codescope-server > /dev/null
-          else
-            tar tzf ${{ matrix.archive }} | grep codescope-server > /dev/null
-          fi
-        shell: bash
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.archive }}
-          path: ${{ matrix.archive }}
-
-  # ──────────────────────────────────────────────
-  # Stable release — master + new version only
-  # ──────────────────────────────────────────────
-  stable-release:
-    needs: [version, build]
-    if: |
-      github.ref == 'refs/heads/master' &&
-      needs.version.outputs.skip != 'true' &&
-      needs.build.result == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Download AI release output
-        uses: actions/download-artifact@v4
-        with:
-          name: ai-release-output
-          path: /tmp
-
-      - name: Install Claude Agent SDK
-        run: npm install @anthropic-ai/claude-agent-sdk
-
-      - name: Download server binary for doc sync
-        uses: actions/download-artifact@v4
-        with:
-          name: codescope-server-ci
-          path: /usr/local/bin
-      - run: chmod +x /usr/local/bin/codescope-server
-
-      - name: Initialize CodeScope index (with semantic)
-        run: codescope-server init . --semantic
-
-      - name: AI documentation sync
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          NEW_VERSION: ${{ needs.version.outputs.new_tag }}
-        run: node .github/scripts/ai-docs-sync.mjs
-
-      - name: Apply doc updates
-        run: |
-          node -e "
-            const fs = require('fs');
-            const path = '/tmp/ai-docs-sync-output.json';
-            if (!fs.existsSync(path)) process.exit(0);
-            const data = JSON.parse(fs.readFileSync(path, 'utf8'));
-            for (const update of (data.updates || [])) {
-              fs.writeFileSync(update.file, update.content);
-              console.error('Updated: ' + update.file + ' — ' + update.reason);
-            }
-          "
-
-      - name: Update version files, commit, and tag
-        run: |
-          NEW_TAG="${{ needs.version.outputs.new_tag }}"
-          VERSION="${NEW_TAG#v}"
-
-          COMMIT_MSG=$(node -e "
-            const fs = require('fs');
-            const data = JSON.parse(fs.readFileSync('/tmp/ai-release-output.json', 'utf8'));
-            process.stdout.write(data.commitMessage);
-          " 2>/dev/null || echo "release: $NEW_TAG")
-
-          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" server/Cargo.toml
-
-          # Sync frontend version
-          node -e "
-            const fs = require('fs');
-            for (const f of ['package.json', 'package-lock.json']) {
-              const pkg = JSON.parse(fs.readFileSync(f, 'utf8'));
-              pkg.version = '$VERSION';
-              if (pkg.packages && pkg.packages['']) pkg.packages[''].version = '$VERSION';
-              fs.writeFileSync(f, JSON.stringify(pkg, null, 2) + '\n');
-            }
-          "
-
-          # Update CHANGELOG.md with AI-generated entry
-          node -e "
-            const fs = require('fs');
-            const data = JSON.parse(fs.readFileSync('/tmp/ai-release-output.json', 'utf8'));
-            const entry = data.changelogEntry || '';
-            if (entry) {
-              const changelog = fs.readFileSync('CHANGELOG.md', 'utf8');
-              // Insert after the header line ('# Changelog\n...\n')
-              const marker = changelog.indexOf('\n## ');
-              if (marker !== -1) {
-                const updated = changelog.slice(0, marker) + '\n' + entry + '\n' + changelog.slice(marker);
-                fs.writeFileSync('CHANGELOG.md', updated);
-              } else {
-                // No existing entries — append after header
-                fs.writeFileSync('CHANGELOG.md', changelog.trimEnd() + '\n\n' + entry + '\n');
-              }
-              console.error('Updated CHANGELOG.md');
-            }
-          "
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add server/Cargo.toml package.json package-lock.json CHANGELOG.md README.md CONTRIBUTING.md
-          git diff --cached --quiet || git commit -m "$COMMIT_MSG"
-          git tag -f "$NEW_TAG"
-          git push origin HEAD:master --tags --force
-
-      - name: Download build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Read AI release body
-        id: notes
-        run: |
-          BODY=$(node -e "
-            const fs = require('fs');
-            const data = JSON.parse(fs.readFileSync('/tmp/ai-release-output.json', 'utf8'));
-            process.stdout.write(data.releaseBody || '');
-          ")
-          if [ -z "$BODY" ]; then
-            echo "use_generated=true" >> "$GITHUB_OUTPUT"
-          else
-            {
-              echo "body<<RELEASE_BODY_DELIM"
-              echo "$BODY"
-              echo "RELEASE_BODY_DELIM"
-            } >> "$GITHUB_OUTPUT"
-            echo "use_generated=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Create GitHub Release (AI body)
-        if: steps.notes.outputs.use_generated == 'false'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.version.outputs.new_tag }}
-          body: ${{ steps.notes.outputs.body }}
-          files: |
-            artifacts/*.tar.gz
-            artifacts/*.zip
-
-      - name: Create GitHub Release (auto-generated)
-        if: steps.notes.outputs.use_generated == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.version.outputs.new_tag }}
-          generate_release_notes: true
-          files: |
-            artifacts/*.tar.gz
-            artifacts/*.zip
-
-  # ──────────────────────────────────────────────
-  # Channel release (edge/dev) — master/dev only
-  # ──────────────────────────────────────────────
-  channel-release:
-    needs: build
-    if: |
-      always() &&
-      needs.build.result == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Determine channel config
-        id: channel
-        run: |
-          REF="${{ github.ref }}"
-          case "$REF" in
-            refs/heads/master)
-              echo "tag=edge" >> "$GITHUB_OUTPUT"
-              echo "title=Edge (latest master)" >> "$GITHUB_OUTPUT"
-              echo "install_flag=--edge" >> "$GITHUB_OUTPUT"
-              echo "body_prefix=Bleeding-edge build from the latest commit on master." >> "$GITHUB_OUTPUT"
-              ;;
-            refs/heads/dev)
-              echo "tag=dev" >> "$GITHUB_OUTPUT"
-              echo "title=Dev (latest dev branch)" >> "$GITHUB_OUTPUT"
-              echo "install_flag=--dev" >> "$GITHUB_OUTPUT"
-              echo "body_prefix=Development build from the latest commit on dev." >> "$GITHUB_OUTPUT"
-              ;;
-          esac
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Create/update channel release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.channel.outputs.tag }}
-          name: ${{ steps.channel.outputs.title }}
-          body: |
-            ${{ steps.channel.outputs.body_prefix }}
-
-            **Commit:** ${{ github.sha }}
-            **Updated:** ${{ github.event.head_commit.timestamp }}
-
-            Install: `curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- ${{ steps.channel.outputs.install_flag }}`
-          prerelease: true
-          make_latest: false
-          files: |
-            artifacts/*.tar.gz
-            artifacts/*.zip

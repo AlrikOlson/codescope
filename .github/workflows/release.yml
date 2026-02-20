@@ -1,0 +1,627 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [master, dev]
+  workflow_dispatch:
+    inputs:
+      force_version:
+        description: "Force a specific version tag (e.g. v1.2.3). Leave empty for AI analysis."
+        required: false
+        type: string
+      skip_ai_docs:
+        description: "Skip AI documentation sync"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.workflow_run.head_branch || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Release gate — detect partial state, decide action
+  # ──────────────────────────────────────────────
+  release-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      action: ${{ steps.check.outputs.action }}
+      existing_tag: ${{ steps.check.outputs.existing_tag }}
+      existing_version: ${{ steps.check.outputs.existing_version }}
+      branch: ${{ steps.check.outputs.branch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect release state
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Determine which branch we're on
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            BRANCH="${{ github.ref_name }}"
+          else
+            BRANCH="${{ github.event.workflow_run.head_branch }}"
+          fi
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+          # For workflow_run: skip if CI failed
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            if [ "${{ github.event.workflow_run.conclusion }}" != "success" ]; then
+              echo "action=skip" >> "$GITHUB_OUTPUT"
+              echo "CI failed — skipping release"
+              exit 0
+            fi
+          fi
+
+          # 1. Check if HEAD is a bot version-bump commit
+          AUTHOR=$(git log -1 --format='%an')
+          MSG=$(git log -1 --format='%s')
+          if [ "$AUTHOR" = "github-actions[bot]" ] && echo "$MSG" | grep -qE '^release:'; then
+            echo "action=skip_bot" >> "$GITHUB_OUTPUT"
+            echo "Bot version-bump commit — skipping"
+            exit 0
+          fi
+
+          # 2. Check if HEAD has a semver tag
+          HEAD_TAG=$(git tag --points-at HEAD | grep -E '^v[0-9]+\.' | head -1 || true)
+
+          if [ -n "$HEAD_TAG" ]; then
+            echo "existing_tag=$HEAD_TAG" >> "$GITHUB_OUTPUT"
+            echo "existing_version=${HEAD_TAG#v}" >> "$GITHUB_OUTPUT"
+
+            # 3. Check if GitHub Release exists for this tag
+            if gh release view "$HEAD_TAG" --json tagName >/dev/null 2>&1; then
+              ASSET_COUNT=$(gh release view "$HEAD_TAG" --json assets --jq '.assets | length' 2>/dev/null || echo 0)
+              if [ "$ASSET_COUNT" -gt 0 ]; then
+                echo "action=skip" >> "$GITHUB_OUTPUT"
+                echo "Tag $HEAD_TAG has release with $ASSET_COUNT assets — fully complete"
+                exit 0
+              fi
+            fi
+
+            # Tag exists but no release (or no assets) — complete the release
+            echo "action=complete" >> "$GITHUB_OUTPUT"
+            echo "Tag $HEAD_TAG exists but release incomplete — completing"
+            exit 0
+          fi
+
+          # 4. Check for Edge Case 2: version bumped by bot but no tag
+          CARGO_VERSION=$(grep -m1 '^version = ' server/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          TAG_FOR_VERSION="v$CARGO_VERSION"
+          LAST_CARGO_AUTHOR=$(git log -1 --format='%an' -- server/Cargo.toml)
+
+          if [ "$LAST_CARGO_AUTHOR" = "github-actions[bot]" ]; then
+            TAG_EXISTS=$(git tag -l "$TAG_FOR_VERSION")
+            if [ -z "$TAG_EXISTS" ]; then
+              echo "action=complete" >> "$GITHUB_OUTPUT"
+              echo "existing_version=$CARGO_VERSION" >> "$GITHUB_OUTPUT"
+              echo "Version $CARGO_VERSION committed by bot but not tagged — completing"
+              exit 0
+            fi
+          fi
+
+          # 5. Dev branch — channel release only
+          if [ "$BRANCH" = "dev" ]; then
+            echo "action=channel_only" >> "$GITHUB_OUTPUT"
+            echo "Dev branch — channel release only"
+            exit 0
+          fi
+
+          # 6. Check for code changes (skip release for CI-only/docs-only changes)
+          LAST_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            CHANGED=$(git diff --name-only "$LAST_TAG"..HEAD 2>/dev/null || echo "")
+          else
+            CHANGED=$(git ls-files)
+          fi
+
+          HAS_CODE=false
+          if echo "$CHANGED" | grep -qE '^server/(src/|Cargo\.)'; then HAS_CODE=true; fi
+          if echo "$CHANGED" | grep -qE '^(src/|package\.json$|package-lock\.json$|tsconfig|vite\.config)'; then HAS_CODE=true; fi
+          if echo "$CHANGED" | grep -qE '^server/(setup\.sh$|setup\.ps1$|codescope-)'; then HAS_CODE=true; fi
+
+          if [ "$HAS_CODE" = "false" ]; then
+            echo "action=skip" >> "$GITHUB_OUTPUT"
+            echo "No code changes since last tag — skipping release"
+            exit 0
+          fi
+
+          # 7. Normal case
+          echo "action=full" >> "$GITHUB_OUTPUT"
+          echo "Full release flow"
+
+  # ──────────────────────────────────────────────
+  # AI version analysis — full releases only
+  # ──────────────────────────────────────────────
+  version:
+    needs: release-gate
+    if: needs.release-gate.outputs.action == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      new_tag: ${{ steps.resolve.outputs.new_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build CodeScope server
+        run: cargo build --release --manifest-path server/Cargo.toml
+
+      - name: Initialize CodeScope index
+        run: ./server/target/release/codescope-server init . --semantic
+
+      - name: Install Claude Agent SDK
+        run: npm install @anthropic-ai/claude-agent-sdk
+
+      - name: AI release analysis
+        id: ai
+        timeout-minutes: 5
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: node .github/scripts/ai-release.mjs
+
+      - name: Resolve version tag
+        id: resolve
+        run: |
+          if [ -n "${{ inputs.force_version }}" ]; then
+            echo "new_tag=${{ inputs.force_version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "new_tag=${{ steps.ai.outputs.new_tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload AI release output
+        if: steps.ai.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-release-output
+          path: /tmp/ai-release-output.json
+          retention-days: 1
+
+  # ──────────────────────────────────────────────
+  # Cross-platform builds
+  # ──────────────────────────────────────────────
+  build:
+    needs: [release-gate, version]
+    if: |
+      always() &&
+      needs.release-gate.result == 'success' &&
+      (
+        (needs.release-gate.outputs.action == 'full' && needs.version.result == 'success') ||
+        needs.release-gate.outputs.action == 'complete' ||
+        needs.release-gate.outputs.action == 'channel_only'
+      )
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: codescope-server-linux-x86_64.tar.gz
+            use_cross: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: codescope-server-linux-aarch64.tar.gz
+            use_cross: true
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: codescope-server-macos-x86_64.tar.gz
+            use_cross: false
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: codescope-server-macos-aarch64.tar.gz
+            use_cross: false
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: codescope-server-windows-x86_64.zip
+            use_cross: false
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            archive: codescope-server-windows-aarch64.zip
+            use_cross: false
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bake release version into manifests
+        shell: bash
+        run: |
+          if [ "${{ needs.release-gate.outputs.action }}" = "complete" ]; then
+            VERSION="${{ needs.release-gate.outputs.existing_version }}"
+          elif [ "${{ needs.release-gate.outputs.action }}" = "full" ]; then
+            VERSION="${{ needs.version.outputs.new_tag }}"
+            VERSION="${VERSION#v}"
+          else
+            # channel_only: use version from Cargo.toml as-is
+            VERSION=""
+          fi
+
+          if [ -n "$VERSION" ]; then
+            perl -i -pe "s/^version = \".*\"/version = \"$VERSION\"/" server/Cargo.toml
+            node -e "
+              const fs = require('fs');
+              const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+              pkg.version = '$VERSION';
+              fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+            "
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+          key: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.use_cross
+        uses: taiki-e/install-action@cross
+
+      - name: Build binary
+        shell: bash
+        run: |
+          BUILD_CMD="cargo"
+          if [ "${{ matrix.use_cross }}" = "true" ]; then BUILD_CMD="cross"; fi
+          $BUILD_CMD build --release --manifest-path server/Cargo.toml --target ${{ matrix.target }} --features semantic
+
+      - name: Free disk for packaging
+        shell: bash
+        run: |
+          rm -rf server/target/${{ matrix.target }}/release/build
+          rm -rf server/target/${{ matrix.target }}/release/deps
+          rm -rf server/target/${{ matrix.target }}/release/.fingerprint
+          rm -rf server/target/${{ matrix.target }}/release/incremental
+
+      - name: Package archive
+        shell: bash
+        run: |
+          mkdir -p staging
+          if [[ "${{ matrix.archive }}" == *.zip ]]; then
+            cp server/target/${{ matrix.target }}/release/codescope-server.exe staging/
+            cp server/codescope-init staging/
+            cp server/codescope-web staging/
+            cp LICENSE README.md staging/
+            cd staging && 7z a -tzip ../${{ matrix.archive }} . && cd ..
+          else
+            cp server/target/${{ matrix.target }}/release/codescope-server staging/
+            cp server/codescope-init staging/
+            cp server/codescope-web staging/
+            chmod +x staging/codescope-init staging/codescope-web
+            cp LICENSE README.md staging/
+            tar czf ${{ matrix.archive }} -C staging .
+          fi
+
+      - name: Verify archive
+        shell: bash
+        run: |
+          if [[ "${{ matrix.archive }}" == *.zip ]]; then
+            7z l ${{ matrix.archive }} | grep codescope-server > /dev/null
+          else
+            tar tzf ${{ matrix.archive }} | grep codescope-server > /dev/null
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+
+  # ──────────────────────────────────────────────
+  # Stable release — commit, tag, push, GH release
+  # ──────────────────────────────────────────────
+  stable-release:
+    needs: [release-gate, version, build]
+    if: |
+      always() &&
+      needs.build.result == 'success' &&
+      (needs.release-gate.outputs.action == 'full' || needs.release-gate.outputs.action == 'complete')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine release tag and mode
+        id: tag
+        run: |
+          ACTION="${{ needs.release-gate.outputs.action }}"
+          if [ "$ACTION" = "complete" ]; then
+            TAG="${{ needs.release-gate.outputs.existing_tag }}"
+            # Edge case 2: tag may not exist yet, construct from version
+            if [ -z "$TAG" ]; then
+              TAG="v${{ needs.release-gate.outputs.existing_version }}"
+            fi
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            echo "needs_commit=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ needs.version.outputs.new_tag }}" >> "$GITHUB_OUTPUT"
+            echo "needs_commit=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── AI Doc Sync (full releases only) ──
+
+      - uses: actions/setup-node@v4
+        if: steps.tag.outputs.needs_commit == 'true'
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.tag.outputs.needs_commit == 'true' && inputs.skip_ai_docs != true
+
+      - uses: Swatinem/rust-cache@v2
+        if: steps.tag.outputs.needs_commit == 'true' && inputs.skip_ai_docs != true
+        with:
+          workspaces: server
+
+      - name: Build CodeScope for doc sync
+        if: steps.tag.outputs.needs_commit == 'true' && inputs.skip_ai_docs != true
+        run: cargo build --release --manifest-path server/Cargo.toml
+
+      - name: Initialize CodeScope index
+        if: steps.tag.outputs.needs_commit == 'true' && inputs.skip_ai_docs != true
+        run: ./server/target/release/codescope-server init . --semantic
+
+      - name: Install Claude Agent SDK
+        if: steps.tag.outputs.needs_commit == 'true'
+        run: npm install @anthropic-ai/claude-agent-sdk
+
+      - name: Download AI release output
+        if: steps.tag.outputs.needs_commit == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-release-output
+          path: /tmp
+
+      - name: AI documentation sync
+        if: steps.tag.outputs.needs_commit == 'true' && inputs.skip_ai_docs != true
+        timeout-minutes: 10
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NEW_VERSION: ${{ steps.tag.outputs.tag }}
+        run: node .github/scripts/ai-docs-sync.mjs
+
+      - name: Apply doc updates
+        if: steps.tag.outputs.needs_commit == 'true'
+        run: |
+          node -e "
+            const fs = require('fs');
+            const path = '/tmp/ai-docs-sync-output.json';
+            if (!fs.existsSync(path)) process.exit(0);
+            const data = JSON.parse(fs.readFileSync(path, 'utf8'));
+            for (const update of (data.updates || [])) {
+              fs.writeFileSync(update.file, update.content);
+              console.error('Updated: ' + update.file + ' — ' + update.reason);
+            }
+          "
+
+      # ── Atomic release sequence ──
+
+      - name: "Release step 1: Update version files"
+        if: steps.tag.outputs.needs_commit == 'true'
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          VERSION="${TAG#v}"
+
+          # Cargo.toml
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" server/Cargo.toml
+
+          # package.json + package-lock.json
+          node -e "
+            const fs = require('fs');
+            for (const f of ['package.json', 'package-lock.json']) {
+              const pkg = JSON.parse(fs.readFileSync(f, 'utf8'));
+              pkg.version = '$VERSION';
+              if (pkg.packages && pkg.packages['']) pkg.packages[''].version = '$VERSION';
+              fs.writeFileSync(f, JSON.stringify(pkg, null, 2) + '\n');
+            }
+          "
+
+          # CHANGELOG.md
+          node -e "
+            const fs = require('fs');
+            try {
+              const data = JSON.parse(fs.readFileSync('/tmp/ai-release-output.json', 'utf8'));
+              const entry = data.changelogEntry || '';
+              if (entry) {
+                const changelog = fs.readFileSync('CHANGELOG.md', 'utf8');
+                const marker = changelog.indexOf('\n## ');
+                if (marker !== -1) {
+                  const updated = changelog.slice(0, marker) + '\n' + entry + '\n' + changelog.slice(marker);
+                  fs.writeFileSync('CHANGELOG.md', updated);
+                } else {
+                  fs.writeFileSync('CHANGELOG.md', changelog.trimEnd() + '\n\n' + entry + '\n');
+                }
+                console.error('Updated CHANGELOG.md');
+              }
+            } catch (e) {
+              console.error('CHANGELOG update skipped: ' + e.message);
+            }
+          "
+
+      - name: "Release step 2: Commit"
+        if: steps.tag.outputs.needs_commit == 'true'
+        id: commit
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          COMMIT_MSG=$(node -e "
+            const fs = require('fs');
+            const data = JSON.parse(fs.readFileSync('/tmp/ai-release-output.json', 'utf8'));
+            process.stdout.write(data.commitMessage);
+          " 2>/dev/null || echo "release: $TAG")
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add server/Cargo.toml package.json package-lock.json CHANGELOG.md README.md CONTRIBUTING.md
+          if git diff --cached --quiet; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "No changes to commit"
+          else
+            git commit -m "$COMMIT_MSG"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "Release step 3: Tag"
+        id: create_tag
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          # Check if tag already exists on remote
+          if git ls-remote --tags origin "$TAG" 2>/dev/null | grep -q "refs/tags/$TAG"; then
+            echo "Tag $TAG already exists on remote"
+            echo "already_existed=true" >> "$GITHUB_OUTPUT"
+          else
+            git tag "$TAG"
+            echo "already_existed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "Release step 4: Push"
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+
+          # Push commit (if new)
+          if [ "${{ steps.tag.outputs.needs_commit }}" = "true" ] && [ "${{ steps.commit.outputs.skip }}" != "true" ]; then
+            git push origin HEAD:master
+          fi
+
+          # Push tag (if new or re-tag needed)
+          if [ "${{ steps.create_tag.outputs.already_existed }}" != "true" ]; then
+            git push origin "$TAG"
+          fi
+
+      # ── GitHub Release ──
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Read AI release body
+        id: notes
+        run: |
+          BODY=""
+          if [ -f /tmp/ai-release-output.json ]; then
+            BODY=$(node -e "
+              const fs = require('fs');
+              const data = JSON.parse(fs.readFileSync('/tmp/ai-release-output.json', 'utf8'));
+              process.stdout.write(data.releaseBody || '');
+            " 2>/dev/null || true)
+          fi
+          if [ -z "$BODY" ]; then
+            echo "use_generated=true" >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "body<<RELEASE_BODY_DELIM"
+              echo "$BODY"
+              echo "RELEASE_BODY_DELIM"
+            } >> "$GITHUB_OUTPUT"
+            echo "use_generated=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release (AI body)
+        if: steps.notes.outputs.use_generated == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          body: ${{ steps.notes.outputs.body }}
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+
+      - name: Create GitHub Release (auto-generated)
+        if: steps.notes.outputs.use_generated == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
+
+  # ──────────────────────────────────────────────
+  # Channel release (edge/dev)
+  # ──────────────────────────────────────────────
+  channel-release:
+    needs: [release-gate, build]
+    if: |
+      always() &&
+      needs.build.result == 'success' &&
+      needs.release-gate.outputs.action != 'skip' &&
+      needs.release-gate.outputs.action != 'skip_bot'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine channel
+        id: channel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BRANCH="${{ needs.release-gate.outputs.branch }}"
+          case "$BRANCH" in
+            master)
+              echo "tag=edge" >> "$GITHUB_OUTPUT"
+              echo "title=Edge (latest master)" >> "$GITHUB_OUTPUT"
+              echo "install_flag=--edge" >> "$GITHUB_OUTPUT"
+              echo "body_prefix=Bleeding-edge build from the latest commit on master." >> "$GITHUB_OUTPUT"
+              ;;
+            dev)
+              echo "tag=dev" >> "$GITHUB_OUTPUT"
+              echo "title=Dev (latest dev branch)" >> "$GITHUB_OUTPUT"
+              echo "install_flag=--dev" >> "$GITHUB_OUTPUT"
+              echo "body_prefix=Development build from the latest commit on dev." >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Download all artifacts
+        if: steps.channel.outputs.skip != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create/update channel release
+        if: steps.channel.outputs.skip != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.channel.outputs.tag }}
+          name: ${{ steps.channel.outputs.title }}
+          body: |
+            ${{ steps.channel.outputs.body_prefix }}
+
+            **Commit:** ${{ github.event.workflow_run.head_sha || github.sha }}
+            **Updated:** ${{ github.event.workflow_run.created_at || github.event.head_commit.timestamp }}
+
+            Install: `curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- ${{ steps.channel.outputs.install_flag }}`
+          prerelease: true
+          make_latest: false
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
