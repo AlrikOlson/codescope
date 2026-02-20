@@ -29,6 +29,7 @@ dashmap = "6"
 toml = "0.8"
 git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
 notify = "7"
+uuid = { version = "1", features = ["v4"] }
 
 # Optional tokenizer backends
 tiktoken-rs = { version = "0.6", optional = true }

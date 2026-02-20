@@ -1843,6 +1843,123 @@ fn handle_add_repo(state: &mut ServerState, args: &serde_json::Value) -> (String
 }
 
 // ---------------------------------------------------------------------------
+// Protocol version negotiation
+// ---------------------------------------------------------------------------
+
+pub(crate) const SUPPORTED_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18"];
+pub(crate) const LATEST_VERSION: &str = "2025-11-25";
+
+/// Negotiate protocol version: echo client's version if supported, else return latest.
+pub(crate) fn negotiate_version(client_version: &str) -> &'static str {
+    if SUPPORTED_VERSIONS.contains(&client_version) {
+        // Return the matching static str
+        SUPPORTED_VERSIONS.iter().find(|&&v| v == client_version).copied().unwrap()
+    } else {
+        LATEST_VERSION
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared JSON-RPC dispatch (used by both stdio and HTTP transports)
+// ---------------------------------------------------------------------------
+
+/// Process a single JSON-RPC request and return the response.
+///
+/// Returns `None` for notifications (no `id` field).
+/// The `initialized` flag is checked by the caller — this function assumes
+/// the request has already passed init enforcement.
+pub(crate) fn dispatch_jsonrpc(
+    state: &Arc<RwLock<ServerState>>,
+    msg: &serde_json::Value,
+    session: &mut Option<SessionState>,
+) -> Option<serde_json::Value> {
+    let method = msg["method"].as_str().unwrap_or("");
+    let id = msg.get("id").cloned();
+
+    // Notifications have no id and produce no response
+    if id.is_none() || method.starts_with("notifications/") {
+        return None;
+    }
+
+    let response = match method {
+        "initialize" => {
+            let client_version = msg["params"]["protocolVersion"].as_str().unwrap_or("");
+            let negotiated = negotiate_version(client_version);
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "protocolVersion": negotiated,
+                    "capabilities": {
+                        "tools": {}
+                    },
+                    "serverInfo": {
+                        "name": "codescope",
+                        "version": env!("CARGO_PKG_VERSION")
+                    },
+                    "instructions": "CodeScope — search, browse, and read source files in any codebase. Start with cs_find (combined filename + content search) for discovery. Use cs_find_imports to trace import dependencies. Use cs_grep for targeted content search with context. Use cs_read_file to read specific files or line ranges. Use cs_read_context for budget-aware batch reads of 3+ files."
+                }
+            })
+        }
+        "tools/list" => {
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "tools": tool_definitions()
+                }
+            })
+        }
+        "tools/call" => {
+            let tool_name = msg["params"]["name"].as_str().unwrap_or("");
+            let arguments =
+                msg["params"].get("arguments").cloned().unwrap_or(serde_json::json!({}));
+
+            // Mutating tools need write lock
+            let (text, is_error) = match tool_name {
+                "cs_rescan" | "cs_add_repo" => {
+                    let mut s = state.write().unwrap();
+                    match tool_name {
+                        "cs_rescan" => handle_rescan(&mut s, &arguments),
+                        "cs_add_repo" => handle_add_repo(&mut s, &arguments),
+                        _ => unreachable!(),
+                    }
+                }
+                _ => {
+                    let s = state.read().unwrap();
+                    handle_tool_call(&s, tool_name, &arguments, session)
+                }
+            };
+
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "content": [{ "type": "text", "text": text }],
+                    "isError": is_error
+                }
+            })
+        }
+        "ping" => {
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {}
+            })
+        }
+        _ => {
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": { "code": -32601, "message": "Method not found" }
+            })
+        }
+    };
+
+    Some(response)
+}
+
+// ---------------------------------------------------------------------------
 // MCP stdio server loop
 // ---------------------------------------------------------------------------
 
@@ -1851,6 +1968,7 @@ pub fn run_mcp(state: Arc<RwLock<ServerState>>) {
     let stdout = io::stdout();
     let reader = stdin.lock();
     let mut session = Some(SessionState::new());
+    let mut initialized = false;
 
     {
         let s = state.read().unwrap();
@@ -1891,87 +2009,39 @@ pub fn run_mcp(state: Arc<RwLock<ServerState>>) {
         };
 
         let method = msg["method"].as_str().unwrap_or("");
-        let id = msg.get("id").cloned();
 
+        // Notifications produce no response
         if method == "notifications/initialized" || method == "notifications/cancelled" {
             continue;
         }
 
-        let response = match method {
-            "initialize" => {
-                serde_json::json!({
+        // Init ordering enforcement: reject non-init requests before initialize
+        if !initialized && method != "initialize" && method != "ping" {
+            if let Some(id) = msg.get("id").cloned() {
+                let err = serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": id,
-                    "result": {
-                        "protocolVersion": "2025-06-18",
-                        "capabilities": {
-                            "tools": {}
-                        },
-                        "serverInfo": {
-                            "name": "codescope",
-                            "version": env!("CARGO_PKG_VERSION")
-                        },
-                        "instructions": "CodeScope — search, browse, and read source files in any codebase. Start with cs_find (combined filename + content search) for discovery. Use cs_find_imports to trace import dependencies. Use cs_grep for targeted content search with context. Use cs_read_file to read specific files or line ranges. Use cs_read_context for budget-aware batch reads of 3+ files."
+                    "error": {
+                        "code": -32002,
+                        "message": "Server not initialized. Send 'initialize' first."
                     }
-                })
+                });
+                let mut out = stdout.lock();
+                let _ = writeln!(out, "{}", serde_json::to_string(&err).unwrap());
+                let _ = out.flush();
             }
-            "tools/list" => {
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {
-                        "tools": tool_definitions()
-                    }
-                })
-            }
-            "tools/call" => {
-                let tool_name = msg["params"]["name"].as_str().unwrap_or("");
-                let arguments =
-                    msg["params"].get("arguments").cloned().unwrap_or(serde_json::json!({}));
+            continue;
+        }
 
-                // Mutating tools need write lock
-                let (text, is_error) = match tool_name {
-                    "cs_rescan" | "cs_add_repo" => {
-                        let mut s = state.write().unwrap();
-                        match tool_name {
-                            "cs_rescan" => handle_rescan(&mut s, &arguments),
-                            "cs_add_repo" => handle_add_repo(&mut s, &arguments),
-                            _ => unreachable!(),
-                        }
-                    }
-                    _ => {
-                        let s = state.read().unwrap();
-                        handle_tool_call(&s, tool_name, &arguments, &mut session)
-                    }
-                };
+        if let Some(response) = dispatch_jsonrpc(&state, &msg, &mut session) {
+            // Track initialization state
+            if method == "initialize" {
+                initialized = true;
+            }
 
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {
-                        "content": [{ "type": "text", "text": text }],
-                        "isError": is_error
-                    }
-                })
-            }
-            "ping" => {
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {}
-                })
-            }
-            _ => {
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "error": { "code": -32601, "message": "Method not found" }
-                })
-            }
-        };
-
-        let mut out = stdout.lock();
-        let _ = writeln!(out, "{}", serde_json::to_string(&response).unwrap());
-        let _ = out.flush();
+            let mut out = stdout.lock();
+            let _ = writeln!(out, "{}", serde_json::to_string(&response).unwrap());
+            let _ = out.flush();
+        }
     }
 }

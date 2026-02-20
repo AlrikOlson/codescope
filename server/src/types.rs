@@ -325,6 +325,51 @@ impl ServerState {
 }
 
 // ---------------------------------------------------------------------------
+// MCP transport types (session management, OAuth config)
+// ---------------------------------------------------------------------------
+
+/// Configuration for MCP HTTP transport and OAuth discovery.
+pub struct McpConfig {
+    /// Allowed Origin header values for DNS rebinding protection.
+    pub allowed_origins: Vec<String>,
+    /// OAuth authorization server URL. None = auth disabled.
+    pub auth_issuer: Option<String>,
+    /// The base URL of this server (for PRM `resource` field).
+    pub server_url: String,
+}
+
+impl McpConfig {
+    #[allow(dead_code)]
+    pub fn auth_enabled(&self) -> bool {
+        self.auth_issuer.is_some()
+    }
+}
+
+/// State for a single MCP HTTP session.
+pub struct McpSession {
+    pub protocol_version: String,
+    pub session_state: SessionState,
+    pub last_activity: Instant,
+}
+
+impl McpSession {
+    pub fn new(protocol_version: String) -> Self {
+        Self { protocol_version, session_state: SessionState::new(), last_activity: Instant::now() }
+    }
+}
+
+/// Thread-safe session store. Key = session ID (UUID string).
+pub type SessionStore = DashMap<String, McpSession>;
+
+/// Axum state for MCP HTTP transport routes.
+#[derive(Clone)]
+pub struct McpAppContext {
+    pub state: Arc<std::sync::RwLock<ServerState>>,
+    pub sessions: Arc<SessionStore>,
+    pub config: Arc<McpConfig>,
+}
+
+// ---------------------------------------------------------------------------
 // HTTP-specific types (pre-computed JSON cache + Axum state)
 // ---------------------------------------------------------------------------
 

@@ -1,11 +1,13 @@
 //! CodeScope — fast codebase indexer and search server.
 
 mod api;
+mod auth;
 mod budget;
 mod fuzzy;
 mod git;
 mod init;
 mod mcp;
+mod mcp_http;
 mod scan;
 #[cfg(feature = "semantic")]
 mod semantic;
@@ -18,6 +20,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use dashmap::DashMap;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -278,6 +281,9 @@ fn print_help() {
         #[cfg(feature = "cuda")]
         eprintln!("                        (CUDA GPU acceleration enabled)");
     }
+    eprintln!("  --auth-issuer <URL>   Enable OAuth with authorization server URL");
+    eprintln!("  --allowed-origins <O> Comma-separated allowed Origin headers");
+    eprintln!("  --bind-all            Bind to 0.0.0.0 instead of 127.0.0.1 (localhost)");
     eprintln!("  --help                Show this help message");
     eprintln!("  --version             Show version");
     eprintln!();
@@ -316,6 +322,20 @@ async fn main() {
     }
 
     let mcp_mode = args.iter().any(|a| a == "--mcp");
+    let bind_all = args.iter().any(|a| a == "--bind-all");
+
+    // OAuth / transport security flags
+    let auth_issuer: Option<String> = args
+        .iter()
+        .position(|a| a == "--auth-issuer")
+        .and_then(|pos| args.get(pos + 1))
+        .map(|s| s.to_string());
+
+    let cli_allowed_origins: Option<Vec<String>> = args
+        .iter()
+        .position(|a| a == "--allowed-origins")
+        .and_then(|pos| args.get(pos + 1))
+        .map(|s| s.split(',').map(|o| o.trim().to_string()).collect());
 
     // Tokenizer: --tokenizer flag or default bytes-estimate
     let tokenizer_name = args
@@ -538,7 +558,7 @@ async fn main() {
         })
     };
 
-    let ctx = AppContext { state, cache };
+    let ctx = AppContext { state: state.clone(), cache };
 
     // Resolve dist dir: --dist flag, then cwd/dist, then ~/.local/share/codescope/dist
     let dist_dir = if let Some(pos) = args.iter().position(|a| a == "--dist") {
@@ -564,28 +584,14 @@ async fn main() {
 
     let index_html = dist_dir.join("index.html");
 
-    // API routes take priority, then fall back to static files from dist/
-    let app = Router::new()
-        .route("/api/tree", get(api_tree))
-        .route("/api/manifest", get(api_manifest))
-        .route("/api/deps", get(api_deps))
-        .route("/api/file", get(api_file))
-        .route("/api/files", post(api_files))
-        .route("/api/grep", get(api_grep))
-        .route("/api/search", get(api_search))
-        .route("/api/find", get(api_find))
-        .route("/api/context", post(api_context))
-        .route("/api/imports", get(api_imports))
-        .fallback_service(ServeDir::new(&dist_dir).not_found_service(ServeFile::new(&index_html)))
-        .layer(CompressionLayer::new())
-        .layer(CorsLayer::permissive())
-        .with_state(ctx);
+    // Bind address: 127.0.0.1 by default (MCP spec), --bind-all for 0.0.0.0
+    let bind_addr = if bind_all { "0.0.0.0" } else { "127.0.0.1" };
 
     let explicit_port: Option<u16> = std::env::var("PORT").ok().and_then(|p| p.parse().ok());
 
     let listener = if let Some(port) = explicit_port {
         // User chose a port explicitly — fail hard if busy
-        tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await.unwrap_or_else(|e| {
+        tokio::net::TcpListener::bind(format!("{bind_addr}:{port}")).await.unwrap_or_else(|e| {
             eprintln!("Error: Could not bind to port {port}: {e}");
             eprintln!("  PORT={port} was set explicitly. Choose a different port.");
             std::process::exit(1);
@@ -596,7 +602,7 @@ async fn main() {
         const RANGE: u16 = 10;
         let mut found = None;
         for port in BASE..BASE + RANGE {
-            match tokio::net::TcpListener::bind(format!("0.0.0.0:{port}")).await {
+            match tokio::net::TcpListener::bind(format!("{bind_addr}:{port}")).await {
                 Ok(l) => {
                     found = Some(l);
                     break;
@@ -613,7 +619,68 @@ async fn main() {
 
     let port = listener.local_addr().unwrap().port();
 
+    // Build MCP HTTP transport config
+    let allowed_origins = cli_allowed_origins.unwrap_or_else(|| {
+        vec![
+            format!("http://localhost:{port}"),
+            format!("http://127.0.0.1:{port}"),
+            format!("http://localhost"),
+            format!("http://127.0.0.1"),
+            "null".to_string(),
+        ]
+    });
+
+    let mcp_config = McpConfig {
+        allowed_origins,
+        auth_issuer,
+        server_url: format!("http://{}:{port}", if bind_all { "0.0.0.0" } else { "127.0.0.1" }),
+    };
+
+    let sessions: Arc<DashMap<String, McpSession>> = Arc::new(DashMap::new());
+    let mcp_ctx = McpAppContext { state, sessions: sessions.clone(), config: Arc::new(mcp_config) };
+
+    // MCP HTTP transport routes (with origin validation middleware)
+    let mcp_router = Router::new()
+        .route(
+            "/mcp",
+            post(mcp_http::handle_mcp_post)
+                .delete(mcp_http::handle_mcp_delete)
+                .get(mcp_http::handle_mcp_get),
+        )
+        .route("/.well-known/oauth-protected-resource/mcp", get(auth::prm_endpoint))
+        .layer(axum::middleware::from_fn_with_state(mcp_ctx.clone(), auth::validate_origin))
+        .with_state(mcp_ctx);
+
+    // Web UI API routes + MCP transport + static files
+    let app = Router::new()
+        .route("/api/tree", get(api_tree))
+        .route("/api/manifest", get(api_manifest))
+        .route("/api/deps", get(api_deps))
+        .route("/api/file", get(api_file))
+        .route("/api/files", post(api_files))
+        .route("/api/grep", get(api_grep))
+        .route("/api/search", get(api_search))
+        .route("/api/find", get(api_find))
+        .route("/api/context", post(api_context))
+        .route("/api/imports", get(api_imports))
+        .merge(mcp_router)
+        .fallback_service(ServeDir::new(&dist_dir).not_found_service(ServeFile::new(&index_html)))
+        .layer(CompressionLayer::new())
+        .layer(CorsLayer::permissive())
+        .with_state(ctx);
+
+    // Session cleanup: prune idle sessions every 5 minutes
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(1800);
+            sessions.retain(|_, session| session.last_activity > cutoff);
+        }
+    });
+
     eprintln!("  Serving UI from {}", dist_dir.display());
+    eprintln!("  MCP HTTP transport at /mcp");
     eprintln!("  http://localhost:{port}");
     eprintln!("CODESCOPE_PORT={port}");
     axum::serve(listener, app).await.unwrap();
