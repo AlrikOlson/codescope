@@ -30,7 +30,7 @@ export function codeScopeMcpConfig(cwd) {
   return {
     codescope: {
       command: resolveCodeScopeBinary(cwd),
-      args: ["--mcp", "--root", cwd],
+      args: ["--mcp", "--wait-semantic", "--root", cwd],
     },
   };
 }

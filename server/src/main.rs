@@ -66,6 +66,10 @@ struct Cli {
     #[arg(long)]
     semantic_model: Option<String>,
 
+    /// Block startup until semantic index is fully loaded (useful for CI)
+    #[arg(long)]
+    wait_semantic: bool,
+
     /// Enable OAuth with authorization server URL
     #[arg(long)]
     auth_issuer: Option<String>,
@@ -296,12 +300,13 @@ async fn main() {
     };
     let state = Arc::new(RwLock::new(server_state));
 
-    // Spawn background semantic indexing — server starts immediately
+    // Spawn semantic indexing — background by default, blocking with --wait-semantic
     #[cfg(feature = "semantic")]
     if enable_semantic {
         let state_bg = Arc::clone(&state);
         let sem_model = semantic_model.clone();
-        std::thread::spawn(move || {
+        let wait = cli.wait_semantic;
+        let handle = std::thread::spawn(move || {
             let s = state_bg.read().unwrap();
             type SemWork = (
                 String,
@@ -326,7 +331,7 @@ async fn main() {
             drop(s);
 
             for (name, root, files, sem_handle, progress) in work {
-                info!(repo = name.as_str(), "Building semantic index in background...");
+                info!(repo = name.as_str(), "Building semantic index...");
                 let sem_start = std::time::Instant::now();
                 if let Some(idx) = codescope_server::semantic::build_semantic_index(
                     &files,
@@ -344,6 +349,11 @@ async fn main() {
                 }
             }
         });
+        if wait {
+            info!("--wait-semantic: blocking until semantic index is ready");
+            handle.join().expect("semantic indexing thread panicked");
+            info!("Semantic index loaded — starting server");
+        }
     }
 
     // Start file watcher for incremental live re-indexing
