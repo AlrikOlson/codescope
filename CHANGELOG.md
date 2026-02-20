@@ -4,6 +4,11 @@ All notable changes to CodeScope will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.8.1] - 2026-02-20
+
+### Changed
+- Release v0.8.1
+
 ## [0.10.0] — 2026-02-20
 
 ### Added
