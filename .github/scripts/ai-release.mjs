@@ -163,8 +163,8 @@ async function main() {
     agentResult = await runAgent({
       prompt: buildPrompt(lastTag, commits, diffStat),
       systemPrompt: SYSTEM_PROMPT,
-      maxTurns: 8,
-      maxBudgetUsd: 2.0,
+      maxTurns: 15,
+      maxBudgetUsd: 3.0,
       codeScopeOnly: true,
       logLabel: "release",
       outputFormat: { type: "json_schema", schema: outputSchema },
@@ -193,6 +193,11 @@ async function main() {
     `| Estimated cost | $${usage.totalCostUsd.toFixed(2)} |`,
   ].join("\n"));
 
+  if (!result) {
+    console.error("[release] WARNING: Agent returned no structured output (likely exhausted turns or budget).");
+    console.error(`[release] Agent used ${usage.turns} turns, $${usage.totalCostUsd.toFixed(2)} budget.`);
+  }
+
   const bump = validateBump(result?.bump);
   // Apply bump from the highest known version (including release commits in the log)
   // so we don't regress version numbers when last tag is behind
@@ -203,7 +208,7 @@ async function main() {
   const commitMessage = sanitizeForGit(result?.commitMessage) || fallback.commitMessage;
   const releaseBody = result?.releaseBody || fallback.releaseBody;
   const changelogEntry = result?.changelogEntry || fallback.changelogEntry;
-  const reason = result?.reason || fallback.reason;
+  const reason = result?.reason || (result ? "AI returned empty reason" : `No structured output (${usage.turns} turns, $${usage.totalCostUsd.toFixed(2)})`);
 
   writeStepSummary(`\n**Bump:** ${bump} → ${newTag}\n**Reason:** ${reason}\n`);
 
