@@ -8,11 +8,11 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
-# Don't cancel in-progress e2e — API calls cost money
 concurrency:
   group: e2e-agent-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   changes:
@@ -79,6 +79,17 @@ jobs:
       group: anthropic-api-ci
       cancel-in-progress: false
     steps:
+      - name: Force-cancel older e2e runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          RUNS=$(gh api "repos/${{ github.repository }}/actions/workflows/e2e.yml/runs?status=in_progress" \
+            --jq ".workflow_runs[] | select(.id != ${{ github.run_id }}) | .id" 2>/dev/null || true)
+          for RUN_ID in $RUNS; do
+            echo "Force-cancelling stale run $RUN_ID"
+            gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID/force-cancel" -X POST 2>/dev/null || true
+          done
+
       - uses: step-security/harden-runner@v2
         with:
           egress-policy: audit

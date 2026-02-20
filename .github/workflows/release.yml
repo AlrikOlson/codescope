@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: release-${{ github.event.workflow_run.head_branch || github.ref_name }}
@@ -42,6 +43,18 @@ jobs:
       existing_version: ${{ steps.check.outputs.existing_version }}
       branch: ${{ steps.check.outputs.branch }}
     steps:
+      - name: Force-cancel older release runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Find in-progress runs of this workflow, excluding ourselves
+          RUNS=$(gh api "repos/${{ github.repository }}/actions/workflows/release.yml/runs?status=in_progress" \
+            --jq ".workflow_runs[] | select(.id != ${{ github.run_id }}) | .id" 2>/dev/null || true)
+          for RUN_ID in $RUNS; do
+            echo "Force-cancelling stale run $RUN_ID"
+            gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID/force-cancel" -X POST 2>/dev/null || true
+          done
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_SHA }}
