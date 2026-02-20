@@ -6,7 +6,7 @@ Thanks for your interest in contributing. This document covers how to get starte
 
 **Prerequisites:**
 
-- Rust 1.75+ (`rustup` recommended)
+- Rust 1.87+ (`rustup` recommended — candle-core requires 1.87)
 - Node.js 18+ (for the web UI, optional)
 
 **Clone and build:**
@@ -62,14 +62,16 @@ The backend lives in `server/src/` with these modules:
 | Module | Purpose |
 |--------|---------|
 | `main.rs` | CLI parsing, HTTP server (Axum), MCP entry |
-| `mcp.rs` | MCP stdio server, 14 tools |
+| `mcp.rs` | MCP stdio server, 19 tools |
 | `api.rs` | HTTP API handlers |
-| `scan.rs` | File discovery, module detection, import scanning |
+| `scan.rs` | File discovery, module detection, dependency + import scanning |
 | `stubs.rs` | Structural stub extraction (signatures without bodies) |
 | `fuzzy.rs` | FZF v2 fuzzy matching |
 | `budget.rs` | Token budget allocation |
+| `tokenizer.rs` | Token counting (bytes-estimate or tiktoken) |
 | `types.rs` | Shared types and helpers |
 | `init.rs` | `init` and `doctor` subcommands |
+| `semantic.rs` | Semantic search via BERT embeddings |
 
 The frontend is a React 18 + TypeScript app in `src/`, built with Vite.
 
