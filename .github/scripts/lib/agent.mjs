@@ -18,21 +18,22 @@ export function codeScopeMcpConfig(cwd) {
 }
 
 /**
- * Allowed CodeScope tools for the agent.
+ * Focused CodeScope tool set for CI agents.
+ * Kept minimal to nudge the model toward semantic search as the primary
+ * discovery tool. More tools = more decision paralysis = slower agents.
+ *
+ * - cs_semantic_search: intent-based discovery (PRIMARY — use first)
+ * - cs_read_file: read specific files (supports mode=stubs for overviews)
+ * - cs_grep: exact pattern matching (counting, specific strings)
+ * - cs_status: verify indexed repo info
+ *
  * @returns {string[]}
  */
 export function codeScopeAllowedTools() {
   return [
-    "mcp__codescope__cs_find",
-    "mcp__codescope__cs_grep",
-    "mcp__codescope__cs_read_file",
-    "mcp__codescope__cs_read_files",
-    "mcp__codescope__cs_read_context",
-    "mcp__codescope__cs_search",
-    "mcp__codescope__cs_list_modules",
-    "mcp__codescope__cs_get_module_files",
-    "mcp__codescope__cs_find_imports",
     "mcp__codescope__cs_semantic_search",
+    "mcp__codescope__cs_read_file",
+    "mcp__codescope__cs_grep",
     "mcp__codescope__cs_status",
   ];
 }
