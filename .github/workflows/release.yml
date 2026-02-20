@@ -22,7 +22,7 @@ permissions:
 
 concurrency:
   group: release-${{ github.event.workflow_run.head_branch || github.ref_name }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 # Pin all checkouts to the exact commit that triggered CI (or the dispatch ref).
 # Without this, workflow_run could check out a newer HEAD from a subsequent push.
