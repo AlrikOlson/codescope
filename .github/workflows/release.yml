@@ -367,7 +367,11 @@ jobs:
         with:
           cuda: '12.6.3'
           method: network
-          sub-packages: '["nvcc", "cudart", "nvrtc-dev", "curand-dev", "cublas-dev"]'
+          sub-packages: '["nvcc", "cudart-dev", "nvrtc-dev"]'
+
+      - name: Install CUDA libraries (cublas, curand)
+        if: matrix.cuda
+        run: sudo apt-get install -y --no-install-recommends libcublas-dev-12-6 libcurand-dev-12-6
 
       - name: Build binary
         shell: bash
