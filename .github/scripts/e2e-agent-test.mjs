@@ -2,7 +2,7 @@
  * E2E Agent Test — validates CodeScope MCP tools via Claude Agent SDK.
  *
  * Tests two categories:
- *   1. Tool mechanics — cs_status, cs_grep, cs_read all work
+ *   1. Tool mechanics — cs_status, cs_search, cs_grep, cs_read all work
  *   2. Semantic relevance — the agent is given ground-truth file→purpose
  *      mappings and must craft its OWN natural language queries (no filename
  *      keywords allowed) to test whether semantic search surfaces the right
@@ -33,6 +33,7 @@ const outputSchema = {
   type: "object",
   properties: {
     status_ok: { type: "boolean" },
+    search_ok: { type: "boolean" },
     grep_ok: { type: "boolean" },
     read_ok: { type: "boolean" },
     repos_indexed: { type: "number" },
@@ -56,7 +57,7 @@ const outputSchema = {
     },
     errors: { type: "array", items: { type: "string" } },
   },
-  required: ["status_ok", "grep_ok", "read_ok", "repos_indexed", "total_files", "semantic_probes"],
+  required: ["status_ok", "search_ok", "grep_ok", "read_ok", "repos_indexed", "total_files", "semantic_probes"],
 };
 
 const groundTruthTable = GROUND_TRUTH.map(
@@ -83,6 +84,7 @@ For EACH file above, you must:
 Be creative with your queries — describe the concept, not the implementation. Think about what a developer would search for when looking for this functionality.
 
 ## Phase 3: Mechanical Checks
+- cs_search: set search_ok=true if ALL semantic probes above returned results (cs_search is the tool used for every probe).
 - cs_grep with query "pub fn" and ext "rs" — verify matching lines are shown.
 - cs_read with path "server/src/main.rs" and mode "stubs" — verify structural outline is returned.
 
@@ -135,7 +137,7 @@ async function main() {
   console.log(JSON.stringify(result, null, 2));
 
   // ── Validate tool mechanics ──
-  const mechChecks = ["status_ok", "grep_ok", "read_ok"];
+  const mechChecks = ["status_ok", "search_ok", "grep_ok", "read_ok"];
   const mechFailures = mechChecks.filter((t) => !result[t]);
 
   // ── Validate semantic relevance ──
@@ -175,6 +177,7 @@ async function main() {
       `| Check | Status |`,
       `|-------|--------|`,
       `| cs_status | ${icon(result.status_ok)} |`,
+      `| cs_search | ${icon(result.search_ok)} |`,
       `| cs_grep | ${icon(result.grep_ok)} |`,
       `| cs_read | ${icon(result.read_ok)} |`,
       ``,
