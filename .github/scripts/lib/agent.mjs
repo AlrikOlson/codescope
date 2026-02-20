@@ -38,10 +38,29 @@ export function codeScopeAllowedTools() {
 }
 
 /**
+ * Built-in tools to block for read-only agents (prevents sub-agent spawning, file writes, etc.).
+ * @returns {string[]}
+ */
+export function readOnlyDisallowedTools() {
+  return [
+    "Task",
+    "Bash",
+    "Write",
+    "Edit",
+    "NotebookEdit",
+    "WebSearch",
+    "WebFetch",
+    "AskUserQuestion",
+    "ExitPlanMode",
+    "TodoWrite",
+  ];
+}
+
+/**
  * Run a Claude Agent SDK query with CodeScope MCP.
  * Streams messages, logs tool usage to stderr, returns the final text output.
  *
- * @param {{ prompt: string, systemPrompt: string, model?: string, maxTurns?: number }} params
+ * @param {{ prompt: string, systemPrompt: string, model?: string, maxTurns?: number, readOnly?: boolean }} params
  * @returns {Promise<string>}
  */
 export async function runAgent({
@@ -49,21 +68,28 @@ export async function runAgent({
   systemPrompt,
   model = DEFAULT_MODEL,
   maxTurns = DEFAULT_MAX_TURNS,
+  readOnly = false,
 }) {
   let lastText = "";
 
+  const opts = {
+    model,
+    maxTurns,
+    systemPrompt,
+    mcpServers: codeScopeMcpConfig(process.cwd()),
+    allowedTools: codeScopeAllowedTools(),
+    permissionMode: "bypassPermissions",
+    allowDangerouslySkipPermissions: true,
+    cwd: process.cwd(),
+  };
+
+  if (readOnly) {
+    opts.disallowedTools = readOnlyDisallowedTools();
+  }
+
   for await (const message of query({
     prompt,
-    options: {
-      model,
-      maxTurns,
-      systemPrompt,
-      mcpServers: codeScopeMcpConfig(process.cwd()),
-      allowedTools: codeScopeAllowedTools(),
-      permissionMode: "bypassPermissions",
-      allowDangerouslySkipPermissions: true,
-      cwd: process.cwd(),
-    },
+    options: opts,
   })) {
     if (message.type === "assistant" && message.message?.content) {
       for (const block of message.message.content) {

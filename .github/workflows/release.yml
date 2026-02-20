@@ -24,6 +24,11 @@ concurrency:
   group: release-${{ github.event.workflow_run.head_branch || github.ref_name }}
   cancel-in-progress: false
 
+# Pin all checkouts to the exact commit that triggered CI (or the dispatch ref).
+# Without this, workflow_run could check out a newer HEAD from a subsequent push.
+env:
+  RELEASE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
 jobs:
   # ──────────────────────────────────────────────
   # Release gate — detect partial state, decide action
@@ -39,6 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.RELEASE_SHA }}
           fetch-depth: 0
 
       - name: Detect release state
@@ -153,6 +159,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.RELEASE_SHA }}
           fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
@@ -243,6 +250,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_SHA }}
 
       - name: Bake release version into manifests
         shell: bash
@@ -343,6 +352,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ env.RELEASE_SHA }}
           fetch-depth: 0
 
       - name: Determine release tag and mode

@@ -6,12 +6,12 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
  */
 const DOC_RELEVANT_PATTERNS = [
   /^server\/src\//,
-  /^server\/setup\.sh$/,
+  /^server\/setup\.(sh|ps1)$/,
   /^server\/Cargo\.toml$/,
   /^server\/codescope-/,
   /^package\.json$/,
   /^src\//,
-  /^\.github\/workflows\/ci\.yml$/,
+  /^\.github\/workflows\//,
   /^vite\.config/,
   /^tsconfig/,
 ];

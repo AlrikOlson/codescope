@@ -9,71 +9,61 @@ import { hasDocRelevantChanges, writeDocSyncOutput } from "./lib/docs.mjs";
 
 const OUTPUT_FILE = "/tmp/ai-docs-sync-output.json";
 
-const SYSTEM_PROMPT = `You are a documentation accuracy reviewer for CodeScope, a Rust MCP server + TypeScript web UI for codebase search and navigation.
+const SYSTEM_PROMPT = `You are a documentation accuracy reviewer for CodeScope.
 
-You have access to CodeScope MCP tools. Use them to read documentation files and source code, then compare them for accuracy. You also have cs_semantic_search for intent-based code discovery.
+You have ONLY CodeScope MCP tools available. Use them efficiently:
+- cs_semantic_search — find code by intent (PREFERRED for discovery)
+- cs_read_file — read specific files (use mode=stubs for structural overview)
+- cs_grep — search for exact patterns
+- cs_find — find files by name/content
+- cs_list_modules — enumerate module structure
+- cs_status — check indexed repo info
 
-Your job is to find and fix factual inaccuracies in docs — wrong counts, missing features, outdated architecture, stale CLI flags, etc. Do NOT rewrite docs stylistically. Only change facts that are wrong.
-
-Preserve the existing markdown structure, tone, and formatting of each doc. Make minimal, surgical changes.`;
+RULES:
+1. Start with cs_semantic_search and cs_read_file for efficient discovery
+2. Use cs_read_file with mode=stubs to get structural overviews without reading full files
+3. Do NOT rewrite docs stylistically — only fix factual inaccuracies
+4. Do NOT add new sections or features that aren't already documented
+5. Preserve existing markdown structure, tone, and formatting
+6. Be fast — verify facts with minimal tool calls, use parallel reads when possible`;
 
 /**
  * Build the prompt for the doc sync agent.
- * @param {string} lastTag
- * @param {string} commits
- * @param {string} diffStat
- * @param {string} version
- * @returns {string}
+ * Verifies the FULL documentation against current source code state.
  */
-function buildPrompt(lastTag, commits, diffStat, version) {
-  return `Review all documentation files for factual accuracy against the current source code.
+function buildPrompt(version) {
+  return `Verify ALL documentation files for factual accuracy against the current source code.
 
 CURRENT VERSION: ${version}
-LAST TAG: ${lastTag}
 
-COMMITS SINCE LAST TAG:
-${commits}
+## Verification Checklist
 
-FILES CHANGED:
-${diffStat}
+Read README.md and CONTRIBUTING.md first, then verify each fact:
 
-## Documentation Files to Verify
+### README.md
+1. **MCP tool count**: cs_grep for tool handler registrations in server/src/mcp.rs
+2. **Language support count**: cs_read_file server/src/stubs.rs (mode=stubs) — count languages
+3. **CLI flags**: cs_read_file server/src/main.rs (mode=stubs) — compare against CLI Reference section
+4. **Architecture table**: cs_find all .rs files in server/src/ — verify file list and descriptions
+5. **Web UI panels**: cs_find React components in src/ — verify panel list
+6. **Install commands**: cs_read_file server/setup.sh and server/setup.ps1 — verify paths and flags
+7. **MCP tools table**: cs_grep for tool names in server/src/mcp.rs — verify names and descriptions
+8. **Config options**: cs_semantic_search "codescope.toml config parsing" — verify documented options
+9. **CI pipeline**: cs_find workflow files in .github/workflows/ — verify job names and flow
+10. **Dependency scanning**: cs_read_file server/src/scan.rs (mode=stubs) — verify formats
 
-### 1. README.md
-Verify these facts against source code:
-- **MCP tool count**: Count the actual tools registered in \`server/src/mcp.rs\` (look for tool definitions/handlers)
-- **Language support count**: Count languages in \`server/src/stubs.rs\` (stub extraction) and \`server/src/scan.rs\` (import tracing)
-- **CLI flags/options**: Compare the CLI Reference section against actual clap args in \`server/src/main.rs\`
-- **Architecture section**: Verify all listed source files exist and descriptions are accurate
-- **Web UI panels/views**: Verify against actual React components in \`src/\`
-- **Prerequisites**: Check Rust version in \`server/Cargo.toml\` (rust-version or edition), Node version
-- **Install commands**: Verify setup.sh paths and flags
-- **MCP tools table**: Verify tool names and descriptions match \`server/src/mcp.rs\`
-- **Configuration options**: Verify .codescope.toml fields match what the server actually parses
-- **CI pipeline diagram**: Verify job names and flow match \`.github/workflows/ci.yml\`
-- **Dependency scanning formats**: Verify against \`server/src/scan.rs\`
+### CONTRIBUTING.md
+1. **Architecture table**: Must list ALL .rs files in server/src/ with accurate descriptions
+2. **Quality gate commands**: Must match CI workflow in .github/workflows/ci.yml
+3. **Prerequisites**: Rust version, Node version
+4. **Clone URL**: Must match actual repo
 
-### 2. CONTRIBUTING.md
-Verify these facts against source code:
-- **Architecture table**: Must list all .rs files in \`server/src/\` with accurate descriptions (should match README)
-- **Quality gate commands**: Must match CI workflow commands in \`.github/workflows/ci.yml\`
-- **Prerequisites**: Rust version and Node version must match actual requirements
-- **Clone URL**: Must match actual GitHub repo
+## Output Format
 
-## Instructions
+After verification, your FINAL line must be EXACTLY one JSON object (no markdown fencing):
+{"updates":[{"file":"README.md","content":"full file content","reason":"one-line summary"}],"noChanges":["CONTRIBUTING.md"],"summary":"one-line summary"}
 
-1. Use \`cs_read_file\` to read README.md and CONTRIBUTING.md
-2. Use \`cs_find\`, \`cs_grep\`, and \`cs_read_file\` to verify each fact listed above against source code
-3. Be thorough — check every number, every file path, every feature claim
-4. For each doc that needs changes, output the COMPLETE updated file content
-5. Do NOT change writing style, tone, or structure — only fix factual inaccuracies
-6. Do NOT add new sections or features that aren't already documented
-7. If a doc is accurate, include it in noChanges
-
-After your analysis, your FINAL line of output must be EXACTLY one JSON object (no markdown fencing, no text after):
-{"updates":[{"file":"README.md","content":"full file content here","reason":"one-line summary of what changed"}],"noChanges":["CONTRIBUTING.md"],"summary":"one-line summary of all changes"}
-
-If NO docs need updating, output:
+If all docs are accurate:
 {"updates":[],"noChanges":["README.md","CONTRIBUTING.md"],"summary":"All docs are accurate"}`;
 }
 
@@ -101,9 +91,10 @@ async function main() {
   let text;
   try {
     text = await runAgent({
-      prompt: buildPrompt(lastTag, commits, diffStat, version),
+      prompt: buildPrompt(version),
       systemPrompt: SYSTEM_PROMPT,
-      maxTurns: 15,
+      maxTurns: 8,
+      readOnly: true,
     });
   } catch (err) {
     console.error(`[docs] Agent SDK error: ${err.message}`);
