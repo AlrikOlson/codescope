@@ -367,7 +367,7 @@ jobs:
         with:
           cuda: '12.6.3'
           method: network
-          sub-packages: '["nvcc", "cudart"]'
+          sub-packages: '["nvcc", "cudart", "nvrtc-dev", "curand-dev", "cublas-dev"]'
 
       - name: Build binary
         shell: bash
