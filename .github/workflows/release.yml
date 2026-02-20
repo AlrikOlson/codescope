@@ -21,9 +21,8 @@ permissions:
   contents: write
   actions: write
 
-concurrency:
-  group: release-${{ github.event.workflow_run.head_branch || github.ref_name }}
-  cancel-in-progress: true
+# No workflow-level concurrency group — force-cancel step in release-gate
+# handles deduplication immediately instead of queuing behind stale runs.
 
 # Pin all checkouts to the exact commit that triggered CI (or the dispatch ref).
 # Without this, workflow_run could check out a newer HEAD from a subsequent push.
