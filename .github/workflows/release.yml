@@ -148,15 +148,24 @@ jobs:
 
   # ──────────────────────────────────────────────
   # AI version analysis — full releases only
+  # Runs in parallel with build (not blocking)
   # ──────────────────────────────────────────────
   version:
     needs: release-gate
     if: needs.release-gate.outputs.action == 'full'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Global concurrency: only one AI agent job at a time across all workflows
+    concurrency:
+      group: anthropic-api-release
+      cancel-in-progress: false
     outputs:
       new_tag: ${{ steps.resolve.outputs.new_tag }}
     steps:
+      - uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_SHA }}
@@ -182,16 +191,45 @@ jobs:
 
       - name: AI release analysis
         id: ai
+        continue-on-error: true
         timeout-minutes: 8
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: node .github/scripts/ai-release.mjs
+
+      - name: Fallback version resolution
+        if: steps.ai.outcome == 'failure'
+        id: fallback
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "v0.0.0")
+          # Parse version and apply patch bump
+          VERSION="${LAST_TAG#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          PATCH=$((PATCH + 1))
+          NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "new_tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
+          echo "Fallback: patch bump $LAST_TAG → $NEW_TAG"
+
+          # Write minimal release output for downstream steps
+          DATE=$(date +%Y-%m-%d)
+          cat > /tmp/ai-release-output.json << FALLBACK_EOF
+          {
+            "bump": "patch",
+            "newTag": "$NEW_TAG",
+            "commitMessage": "release: $NEW_TAG",
+            "releaseBody": "",
+            "changelogEntry": "## [${MAJOR}.${MINOR}.${PATCH}] - ${DATE}\n\n### Changed\n- Release ${NEW_TAG}",
+            "reason": "AI analysis failed, used patch fallback"
+          }
+          FALLBACK_EOF
 
       - name: Resolve version tag
         id: resolve
         run: |
           if [ -n "${{ inputs.force_version }}" ]; then
             echo "new_tag=${{ inputs.force_version }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ steps.fallback.outputs.new_tag }}" ]; then
+            echo "new_tag=${{ steps.fallback.outputs.new_tag }}" >> "$GITHUB_OUTPUT"
           else
             echo "new_tag=${{ steps.ai.outputs.new_tag }}" >> "$GITHUB_OUTPUT"
           fi
@@ -204,16 +242,25 @@ jobs:
           path: /tmp/ai-release-output.json
           retention-days: 1
 
+      - name: Upload agent conversation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-logs-release
+          path: /tmp/agent-conversation-*.jsonl
+          retention-days: 30
+
   # ──────────────────────────────────────────────
   # Cross-platform builds
+  # Now runs in parallel with AI version analysis
   # ──────────────────────────────────────────────
   build:
-    needs: [release-gate, version]
+    needs: [release-gate]
     if: |
       always() &&
       needs.release-gate.result == 'success' &&
       (
-        (needs.release-gate.outputs.action == 'full' && needs.version.result == 'success') ||
+        needs.release-gate.outputs.action == 'full' ||
         needs.release-gate.outputs.action == 'complete' ||
         needs.release-gate.outputs.action == 'channel_only'
       )
@@ -259,8 +306,8 @@ jobs:
           if [ "${{ needs.release-gate.outputs.action }}" = "complete" ]; then
             VERSION="${{ needs.release-gate.outputs.existing_version }}"
           elif [ "${{ needs.release-gate.outputs.action }}" = "full" ]; then
-            VERSION="${{ needs.version.outputs.new_tag }}"
-            VERSION="${VERSION#v}"
+            # Version will be finalized by stable-release; use Cargo.toml as-is for now
+            VERSION=""
           else
             # channel_only: use version from Cargo.toml as-is
             VERSION=""
@@ -340,16 +387,22 @@ jobs:
 
   # ──────────────────────────────────────────────
   # Stable release — commit, tag, push, GH release
+  # Waits for both build AND version (AI analysis)
   # ──────────────────────────────────────────────
   stable-release:
     needs: [release-gate, version, build]
     if: |
       always() &&
       needs.build.result == 'success' &&
-      (needs.release-gate.outputs.action == 'full' || needs.release-gate.outputs.action == 'complete')
+      (needs.release-gate.outputs.action == 'full' || needs.release-gate.outputs.action == 'complete') &&
+      (needs.version.result == 'success' || needs.release-gate.outputs.action == 'complete')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.RELEASE_SHA }}
@@ -408,6 +461,7 @@ jobs:
 
       - name: AI documentation sync
         if: steps.tag.outputs.needs_commit == 'true' && inputs.skip_ai_docs != true
+        continue-on-error: true
         timeout-minutes: 10
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -422,11 +476,27 @@ jobs:
             const path = '/tmp/ai-docs-sync-output.json';
             if (!fs.existsSync(path)) process.exit(0);
             const data = JSON.parse(fs.readFileSync(path, 'utf8'));
+
+            // Scope guard: only allow updates to known doc files
+            const ALLOWED = new Set(['README.md', 'CONTRIBUTING.md']);
             for (const update of (data.updates || [])) {
+              if (!ALLOWED.has(update.file)) {
+                console.error('BLOCKED: Agent tried to update disallowed file: ' + update.file);
+                continue;
+              }
               fs.writeFileSync(update.file, update.content);
               console.error('Updated: ' + update.file + ' — ' + update.reason);
             }
           "
+
+      - name: Upload agent conversation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-logs-docs-sync
+          path: /tmp/agent-conversation-*.jsonl
+          retention-days: 30
+          if-no-files-found: ignore
 
       # ── Atomic release sequence ──
 
@@ -477,10 +547,16 @@ jobs:
         id: commit
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
+
+          # Read and sanitize AI commit message (ASCII printable only, max 500 chars)
           COMMIT_MSG=$(node -e "
             const fs = require('fs');
             const data = JSON.parse(fs.readFileSync('/tmp/ai-release-output.json', 'utf8'));
-            process.stdout.write(data.commitMessage);
+            const msg = (data.commitMessage || 'release: $TAG')
+              .replace(/[^\x20-\x7E\n\u2014\u2013\u00B7\u2022\-]/g, '')
+              .substring(0, 500)
+              .trim();
+            process.stdout.write(msg);
           " 2>/dev/null || echo "release: $TAG")
 
           git config user.name "github-actions[bot]"

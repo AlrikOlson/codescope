@@ -149,7 +149,15 @@ jobs:
     if: needs.changes.outputs.has_code_changes == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Global concurrency: only one AI agent job at a time to avoid rate limit contention
+    concurrency:
+      group: anthropic-api-ci
+      cancel-in-progress: false
     steps:
+      - uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
@@ -170,6 +178,23 @@ jobs:
         run: npm ci
 
       - name: Run e2e agent test
+        continue-on-error: true
+        id: e2e
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: node .github/scripts/e2e-agent-test.mjs
+
+      - name: Upload agent conversation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-logs-e2e
+          path: /tmp/agent-conversation-*.jsonl
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Check e2e result
+        if: steps.e2e.outcome == 'failure'
+        run: |
+          echo "::warning::E2E agent test failed — see agent logs artifact for details"
+          exit 1

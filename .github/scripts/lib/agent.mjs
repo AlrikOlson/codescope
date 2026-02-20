@@ -1,9 +1,16 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { existsSync } from "node:fs";
+import { existsSync, appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const DEFAULT_MODEL = "claude-sonnet-4-6";
+// Pin exact model versions to prevent behavior drift on updates
+const DEFAULT_MODEL = "claude-sonnet-4-20250514";
 const DEFAULT_MAX_TURNS = 10;
+const DEFAULT_MAX_COST_USD = 2.0;
+
+// Approximate per-token costs (USD) — Sonnet 4
+const COST_PER_INPUT_TOKEN = 3.0 / 1_000_000;
+const COST_PER_OUTPUT_TOKEN = 15.0 / 1_000_000;
+const COST_PER_CACHED_TOKEN = 0.3 / 1_000_000;
 
 /**
  * Resolve the codescope-server binary path.
@@ -98,20 +105,65 @@ export function codeScopeOnlyDisallowedTools() {
 }
 
 /**
+ * Estimate cost from token usage.
+ * @param {{ input_tokens?: number, output_tokens?: number, cache_read_input_tokens?: number }} usage
+ * @returns {number} estimated cost in USD
+ */
+function estimateCost(usage) {
+  if (!usage) return 0;
+  const input = (usage.input_tokens || 0) - (usage.cache_read_input_tokens || 0);
+  const cached = usage.cache_read_input_tokens || 0;
+  const output = usage.output_tokens || 0;
+  return input * COST_PER_INPUT_TOKEN + cached * COST_PER_CACHED_TOKEN + output * COST_PER_OUTPUT_TOKEN;
+}
+
+/**
+ * Write a step summary to GITHUB_STEP_SUMMARY (visible in Actions UI).
+ * No-op outside CI.
+ * @param {string} markdown
+ */
+export function writeStepSummary(markdown) {
+  const summaryFile = process.env.GITHUB_STEP_SUMMARY;
+  if (summaryFile) {
+    appendFileSync(summaryFile, markdown + "\n");
+  }
+}
+
+/**
  * Run a Claude Agent SDK query with CodeScope MCP.
- * Streams messages, logs tool usage to stderr, returns the final text output.
+ * Streams messages, logs tool usage to stderr, tracks cost, writes conversation
+ * log to /tmp/agent-conversation-{label}.jsonl for debugging.
  *
- * @param {{ prompt: string, systemPrompt: string, model?: string, maxTurns?: number, codeScopeOnly?: boolean }} params
- * @returns {Promise<string>}
+ * @param {{ prompt: string, systemPrompt: string, model?: string, maxTurns?: number, maxCostUsd?: number, codeScopeOnly?: boolean, logLabel?: string }} params
+ * @returns {Promise<{ text: string, usage: { inputTokens: number, outputTokens: number, cachedTokens: number, totalCostUsd: number, turns: number } }>}
  */
 export async function runAgent({
   prompt,
   systemPrompt,
   model = DEFAULT_MODEL,
   maxTurns = DEFAULT_MAX_TURNS,
+  maxCostUsd = DEFAULT_MAX_COST_USD,
   codeScopeOnly = false,
+  logLabel = "agent",
 }) {
   let lastText = "";
+  let turnCount = 0;
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
+  let totalCachedTokens = 0;
+  let totalCostUsd = 0;
+
+  const logFile = `/tmp/agent-conversation-${logLabel}.jsonl`;
+  // Clear previous log
+  writeFileSync(logFile, "");
+
+  function logEntry(entry) {
+    try {
+      appendFileSync(logFile, JSON.stringify(entry) + "\n");
+    } catch {
+      // Best-effort logging
+    }
+  }
 
   const opts = {
     model,
@@ -133,14 +185,44 @@ export async function runAgent({
     options: opts,
   })) {
     if (message.type === "assistant" && message.message?.content) {
+      turnCount++;
+      const toolCalls = [];
+
       for (const block of message.message.content) {
         if (block.type === "tool_use") {
           console.error(`[codescope] Using tool: ${block.name}`);
+          toolCalls.push({ name: block.name, args_preview: JSON.stringify(block.input || {}).substring(0, 500) });
         }
         if (block.type === "text") {
           lastText = block.text;
           console.error(block.text);
         }
+      }
+
+      // Track token usage if available
+      const usage = message.message?.usage;
+      if (usage) {
+        totalInputTokens += usage.input_tokens || 0;
+        totalOutputTokens += usage.output_tokens || 0;
+        totalCachedTokens += usage.cache_read_input_tokens || 0;
+        totalCostUsd += estimateCost(usage);
+      }
+
+      // Log conversation turn
+      logEntry({
+        timestamp: new Date().toISOString(),
+        turn: turnCount,
+        tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+        text_preview: lastText.substring(0, 300),
+        usage,
+        cumulative_cost_usd: Number(totalCostUsd.toFixed(4)),
+      });
+
+      // Cost circuit breaker
+      if (totalCostUsd > maxCostUsd) {
+        console.error(`[agent] Cost limit exceeded: $${totalCostUsd.toFixed(2)} > $${maxCostUsd.toFixed(2)} — aborting`);
+        logEntry({ type: "abort", reason: "cost_limit", cost_usd: totalCostUsd });
+        break;
       }
     }
 
@@ -152,7 +234,18 @@ export async function runAgent({
     }
   }
 
-  return lastText;
+  const usageSummary = {
+    inputTokens: totalInputTokens,
+    outputTokens: totalOutputTokens,
+    cachedTokens: totalCachedTokens,
+    totalCostUsd: Number(totalCostUsd.toFixed(4)),
+    turns: turnCount,
+    logFile,
+  };
+
+  console.error(`[agent] Done: ${turnCount} turns, ${totalInputTokens} in / ${totalOutputTokens} out, ~$${totalCostUsd.toFixed(2)}`);
+
+  return { text: lastText, usage: usageSummary };
 }
 
 /**

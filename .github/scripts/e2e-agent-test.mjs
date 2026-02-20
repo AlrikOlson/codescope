@@ -10,10 +10,10 @@
  * Exit codes: 0 = pass, 1 = fail
  */
 
-import { runAgent, parseAgentJson } from "./lib/agent.mjs";
+import { runAgent, parseAgentJson, writeStepSummary } from "./lib/agent.mjs";
 
 const MAX_TURNS = 6;
-const MODEL = "claude-sonnet-4-6";
+const MAX_COST_USD = 1.0;
 
 const systemPrompt = `You are a QA agent validating that CodeScope MCP tools work correctly.
 You have 4 tools: cs_status, cs_search, cs_grep, cs_read.
@@ -43,23 +43,26 @@ Be concise. Use each tool exactly once. Output ONLY the JSON at the end.`;
 const prompt = `Validate the CodeScope MCP server by testing all 4 tools against this codebase. Report your findings as the JSON object described in your instructions.`;
 
 async function main() {
-  console.error(`[e2e] Starting agent test (model=${MODEL}, maxTurns=${MAX_TURNS})`);
+  console.error(`[e2e] Starting agent test (maxTurns=${MAX_TURNS}, maxCost=$${MAX_COST_USD})`);
   const start = Date.now();
 
-  let output;
+  let agentResult;
   try {
-    output = await runAgent({
+    agentResult = await runAgent({
       prompt,
       systemPrompt,
-      model: MODEL,
       maxTurns: MAX_TURNS,
+      maxCostUsd: MAX_COST_USD,
       codeScopeOnly: true,
+      logLabel: "e2e-test",
     });
   } catch (err) {
     console.error(`[e2e] Agent failed: ${err.message}`);
+    writeStepSummary(`## E2E Agent Test\n\n**Status:** FAIL — ${err.message}\n`);
     process.exit(1);
   }
 
+  const { text: output, usage } = agentResult;
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
   console.error(`[e2e] Agent completed in ${elapsed}s`);
 
@@ -74,6 +77,7 @@ async function main() {
   if (!result) {
     console.error("[e2e] FAIL: Could not parse structured JSON from agent output");
     console.error("[e2e] Raw output:", output.slice(-500));
+    writeStepSummary(`## E2E Agent Test\n\n**Status:** FAIL — could not parse agent JSON\n**Turns:** ${usage.turns} | **Cost:** $${usage.totalCostUsd.toFixed(2)}\n`);
     process.exit(1);
   }
 
@@ -83,6 +87,28 @@ async function main() {
   // Validate all tools passed
   const tools = ["status_ok", "search_ok", "grep_ok", "read_ok"];
   const failures = tools.filter((t) => !result[t]);
+
+  // Write step summary
+  const statusEmoji = (ok) => ok ? "pass" : "FAIL";
+  writeStepSummary([
+    `## E2E Agent Test`,
+    ``,
+    `| Tool | Status |`,
+    `|------|--------|`,
+    `| cs_status | ${statusEmoji(result.status_ok)} |`,
+    `| cs_search | ${statusEmoji(result.search_ok)} |`,
+    `| cs_grep | ${statusEmoji(result.grep_ok)} |`,
+    `| cs_read | ${statusEmoji(result.read_ok)} |`,
+    ``,
+    `| Metric | Value |`,
+    `|--------|-------|`,
+    `| Duration | ${elapsed}s |`,
+    `| Turns | ${usage.turns} |`,
+    `| Tokens | ${usage.inputTokens.toLocaleString()} in / ${usage.outputTokens.toLocaleString()} out |`,
+    `| Cost | $${usage.totalCostUsd.toFixed(2)} |`,
+    `| Repos indexed | ${result.repos_indexed} |`,
+    `| Files indexed | ${result.total_files} |`,
+  ].join("\n"));
 
   if (failures.length > 0) {
     console.error(`[e2e] FAIL: ${failures.length} tool(s) failed: ${failures.join(", ")}`);

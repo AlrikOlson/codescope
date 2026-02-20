@@ -4,10 +4,13 @@
 // All outputs written to /tmp/ai-docs-sync-output.json.
 
 import { gatherContext } from "./lib/git.mjs";
-import { runAgent, parseAgentJson } from "./lib/agent.mjs";
+import { runAgent, parseAgentJson, writeStepSummary } from "./lib/agent.mjs";
 import { hasDocRelevantChanges, writeDocSyncOutput } from "./lib/docs.mjs";
 
 const OUTPUT_FILE = "/tmp/ai-docs-sync-output.json";
+
+// Only allow updates to these files — scope guard against agent writing to unexpected paths
+const ALLOWED_DOC_FILES = new Set(["README.md", "CONTRIBUTING.md"]);
 
 const SYSTEM_PROMPT = `You are a documentation accuracy reviewer for CodeScope.
 
@@ -86,13 +89,15 @@ async function main() {
   console.error(`[docs] Running doc sync for v${version}`);
   console.error(`[docs] Changes since ${lastTag}:\n${commits}\n---`);
 
-  let text;
+  let agentResult;
   try {
-    text = await runAgent({
+    agentResult = await runAgent({
       prompt: buildPrompt(version),
       systemPrompt: SYSTEM_PROMPT,
       maxTurns: 8,
+      maxCostUsd: 2.0,
       codeScopeOnly: true,
+      logLabel: "docs-sync",
     });
   } catch (err) {
     console.error(`[docs] Agent SDK error: ${err.message}`);
@@ -101,8 +106,23 @@ async function main() {
       noChanges: [],
       summary: `Agent error: ${err.message}`,
     });
+    writeStepSummary(`## AI Doc Sync\n\n**Status:** Failed — ${err.message}\n`);
     return;
   }
+
+  const { text, usage } = agentResult;
+
+  // Write step summary
+  writeStepSummary([
+    `## AI Doc Sync`,
+    ``,
+    `| Metric | Value |`,
+    `|--------|-------|`,
+    `| Turns | ${usage.turns} |`,
+    `| Input tokens | ${usage.inputTokens.toLocaleString()} |`,
+    `| Output tokens | ${usage.outputTokens.toLocaleString()} |`,
+    `| Estimated cost | $${usage.totalCostUsd.toFixed(2)} |`,
+  ].join("\n"));
 
   // Parse structured output
   const result = parseAgentJson(text, ["updates"]);
@@ -114,13 +134,19 @@ async function main() {
       noChanges: [],
       summary: "Failed to parse agent output",
     });
+    writeStepSummary(`\n**Result:** Failed to parse agent output\n`);
     return;
   }
 
-  // Validate updates — ensure each has file and content
-  const validUpdates = (result.updates || []).filter(
-    (u) => u.file && u.content && typeof u.content === "string"
-  );
+  // Validate updates — ensure each has file and content, and only touches allowed files
+  const validUpdates = (result.updates || []).filter((u) => {
+    if (!u.file || !u.content || typeof u.content !== "string") return false;
+    if (!ALLOWED_DOC_FILES.has(u.file)) {
+      console.error(`[docs] BLOCKED: Agent tried to update disallowed file: ${u.file}`);
+      return false;
+    }
+    return true;
+  });
 
   const output = {
     updates: validUpdates,
@@ -139,8 +165,10 @@ async function main() {
     for (const u of validUpdates) {
       console.error(`[docs]   ${u.file}: ${u.reason}`);
     }
+    writeStepSummary(`\n**Result:** Updated ${validUpdates.map((u) => u.file).join(", ")}\n`);
   } else {
     console.error("[docs] All docs are accurate — no updates needed");
+    writeStepSummary(`\n**Result:** All docs accurate — no changes\n`);
   }
 }
 
@@ -152,4 +180,5 @@ main().catch((err) => {
     noChanges: [],
     summary: `Fatal error: ${err.message}`,
   });
+  writeStepSummary(`## AI Doc Sync\n\n**Status:** Fatal error — ${err.message}\n`);
 });

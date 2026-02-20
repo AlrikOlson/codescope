@@ -4,7 +4,7 @@
 // All outputs written to GITHUB_OUTPUT and /tmp/ai-release-output.json.
 
 import { gatherContext } from "./lib/git.mjs";
-import { runAgent, parseAgentJson } from "./lib/agent.mjs";
+import { runAgent, parseAgentJson, writeStepSummary } from "./lib/agent.mjs";
 import { parseTag, applyBump, validateBump } from "./lib/version.mjs";
 import { setOutput, writeReleaseOutput } from "./lib/output.mjs";
 
@@ -51,7 +51,7 @@ ${diffStat}
    - **MINOR**: new features, new MCP tools, new CLI flags, new API endpoints, meaningful new capabilities
    - **PATCH**: bug fixes, performance improvements, refactoring, documentation, CI/CD changes, dependency updates
    When in doubt between minor and patch, prefer patch. Only use major for genuine breaking changes.
-5. Write a conventional-commit release commit message (e.g. "release: v1.2.4 \u2014 fix module resolution edge case").
+5. Write a conventional-commit release commit message (e.g. "release: v1.2.4 — fix module resolution edge case").
 6. Write a GitHub release body in markdown with:
    - A "What's Changed" section grouping changes by category (Features, Fixes, Improvements, Internal)
    - Specific file/module references from your CodeScope analysis
@@ -63,7 +63,22 @@ ${diffStat}
    - Only include sections that have changes
 
 After your analysis, your FINAL line of output must be EXACTLY one JSON object (no markdown fencing, no text after):
-{"bump":"patch","reason":"one sentence explanation","commitMessage":"release: vX.Y.Z \u2014 summary","releaseBody":"## What's Changed\\n\\n### Fixes\\n- ...","changelogEntry":"## [X.Y.Z] - YYYY-MM-DD\\n\\n### Fixed\\n- ..."}`;
+{"bump":"patch","reason":"one sentence explanation","commitMessage":"release: vX.Y.Z — summary","releaseBody":"## What's Changed\\n\\n### Fixes\\n- ...","changelogEntry":"## [X.Y.Z] - YYYY-MM-DD\\n\\n### Fixed\\n- ..."}`;
+}
+
+/**
+ * Sanitize a string for use in git commit messages.
+ * Strips non-printable chars, caps length.
+ * @param {string} str
+ * @param {number} [maxLen=500]
+ * @returns {string}
+ */
+function sanitizeForGit(str, maxLen = 500) {
+  if (!str) return "";
+  return str
+    .replace(/[^\x20-\x7E\n—–·•\-]/g, "") // ASCII printable + common Unicode punctuation
+    .substring(0, maxLen)
+    .trim();
 }
 
 /**
@@ -105,21 +120,40 @@ async function main() {
   console.error(`Commits since ${lastTag}:\n${commits}\n---`);
 
   // Run AI analysis
-  let text;
+  let agentResult;
   try {
-    text = await runAgent({
+    agentResult = await runAgent({
       prompt: buildPrompt(lastTag, commits, diffStat),
       systemPrompt: SYSTEM_PROMPT,
+      maxTurns: 8,
+      maxCostUsd: 2.0,
       codeScopeOnly: true,
+      logLabel: "release",
     });
   } catch (err) {
     console.error(`Agent SDK error: ${err.message}`);
     const version = parseTag(lastTag);
     const newTag = applyBump(version, "patch");
     const fallback = defaults(newTag);
-    finalize("patch", newTag, fallback.commitMessage, fallback.releaseBody, fallback.reason);
+    writeStepSummary(`## AI Release Analysis\n\n**Status:** Failed — ${err.message}\n**Fallback:** patch bump to ${newTag}\n`);
+    finalize("patch", newTag, fallback.commitMessage, fallback.releaseBody, fallback.changelogEntry, `Agent error: ${err.message}`);
     return;
   }
+
+  const { text, usage } = agentResult;
+
+  // Write step summary with cost/usage info
+  writeStepSummary([
+    `## AI Release Analysis`,
+    ``,
+    `| Metric | Value |`,
+    `|--------|-------|`,
+    `| Turns | ${usage.turns} |`,
+    `| Input tokens | ${usage.inputTokens.toLocaleString()} |`,
+    `| Output tokens | ${usage.outputTokens.toLocaleString()} |`,
+    `| Cached tokens | ${usage.cachedTokens.toLocaleString()} |`,
+    `| Estimated cost | $${usage.totalCostUsd.toFixed(2)} |`,
+  ].join("\n"));
 
   // Parse structured output
   const result = parseAgentJson(text, ["bump"]);
@@ -128,10 +162,12 @@ async function main() {
   const newTag = applyBump(version, bump);
   const fallback = defaults(newTag);
 
-  const commitMessage = result?.commitMessage || fallback.commitMessage;
+  const commitMessage = sanitizeForGit(result?.commitMessage) || fallback.commitMessage;
   const releaseBody = result?.releaseBody || fallback.releaseBody;
   const changelogEntry = result?.changelogEntry || fallback.changelogEntry;
   const reason = result?.reason || fallback.reason;
+
+  writeStepSummary(`\n**Bump:** ${bump} → ${newTag}\n**Reason:** ${reason}\n`);
 
   finalize(bump, newTag, commitMessage, releaseBody, changelogEntry, reason);
 }
@@ -173,4 +209,5 @@ main().catch((err) => {
     changelogEntry: fallback.changelogEntry,
     reason: `Fatal error: ${err.message}`,
   });
+  writeStepSummary(`## AI Release Analysis\n\n**Status:** Fatal error — ${err.message}\n**Fallback:** patch bump to ${newTag}\n`);
 });
