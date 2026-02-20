@@ -343,7 +343,7 @@ ensure_path() {
 # ============================================================
 
 SOURCE_CLEANUP=""
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd 2>/dev/null || echo "")"
+SCRIPT_DIR="$(cd "$(dirname -- "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd 2>/dev/null || echo "")"
 
 echo ""
 info "Installing CodeScope..."
@@ -403,7 +403,14 @@ if [ "$EDGE" = "0" ] && [ "$DEV" = "0" ]; then
     echo "  Optional: re-run with --edge or --dev for pre-release builds"
     echo ""
 fi
-if ! command -v codescope-server >/dev/null 2>&1; then
+if grep -qi microsoft /proc/version 2>/dev/null; then
+    echo "  NOTE: You're running in WSL. The binary was installed for Linux/WSL only."
+    echo "        Run codescope-server from WSL (bash/zsh), not from PowerShell."
+    echo ""
+    echo "  For native Windows (PowerShell), use the PowerShell installer instead:"
+    echo "    irm https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.ps1 | iex"
+    echo ""
+elif ! command -v codescope-server >/dev/null 2>&1; then
     echo "  NOTE: Restart your terminal to pick up the new PATH."
     echo ""
 fi
