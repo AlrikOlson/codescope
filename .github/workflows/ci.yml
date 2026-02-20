@@ -138,5 +138,7 @@ jobs:
         run: npm ci
       - name: Build web UI
         run: npm run build
+      - name: Run MCP transport tests
+        run: bash tests/mcp-transport.sh
       - name: Run integration tests
         run: bash tests/integration.sh
