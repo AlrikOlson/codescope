@@ -4,6 +4,26 @@ All notable changes to CodeScope will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.0] - 2026-02-20
+
+### Added
+- `--wait-semantic` CLI flag to block startup until semantic index is ready
+- Comprehensive MCP HTTP transport test suite for protocol compliance
+- Caching of codescope-server binary and BERT model across CI jobs
+- E2E tests for semantic relevance with agent-crafted queries
+- Structured outputs using Claude Agent SDK
+
+### Fixed
+- CUDA library linking issues (libcublas, libcurand, nvrtc)
+- CI workflow concurrency and cancellation problems
+- Agent tool usage constraints to prevent turn exhaustion
+- E2E test reliability with increased turns and deterministic queries
+
+### Changed
+- Split e2e tests into separate workflow for better isolation
+- Improved change detection in CI to include .github/scripts/
+- Enhanced error logging and usage data collection
+
 ## [0.8.1] - 2026-02-20
 
 ### Changed
