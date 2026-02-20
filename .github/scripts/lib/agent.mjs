@@ -1,7 +1,23 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 
 const DEFAULT_MODEL = "claude-sonnet-4-6";
 const DEFAULT_MAX_TURNS = 10;
+
+/**
+ * Resolve the codescope-server binary path.
+ * Checks CI build output first, then falls back to PATH.
+ * @param {string} cwd - working directory
+ * @returns {string}
+ */
+function resolveCodeScopeBinary(cwd) {
+  // CI builds to server/target/release/codescope-server
+  const ciBinary = join(cwd, "server", "target", "release", "codescope-server");
+  if (existsSync(ciBinary)) return ciBinary;
+  // Fall back to PATH
+  return "codescope-server";
+}
 
 /**
  * CodeScope MCP server configuration for agent queries.
@@ -11,7 +27,7 @@ const DEFAULT_MAX_TURNS = 10;
 export function codeScopeMcpConfig(cwd) {
   return {
     codescope: {
-      command: "codescope-server",
+      command: resolveCodeScopeBinary(cwd),
       args: ["--mcp", "--root", cwd],
     },
   };
