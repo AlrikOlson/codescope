@@ -4,6 +4,20 @@ All notable changes to CodeScope will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.0] - 2026-02-20
+
+### Added
+- Windows support: `server/src/main.rs` gains `home_dir`/`config_dir`/`data_dir` helpers resolving to `%APPDATA%`/`%LOCALAPPDATA%` on Windows
+- `server/setup.sh` installs to `%LOCALAPPDATA%/codescope/bin` on Windows, downloads `.zip` archives, and updates PATH via `setx`
+- `server/codescope-web` uses Windows-aware dist dir and `explorer.exe` for browser open
+- CI builds and publishes `windows-x86_64` and `windows-aarch64` binaries (MSVC targets)
+- AI-powered releases now auto-update `CHANGELOG.md` with the generated entry
+
+### Fixed
+- Replace `grep -q` with `grep >/dev/null` in CI archive verify to avoid SIGPIPE errors
+- Free build intermediates before packaging to prevent disk exhaustion and tar write errors on CI runners
+- Add `shell: bash` to CI steps requiring bash behavior on Windows runners
+
 ## [Unreleased]
 
 ### Fixed
