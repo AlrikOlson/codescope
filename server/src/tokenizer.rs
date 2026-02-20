@@ -1,8 +1,10 @@
-use std::sync::Arc;
+//! Pluggable token counting for budget allocation.
+//!
+//! Provides a `Tokenizer` trait with two implementations: `BytesEstimateTokenizer`
+//! (fast bytes/3 heuristic, no dependencies) and `TiktokenTokenizer` (accurate BPE
+//! counting, feature-gated behind `tiktoken`).
 
-// ---------------------------------------------------------------------------
-// Tokenizer trait — pluggable token counting for budget allocation
-// ---------------------------------------------------------------------------
+use std::sync::Arc;
 
 pub trait Tokenizer: Send + Sync {
     fn count_tokens(&self, text: &str) -> usize;

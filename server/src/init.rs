@@ -1,3 +1,9 @@
+//! CLI subcommands `init` and `doctor`.
+//!
+//! `init` auto-detects 8+ project ecosystems (Rust, Node.js, Go, Python, C/C++,
+//! .NET, Unreal Engine, pnpm/uv workspaces) and generates `.codescope.toml` and
+//! `.mcp.json` config files. `doctor` diagnoses setup issues.
+
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -915,6 +921,7 @@ fn merge_global_repos_toml(root: &Path) -> Result<(), String> {
 // codescope-server init
 // ---------------------------------------------------------------------------
 
+/// Auto-detect project ecosystem and generate `.codescope.toml` + `.mcp.json` config files.
 pub fn run_init(args: &[String]) -> i32 {
     let global = args.iter().any(|a| a == "--global");
     #[cfg(feature = "semantic")]
@@ -1042,6 +1049,7 @@ pub fn run_init(args: &[String]) -> i32 {
 // codescope-server doctor
 // ---------------------------------------------------------------------------
 
+/// Diagnose CodeScope setup issues: check config files, binary location, and MCP integration.
 pub fn run_doctor(args: &[String]) -> i32 {
     // Find the path argument (skip "doctor", skip flags)
     let path_arg = args

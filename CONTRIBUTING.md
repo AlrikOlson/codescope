@@ -32,6 +32,9 @@ npm install && npm run dev
 All PRs must pass these checks (run locally before pushing):
 
 ```bash
+# Unit tests
+cargo test --manifest-path server/Cargo.toml
+
 # Formatting
 cargo fmt --manifest-path server/Cargo.toml -- --check
 
@@ -44,6 +47,8 @@ npx tsc --noEmit
 # Integration tests (requires built server binary)
 bash tests/integration.sh
 ```
+
+Set `RUST_LOG=codescope=debug` for verbose server output when debugging.
 
 CI runs all of these automatically on pull requests that change code.
 
@@ -61,8 +66,11 @@ The backend lives in `server/src/` with these modules:
 
 | Module | Purpose |
 |--------|-------|
-| `main.rs` | CLI parsing, HTTP server (Axum), MCP entry |
-| `mcp.rs` | MCP stdio server, 19 tools |
+| `lib.rs` | Library crate root, re-exports all modules |
+| `main.rs` | CLI shell (clap derive), HTTP server (Axum), MCP entry |
+| `mcp.rs` | MCP JSON-RPC server, 9 consolidated tools (stdio + HTTP) |
+| `mcp_http.rs` | Streamable HTTP transport for MCP |
+| `auth.rs` | OAuth discovery (RFC 9728) and origin validation |
 | `api.rs` | HTTP API handlers |
 | `scan.rs` | File discovery, module detection, dependency + import scanning |
 | `stubs.rs` | Structural stub extraction (signatures without bodies) |
@@ -74,6 +82,8 @@ The backend lives in `server/src/` with these modules:
 | `git.rs` | Git operations: blame, file history, changed files, churn analysis |
 | `watch.rs` | File watcher for incremental live re-indexing |
 | `semantic.rs` | Semantic search via BERT embeddings |
+
+Key dependencies: `clap` (CLI parsing), `tracing` (structured logging), `axum` (HTTP), `git2` (libgit2), `candle` (BERT embeddings).
 
 The frontend is a React 18 + TypeScript app in `src/`, built with Vite.
 

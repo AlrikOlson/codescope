@@ -1,3 +1,9 @@
+//! Token budget allocation via a water-fill algorithm that distributes tokens across
+//! files proportionally to importance scores. Files demote through tiers
+//! (full → stubs → pruned → manifest-only) until the budget is satisfied.
+//!
+//! Used by `cs_read` in budget mode for context-window-aware batch file reads.
+
 use crate::scan::get_category_path;
 use crate::stubs::{extract_stubs, extract_tier4, parse_blocks, BlockKind, StubBlock};
 use crate::tokenizer::Tokenizer;
@@ -265,7 +271,7 @@ fn score_block(block: &StubBlock, query_terms: &[String]) -> f64 {
 
 /// Water-fill budget allocation: distribute tokens proportionally by importance.
 /// Returns per-file total budgets (0 = manifest, >0 = stubs/pruned content budget).
-fn allocate_file_budgets(
+pub(crate) fn allocate_file_budgets(
     files: &[(f64, usize, usize)], // (importance, tier1_cost, manifest_cost)
     total_budget: usize,
 ) -> Vec<usize> {
@@ -381,6 +387,10 @@ fn prune_blocks(blocks: &[StubBlock], query_terms: &[String], file_budget: usize
 // Budget allocation
 // ---------------------------------------------------------------------------
 
+/// Distribute a token budget across requested files using a water-fill algorithm.
+///
+/// Files are ranked by importance, loaded in parallel, and demoted through content
+/// tiers (full → stubs → pruned → manifest-only) until the total fits within budget.
 #[allow(clippy::too_many_arguments)]
 pub fn allocate_budget(
     project_root: &Path,
@@ -636,6 +646,55 @@ pub fn allocate_budget(
     }
 
     build_context_response(files, errors, budget, unit, ordering, tokenizer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allocate_empty_input_returns_empty() {
+        let result = allocate_file_budgets(&[], 1000);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn single_file_gets_full_budget() {
+        // (importance, tier1_cost, manifest_cost)
+        let files = vec![(1.0, 500, 10)];
+        let result = allocate_file_budgets(&files, 1000);
+        // Single file with tier1_cost=500 fits within budget=1000, so it gets full tier1
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], 500, "single file should get full tier1 budget");
+    }
+
+    #[test]
+    fn total_output_respects_budget() {
+        // 3 files that collectively exceed the budget
+        let files = vec![(1.0, 400, 10), (0.5, 400, 10), (0.2, 400, 10)];
+        let budget = 500;
+        let result = allocate_file_budgets(&files, budget);
+        // The allocator distributes tokens — total should not exceed budget
+        let total: usize =
+            result.iter().enumerate().map(|(i, &b)| if b == 0 { files[i].2 } else { b }).sum();
+        assert!(total <= budget, "total allocated ({total}) should not exceed budget ({budget})");
+    }
+
+    #[test]
+    fn higher_importance_gets_more_tokens() {
+        let files = vec![
+            (10.0, 300, 10), // high importance
+            (1.0, 300, 10),  // low importance
+        ];
+        let budget = 400; // not enough for both at tier1
+        let result = allocate_file_budgets(&files, budget);
+        assert!(
+            result[0] >= result[1],
+            "high-importance file ({}) should get >= low-importance file ({})",
+            result[0],
+            result[1]
+        );
+    }
 }
 
 fn build_context_response(

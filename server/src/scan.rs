@@ -1,3 +1,8 @@
+//! File discovery via parallel directory walks, module detection by directory heuristics,
+//! import graph building from source-level import/include directives, and dependency
+//! scanning from package manifests (Cargo.toml, package.json, go.mod, CMakeLists.txt,
+//! .Build.cs).
+
 use crate::fuzzy::char_bitmask;
 use crate::types::*;
 use ignore::WalkBuilder;
@@ -144,7 +149,7 @@ fn walk_files_parallel(
     for scan_dir in scan_dirs {
         let dir = project_root.join(scan_dir);
         if !dir.exists() {
-            eprintln!("  Skipping {scan_dir} (not found)");
+            tracing::warn!(dir = scan_dir.as_str(), "Scan directory not found, skipping");
             continue;
         }
 
@@ -1216,7 +1221,7 @@ pub fn resolve_cross_repo_imports(
     }
 
     if !edges.is_empty() {
-        eprintln!("  Cross-repo: {} import edges resolved", edges.len());
+        tracing::info!(edges = edges.len(), "Cross-repo import edges resolved");
     }
 
     edges

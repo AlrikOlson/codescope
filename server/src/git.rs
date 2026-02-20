@@ -64,7 +64,7 @@ fn chrono_from_epoch(epoch: i64, offset_minutes: i32) -> String {
     format!("{year:04}-{month:02}-{day:02} {hours:02}:{mins:02}")
 }
 
-fn days_to_ymd(mut days: i64) -> (i64, i64, i64) {
+pub(crate) fn days_to_ymd(mut days: i64) -> (i64, i64, i64) {
     // Algorithm from http://howardhinnant.github.io/date_algorithms.html
     days += 719468;
     let era = if days >= 0 { days } else { days - 146096 } / 146097;
@@ -332,4 +332,34 @@ pub fn hot_files(repo_root: &Path, limit: usize, days: usize) -> Result<Vec<HotF
     sorted.truncate(limit);
 
     Ok(sorted)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn epoch_day_zero_is_1970_01_01() {
+        let (y, m, d) = days_to_ymd(0);
+        assert_eq!((y, m, d), (1970, 1, 1));
+    }
+
+    #[test]
+    fn known_date_2024_01_01() {
+        // 2024-01-01 is day 19723 from epoch (1970-01-01)
+        // Days: 54 years worth. Let's compute:
+        // 1970-2024 = 54 years, with leap years 1972,1976,...,2020,2024
+        // = 54*365 + 13 leaps = 19710 + 13 = 19723
+        let (y, m, d) = days_to_ymd(19723);
+        assert_eq!((y, m, d), (2024, 1, 1), "day 19723 should be 2024-01-01");
+    }
+
+    #[test]
+    fn known_date_2000_03_01() {
+        // 2000-03-01 is day 11017 from epoch
+        // 1970-2000 = 30 years = 30*365 + 7 leaps (72,76,80,84,88,92,96) = 10957
+        // Jan=31, Feb=29 (2000 is leap) => 10957+31+29 = 11017
+        let (y, m, d) = days_to_ymd(11017);
+        assert_eq!((y, m, d), (2000, 3, 1), "day 11017 should be 2000-03-01");
+    }
 }

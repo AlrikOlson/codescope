@@ -33,7 +33,7 @@ pub fn start_watcher(state: Arc<RwLock<ServerState>>) -> Option<RecommendedWatch
     ) {
         Ok(w) => w,
         Err(e) => {
-            eprintln!("  [watch] Failed to create file watcher: {e}");
+            tracing::warn!(error = %e, "Failed to create file watcher");
             return None;
         }
     };
@@ -43,9 +43,9 @@ pub fn start_watcher(state: Arc<RwLock<ServerState>>) -> Option<RecommendedWatch
         let s = state.read().unwrap();
         for repo in s.repos.values() {
             if let Err(e) = watcher.watch(&repo.root, RecursiveMode::Recursive) {
-                eprintln!("  [watch] Failed to watch {}: {e}", repo.root.display());
+                tracing::warn!(root = %repo.root.display(), error = %e, "Failed to watch directory");
             } else {
-                eprintln!("  [watch] Watching {}", repo.root.display());
+                tracing::debug!(root = %repo.root.display(), "Watching for changes");
             }
         }
     }
@@ -201,12 +201,12 @@ fn process_changes(paths: &[PathBuf], state: &Arc<RwLock<ServerState>>) {
             repo.search_files = search_files;
             repo.search_modules = search_modules;
 
-            eprintln!(
-                "  [watch] [{}] Updated {} file(s), removed {} file(s) ({} total indexed)",
-                repo_name,
-                changed_count,
-                removed_count,
-                repo.all_files.len()
+            tracing::info!(
+                repo = repo_name.as_str(),
+                updated = changed_count,
+                removed = removed_count,
+                total = repo.all_files.len(),
+                "File watcher re-indexed"
             );
         }
     }

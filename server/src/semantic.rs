@@ -1,6 +1,8 @@
-// ---------------------------------------------------------------------------
-// Semantic search — embed code chunks via all-MiniLM-L6-v2, search by cosine similarity
-// ---------------------------------------------------------------------------
+//! Semantic code search using BERT embeddings (all-MiniLM-L6-v2 by default).
+//!
+//! Chunks source files by logical boundaries, generates embeddings via candle,
+//! and ranks results by cosine similarity. Supports CUDA GPU acceleration and
+//! persistent caching to avoid re-embedding unchanged files.
 
 use crate::stubs::extract_stubs;
 use crate::types::{ChunkMeta, ScannedFile, SemanticIndex};
@@ -62,7 +64,7 @@ fn select_device() -> Device {
                 return dev;
             }
             Err(e) => {
-                eprintln!("  [semantic] CUDA unavailable ({e}), falling back to CPU");
+                tracing::warn!(error = %e, "CUDA unavailable, falling back to CPU");
             }
         }
     }
@@ -278,7 +280,7 @@ fn load_model(config: &ModelConfig) -> Result<(BertModel, Tokenizer, Device), St
     let repo =
         api.repo(Repo::with_revision(model_id.to_string(), RepoType::Model, "main".to_string()));
 
-    eprintln!("  [semantic] Loading model {model_id} on {device_name}...");
+    tracing::info!(model = model_id, device = device_name.as_str(), "Loading embedding model");
 
     let config_path =
         repo.get("config.json").map_err(|e| format!("Failed to get config.json: {e}"))?;
@@ -304,7 +306,7 @@ fn load_model(config: &ModelConfig) -> Result<(BertModel, Tokenizer, Device), St
     let model =
         BertModel::load(vb, &config).map_err(|e| format!("Failed to load BERT model: {e}"))?;
 
-    eprintln!("  [semantic] Model loaded on {device_name}");
+    tracing::info!(device = device_name.as_str(), "Embedding model loaded");
     Ok((model, tokenizer, device))
 }
 
@@ -736,13 +738,17 @@ pub fn build_semantic_index(
 
     let total_chunks: usize = file_chunks.iter().map(|fc| fc.chunks.len()).sum();
     if total_chunks == 0 {
-        eprintln!("  [semantic] No chunks extracted, skipping semantic index");
+        tracing::warn!("No chunks extracted, skipping semantic index");
         progress.status.store(4, Relaxed);
         return None;
     }
 
     progress.total_chunks.store(total_chunks, Relaxed);
-    eprintln!("  [semantic] Extracted {} chunks from {} files", total_chunks, file_chunks.len());
+    tracing::info!(
+        chunks = total_chunks,
+        files = file_chunks.len(),
+        "Extracted chunks for embedding"
+    );
 
     // Phase 2: Load cache, separate hits from misses
     // Try central cache first, fall back to legacy in-repo location
@@ -752,12 +758,12 @@ pub fn build_semantic_index(
     let (cache, used_legacy) = {
         let central = load_cache(&cp, model_config.dim, stored_model);
         if !central.is_empty() {
-            eprintln!("  [semantic] Loaded cache from {}", cp.display());
+            tracing::debug!(path = %cp.display(), "Loaded embedding cache");
             (central, false)
         } else if cp != legacy_cp {
             let legacy = load_cache(&legacy_cp, model_config.dim, stored_model);
             if !legacy.is_empty() {
-                eprintln!("  [semantic] Migrating cache from legacy {}", legacy_cp.display());
+                tracing::debug!(path = %legacy_cp.display(), "Migrating legacy embedding cache");
                 (legacy, true)
             } else {
                 (HashMap::new(), false)
@@ -791,11 +797,11 @@ pub fn build_semantic_index(
 
     let cache_hits = cached_meta.len();
     let miss_chunks: usize = to_embed.iter().map(|fc| fc.chunks.len()).sum();
-    eprintln!(
-        "  [semantic] Cache: {} chunks hit, {} chunks to embed ({} files changed)",
-        cache_hits,
-        miss_chunks,
-        to_embed.len()
+    tracing::info!(
+        cache_hits = cache_hits,
+        to_embed = miss_chunks,
+        changed_files = to_embed.len(),
+        "Embedding cache status"
     );
 
     // Phase 3: Open cache file for progressive writes
@@ -808,7 +814,7 @@ pub fn build_semantic_index(
             Ok(f) => {
                 let mut w = std::io::BufWriter::new(f);
                 if write_cache_header(&mut w, model_config.dim, stored_model).is_err() {
-                    eprintln!("  [semantic] Warning: failed to write cache header");
+                    tracing::warn!("Failed to write embedding cache header");
                 }
                 // Write cache-hit entries
                 for fc in &file_chunks {
@@ -828,7 +834,7 @@ pub fn build_semantic_index(
                 Some(std::sync::Mutex::new(w))
             }
             Err(e) => {
-                eprintln!("  [semantic] Warning: cannot write cache: {e}");
+                tracing::warn!(error = %e, "Cannot write embedding cache");
                 None
             }
         }
@@ -838,7 +844,7 @@ pub fn build_semantic_index(
     // Fast path: everything cached
     if to_embed.is_empty() {
         progress.status.store(3, Relaxed);
-        eprintln!("  [semantic] Fully cached — {} chunks loaded instantly", cache_hits);
+        tracing::info!(chunks = cache_hits, "Semantic index fully cached, loaded instantly");
         write_cache_meta(repo_root, stored_model, cached_meta.len());
         return Some(SemanticIndex {
             embeddings: cached_embs,
@@ -860,9 +866,11 @@ pub fn build_semantic_index(
     progress.completed_batches.store(0, Relaxed);
     progress.status.store(2, Relaxed);
 
-    eprintln!(
-        "  [semantic] Embedding {} batches across {} worker(s) on {device_label}...",
-        total_batches, n_workers
+    tracing::info!(
+        batches = total_batches,
+        workers = n_workers,
+        device = %device_label,
+        "Embedding chunks"
     );
 
     // Build a flat list of (file_index, chunk_index) pairs, then split into
@@ -911,7 +919,7 @@ pub fn build_semantic_index(
                     let (model, tokenizer, device) = match load_model(model_config) {
                         Ok(m) => m,
                         Err(e) => {
-                            eprintln!("  [semantic] Worker {worker_id} failed to load model: {e}");
+                            tracing::error!(worker = worker_id, error = %e, "Worker failed to load model");
                             return None;
                         }
                     };
@@ -948,9 +956,7 @@ pub fn build_semantic_index(
                                 }
                             }
                             Err(e) => {
-                                eprintln!(
-                                    "  [semantic] Worker {worker_id} batch encode failed: {e}"
-                                );
+                                tracing::warn!(worker = worker_id, error = %e, "Batch encode failed");
                                 continue;
                             }
                         }
@@ -959,7 +965,7 @@ pub fn build_semantic_index(
                             batch_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                         progress.completed_batches.store(done, Relaxed);
                         if done.is_multiple_of(20) || done == total_batches {
-                            eprintln!("  [semantic] Progress: {done}/{total_batches} batches");
+                            tracing::info!(done = done, total = total_batches, "Embedding progress");
                         }
                     }
 
@@ -1001,17 +1007,17 @@ pub fn build_semantic_index(
     }
 
     if chunk_meta.is_empty() {
-        eprintln!("  [semantic] No embeddings produced");
+        tracing::warn!("No embeddings produced");
         progress.status.store(4, Relaxed);
         return None;
     }
 
     progress.status.store(3, Relaxed);
-    eprintln!(
-        "  [semantic] Index ready: {} chunks ({} cached + {} embedded)",
-        chunk_meta.len(),
-        cache_hits,
-        chunk_meta.len() - cache_hits
+    tracing::info!(
+        total = chunk_meta.len(),
+        cached = cache_hits,
+        embedded = chunk_meta.len() - cache_hits,
+        "Semantic index ready"
     );
 
     // Write meta.json alongside the cache for debugging

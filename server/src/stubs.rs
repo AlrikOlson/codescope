@@ -1,6 +1,8 @@
-// ---------------------------------------------------------------------------
-// Stub extraction — collapse function bodies, keep structure
-// ---------------------------------------------------------------------------
+//! Language-aware stub extraction that strips function/method bodies while preserving
+//! signatures, imports, type definitions, and structural declarations.
+//!
+//! Supports brace-based languages (C-family, Rust, Go, JS/TS, PowerShell, shaders),
+//! indent-based languages (Python, Ruby), and config files (JSON, YAML, TOML, XML, INI).
 
 // ---------------------------------------------------------------------------
 // Language family classification
@@ -15,6 +17,7 @@ pub enum LanguageFamily {
     Unknown,
 }
 
+/// Classify a file extension into its language family for stub extraction strategy selection.
 pub fn classify_language(ext: &str) -> LanguageFamily {
     match ext {
         // Brace-based languages
@@ -1206,6 +1209,49 @@ fn block_function_name(line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rust_fn_body_collapsed() {
+        let input = "fn hello(x: i32) -> i32 {\n    let y = x + 1;\n    y * 2\n}\n";
+        let stubs = extract_stubs(input, "rs");
+        assert!(stubs.contains("fn hello("), "signature should be kept: {stubs}");
+        assert!(stubs.contains("{ /* ... */ }"), "body should be collapsed: {stubs}");
+        assert!(!stubs.contains("let y"), "body content should be removed: {stubs}");
+    }
+
+    #[test]
+    fn python_def_body_replaced() {
+        let input = "def greet(name):\n    msg = f\"Hello {name}\"\n    return msg\n";
+        let stubs = extract_stubs(input, "py");
+        assert!(stubs.contains("def greet(name):"), "def should be kept: {stubs}");
+        assert!(stubs.contains("..."), "body should be replaced with ...: {stubs}");
+        assert!(!stubs.contains("msg ="), "body content should be removed: {stubs}");
+    }
+
+    #[test]
+    fn python_class_preserved() {
+        let input = "class Foo:\n    def bar(self):\n        return 1\n";
+        let stubs = extract_stubs(input, "py");
+        assert!(stubs.contains("class Foo:"), "class should be preserved: {stubs}");
+        assert!(stubs.contains("def bar(self):"), "method should be preserved: {stubs}");
+    }
+
+    #[test]
+    fn typescript_function_signature_preserved() {
+        let input = "function processData(input: string): number {\n  const x = parseInt(input);\n  return x * 2;\n}\n";
+        let stubs = extract_stubs(input, "ts");
+        assert!(stubs.contains("function processData("), "function sig should be kept: {stubs}");
+        assert!(stubs.contains("{ /* ... */ }"), "body should be collapsed: {stubs}");
+        assert!(!stubs.contains("parseInt"), "body content should be removed: {stubs}");
+    }
+
+    #[test]
+    fn typescript_class_structure_preserved() {
+        let input = "class MyService {\n  private name: string;\n  constructor(name: string) {\n    this.name = name;\n  }\n  getName(): string {\n    return this.name;\n  }\n}\n";
+        let stubs = extract_stubs(input, "ts");
+        assert!(stubs.contains("class MyService"), "class decl should be preserved: {stubs}");
+        assert!(stubs.contains("private name: string"), "member should be preserved: {stubs}");
+    }
 
     #[test]
     fn test_multiline_class_declaration_preserved() {

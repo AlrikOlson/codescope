@@ -1,3 +1,9 @@
+//! MCP JSON-RPC server implementing the Model Context Protocol.
+//!
+//! Handles tool dispatch for 9 consolidated tools (`cs_search`, `cs_grep`, `cs_read`,
+//! `cs_modules`, `cs_imports`, `cs_git`, `cs_status`, `cs_rescan`, `cs_add_repo`),
+//! protocol version negotiation, and legacy tool name translation for backward compatibility.
+
 use crate::budget::{allocate_budget, BudgetUnit, DEFAULT_TOKEN_BUDGET};
 use crate::fuzzy::run_search;
 use crate::scan::get_category_path;
@@ -1829,7 +1835,7 @@ fn handle_add_repo(state: &mut ServerState, args: &serde_json::Value) -> (String
         let model = state.semantic_model.clone();
         let thread_name = name.clone();
         std::thread::spawn(move || {
-            eprintln!("  [{thread_name}] Building semantic index in background...");
+            tracing::info!(repo = thread_name.as_str(), "Building semantic index in background");
             let sem_start = std::time::Instant::now();
             if let Some(idx) = crate::semantic::build_semantic_index(
                 &files,
@@ -1837,10 +1843,11 @@ fn handle_add_repo(state: &mut ServerState, args: &serde_json::Value) -> (String
                 &progress,
                 &repo_root,
             ) {
-                eprintln!(
-                    "  [{thread_name}] Semantic index ready: {} chunks ({}ms)",
-                    idx.chunk_meta.len(),
-                    sem_start.elapsed().as_millis()
+                tracing::info!(
+                    repo = thread_name.as_str(),
+                    chunks = idx.chunk_meta.len(),
+                    time_ms = sem_start.elapsed().as_millis() as u64,
+                    "Semantic index ready"
                 );
                 *sem_handle.write().unwrap() = Some(idx);
             }
@@ -1949,12 +1956,20 @@ pub(crate) fn dispatch_jsonrpc(
                 }
             };
 
+            // Never set isError: true — it triggers Claude Code's sibling tool call
+            // cascade failure (all parallel calls get killed). Instead, prefix the
+            // error message so the LLM can still detect and recover from failures.
+            let content_text = if is_error {
+                format!("\u{26a0} Error: {text}")
+            } else {
+                text
+            };
             serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": {
-                    "content": [{ "type": "text", "text": text }],
-                    "isError": is_error
+                    "content": [{ "type": "text", "text": content_text }],
+                    "isError": false
                 }
             })
         }
@@ -1981,6 +1996,7 @@ pub(crate) fn dispatch_jsonrpc(
 // MCP stdio server loop
 // ---------------------------------------------------------------------------
 
+/// Run the MCP stdio server loop, reading JSON-RPC from stdin and writing responses to stdout.
 pub fn run_mcp(state: Arc<RwLock<ServerState>>) {
     let stdin = io::stdin();
     let stdout = io::stdout();
@@ -1993,12 +2009,12 @@ pub fn run_mcp(state: Arc<RwLock<ServerState>>) {
         let total_files: usize = s.repos.values().map(|r| r.all_files.len()).sum();
         let total_modules: usize = s.repos.values().map(|r| r.manifest.len()).sum();
         let repo_names: Vec<&str> = s.repos.keys().map(|k| k.as_str()).collect();
-        eprintln!(
-            "MCP server ready ({} files, {} modules, {} repo(s): {})",
-            total_files,
-            total_modules,
-            s.repos.len(),
-            repo_names.join(", ")
+        tracing::info!(
+            files = total_files,
+            modules = total_modules,
+            repos = s.repos.len(),
+            names = repo_names.join(", ").as_str(),
+            "MCP server ready"
         );
     }
 

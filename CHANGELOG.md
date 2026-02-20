@@ -4,6 +4,27 @@ All notable changes to CodeScope will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.0] — 2026-02-20
+
+### Added
+- Library crate (`lib.rs`) — CodeScope can now be embedded as a Rust library
+- CLI powered by `clap` with derive macros, auto-generated `--help`, and error messages
+- Shell completions: `codescope-server completions bash/zsh/fish/powershell`
+- Structured logging via `tracing` — control verbosity with `RUST_LOG` env var
+- Graceful shutdown on SIGINT/SIGTERM with connection draining
+- `/health` endpoint returning server status, version, repo count, and uptime
+- `.codescope.toml` config validation with typo suggestions for unknown keys
+- Unit tests for fuzzy matching, path validation, budget allocation, stub extraction, and date conversion
+- HTTP request/response tracing via `tower-http::TraceLayer`
+
+### Changed
+- CLI parsing migrated from hand-rolled args to `clap` derive (same flags, better UX)
+- All logging migrated from `eprintln!` to structured `tracing` macros
+- MCP tool count in README corrected from 19 to 9 (consolidated in v0.8.0)
+
+### Fixed
+- README MCP tools table now reflects the actual 9 consolidated tools
+
 ## [0.8.0] - 2026-02-20
 
 ### Added

@@ -1,298 +1,134 @@
-//! CodeScope — fast codebase indexer and search server.
-
-mod api;
-mod auth;
-mod budget;
-mod fuzzy;
-mod git;
-mod init;
-mod mcp;
-mod mcp_http;
-mod scan;
-#[cfg(feature = "semantic")]
-mod semantic;
-mod stubs;
-mod tokenizer;
-mod types;
-mod watch;
+//! CodeScope binary — thin CLI shell over the [`codescope_server`] library crate.
 
 use axum::{
     routing::{get, post},
     Router,
 };
+use clap::{CommandFactory, Parser, Subcommand};
 use dashmap::DashMap;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
+use tracing::{debug, error, info, warn};
+
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
+use tower_http::trace::TraceLayer;
 
-use api::*;
-use mcp::run_mcp;
-use scan::*;
-use types::*;
-
-// ---------------------------------------------------------------------------
-// Cross-platform path helpers
-// ---------------------------------------------------------------------------
-
-/// Platform-aware home directory: HOME on Unix, USERPROFILE on Windows
-fn home_dir() -> Option<PathBuf> {
-    std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")).ok().map(PathBuf::from)
-}
-
-/// Platform-aware config directory: ~/.codescope on Unix, %APPDATA%/codescope on Windows
-pub(crate) fn config_dir() -> Option<PathBuf> {
-    if cfg!(target_os = "windows") {
-        std::env::var("APPDATA").ok().map(|a| PathBuf::from(a).join("codescope"))
-    } else {
-        home_dir().map(|h| h.join(".codescope"))
-    }
-}
-
-/// Platform-aware data directory: ~/.local/share/codescope on Unix, %LOCALAPPDATA%/codescope on Windows
-fn data_dir() -> Option<PathBuf> {
-    if cfg!(target_os = "windows") {
-        std::env::var("LOCALAPPDATA")
-            .or_else(|_| std::env::var("APPDATA"))
-            .ok()
-            .map(|a| PathBuf::from(a).join("codescope"))
-    } else {
-        home_dir().map(|h| h.join(".local/share/codescope"))
-    }
-}
-
-/// Platform-aware cache directory: $XDG_CACHE_HOME/codescope or ~/.cache/codescope on Unix,
-/// %LOCALAPPDATA%/codescope/cache on Windows
-pub(crate) fn cache_dir() -> Option<PathBuf> {
-    if cfg!(target_os = "windows") {
-        std::env::var("LOCALAPPDATA").ok().map(|a| PathBuf::from(a).join("codescope").join("cache"))
-    } else {
-        std::env::var("XDG_CACHE_HOME")
-            .ok()
-            .map(PathBuf::from)
-            .or_else(|| home_dir().map(|h| h.join(".cache")))
-            .map(|c| c.join("codescope"))
-    }
-}
+use codescope_server::api::*;
+use codescope_server::mcp::run_mcp;
+use codescope_server::scan::*;
+use codescope_server::types::*;
+use codescope_server::{config_dir, data_dir, parse_repos_toml, scan_repo_with_options, tokenizer};
 
 // ---------------------------------------------------------------------------
-// .codescope.toml config loading
+// CLI definition (clap derive)
 // ---------------------------------------------------------------------------
 
-pub(crate) fn load_codescope_config(project_root: &std::path::Path) -> ScanConfig {
-    let mut config = ScanConfig::new(project_root.to_path_buf());
-    let config_path = project_root.join(".codescope.toml");
+/// Fast codebase indexer and search server — MCP server for Claude Code and standalone web UI.
+#[derive(Parser)]
+#[command(name = "codescope-server", version, about, long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
 
-    if config_path.exists() {
-        eprintln!("  Loading .codescope.toml...");
-        if let Ok(content) = std::fs::read_to_string(&config_path) {
-            if let Ok(table) = content.parse::<toml::Table>() {
-                // scan_dirs
-                if let Some(dirs) = table.get("scan_dirs").and_then(|v| v.as_array()) {
-                    config.scan_dirs =
-                        dirs.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
-                }
+    /// Project root directory (default: current directory)
+    #[arg(long)]
+    root: Option<PathBuf>,
 
-                // skip_dirs — merge with defaults
-                if let Some(dirs) = table.get("skip_dirs").and_then(|v| v.as_array()) {
-                    for d in dirs {
-                        if let Some(s) = d.as_str() {
-                            config.skip_dirs.insert(s.to_string());
-                        }
-                    }
-                }
+    /// Named repository (repeatable, format: NAME=PATH)
+    #[arg(long = "repo", value_name = "NAME=PATH")]
+    repos: Vec<String>,
 
-                // extensions
-                if let Some(exts) = table.get("extensions").and_then(|v| v.as_array()) {
-                    config.extensions =
-                        exts.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect();
-                }
+    /// Load repos from a TOML config file
+    #[arg(long)]
+    config: Option<PathBuf>,
 
-                // noise_dirs — merge with defaults
-                if let Some(dirs) = table.get("noise_dirs").and_then(|v| v.as_array()) {
-                    for d in dirs {
-                        if let Some(s) = d.as_str() {
-                            config.noise_dirs.insert(s.to_string());
-                        }
-                    }
-                }
+    /// Run as MCP stdio server (for Claude Code)
+    #[arg(long)]
+    mcp: bool,
 
-                // semantic_model
-                #[cfg(feature = "semantic")]
-                if let Some(model) = table.get("semantic_model").and_then(|v| v.as_str()) {
-                    config.semantic_model = Some(model.to_string());
-                }
-            } else {
-                eprintln!("  Warning: Failed to parse .codescope.toml");
-            }
-        }
-    }
+    /// Path to web UI dist directory
+    #[arg(long)]
+    dist: Option<PathBuf>,
 
-    config
+    /// Token counter: bytes-estimate (default) or tiktoken
+    #[arg(long, default_value = "bytes-estimate")]
+    tokenizer: String,
+
+    /// Disable semantic code search (enabled by default)
+    #[arg(long)]
+    no_semantic: bool,
+
+    /// Embedding model: minilm (default), codebert, starencoder, or HuggingFace model ID
+    #[arg(long)]
+    semantic_model: Option<String>,
+
+    /// Enable OAuth with authorization server URL
+    #[arg(long)]
+    auth_issuer: Option<String>,
+
+    /// Comma-separated allowed Origin headers for MCP HTTP transport
+    #[arg(long)]
+    allowed_origins: Option<String>,
+
+    /// Bind to 0.0.0.0 instead of 127.0.0.1 (localhost)
+    #[arg(long)]
+    bind_all: bool,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Initialize CodeScope in a project (generates config files)
+    Init {
+        /// Project path (default: current directory)
+        path: Option<PathBuf>,
+
+        /// Add to global config (~/.codescope/repos.toml) instead of local
+        #[arg(long)]
+        global: bool,
+
+        /// Pre-build semantic index cache during init
+        #[arg(long)]
+        semantic: bool,
+    },
+    /// Check project setup and diagnose issues
+    Doctor {
+        /// Project path (default: current directory)
+        path: Option<PathBuf>,
+    },
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
 }
 
 // ---------------------------------------------------------------------------
-// Scan a single repo and return RepoState
+// Graceful shutdown signal
 // ---------------------------------------------------------------------------
 
-pub fn scan_repo(
-    name: &str,
-    root: &std::path::Path,
-    _tok: &Arc<dyn tokenizer::Tokenizer>,
-) -> RepoState {
-    scan_repo_with_options(name, root, _tok, false)
-}
+async fn shutdown_signal() {
+    let ctrl_c = tokio::signal::ctrl_c();
 
-pub fn scan_repo_with_options(
-    name: &str,
-    root: &std::path::Path,
-    _tok: &Arc<dyn tokenizer::Tokenizer>,
-    _enable_semantic: bool,
-) -> RepoState {
-    let config = load_codescope_config(root);
-
-    eprintln!("  [{name}] Scanning codebase at {}...", root.display());
-    if !config.scan_dirs.is_empty() {
-        eprintln!("  [{name}] Scan dirs: {:?}", config.scan_dirs);
-    }
-    if !config.extensions.is_empty() {
-        eprintln!("  [{name}] Extensions: {:?}", config.extensions);
-    }
-
-    let start = Instant::now();
-
-    let (all_files, manifest) = scan_files(&config);
-    let file_count = all_files.len();
-    let module_count = manifest.len();
-    let deps = scan_deps(&config);
-    let (search_files, search_modules) = build_search_index(&manifest);
-    let import_graph = scan_imports(&all_files);
-    let term_doc_freq = build_term_doc_freq(&all_files);
-
-    #[cfg(feature = "semantic")]
-    let semantic_index = std::sync::Arc::new(std::sync::RwLock::new(None));
-    #[cfg(feature = "semantic")]
-    let semantic_progress = std::sync::Arc::new(types::SemanticProgress::new());
-
-    let scan_time_ms = start.elapsed().as_millis() as u64;
-
-    eprintln!(
-        "  [{name}] Scanned {file_count} files -> {module_count} modules, {} dep modules, {} import edges ({scan_time_ms}ms)",
-        deps.len(),
-        import_graph.imports.len(),
-    );
-
-    RepoState {
-        name: name.to_string(),
-        root: root.to_path_buf(),
-        config,
-        all_files,
-        manifest,
-        deps,
-        search_files,
-        search_modules,
-        import_graph,
-        stub_cache: dashmap::DashMap::new(),
-        term_doc_freq,
-        scan_time_ms,
-        #[cfg(feature = "semantic")]
-        semantic_index,
-        #[cfg(feature = "semantic")]
-        semantic_progress,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Parse repos.toml config file
-// ---------------------------------------------------------------------------
-
-fn parse_repos_toml(path: &std::path::Path) -> Vec<(String, PathBuf)> {
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Error: Could not read config file {}: {e}", path.display());
-            std::process::exit(1);
-        }
-    };
-    let table: toml::Table = match content.parse() {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("Error: Could not parse {}: {e}", path.display());
-            std::process::exit(1);
-        }
-    };
-
-    let repos_table = match table.get("repos").and_then(|v| v.as_table()) {
-        Some(t) => t,
-        None => {
-            eprintln!("Error: Config file missing [repos] section");
-            std::process::exit(1);
-        }
-    };
-
-    let mut repos = Vec::new();
-    for (name, value) in repos_table {
-        let root = value.get("root").and_then(|v| v.as_str()).unwrap_or_else(|| {
-            eprintln!("Error: repos.{name} missing 'root' field");
-            std::process::exit(1);
-        });
-        let root = PathBuf::from(root).canonicalize().unwrap_or_else(|e| {
-            eprintln!("Error: repos.{name} root '{}' not found: {e}", root);
-            std::process::exit(1);
-        });
-        repos.push((name.clone(), root));
-    }
-    repos
-}
-
-// ---------------------------------------------------------------------------
-// CLI help
-// ---------------------------------------------------------------------------
-
-fn print_help() {
-    let version = env!("CARGO_PKG_VERSION");
-    eprintln!("codescope-server {version}");
-    eprintln!("Fast codebase indexer and search server");
-    eprintln!();
-    eprintln!("USAGE:");
-    eprintln!("  codescope-server [COMMAND] [OPTIONS]");
-    eprintln!();
-    eprintln!("COMMANDS:");
-    eprintln!("  init [PATH]           Initialize CodeScope in a project (generates config files)");
-    eprintln!("  doctor [PATH]         Check project setup and diagnose issues");
-    eprintln!();
-    eprintln!("OPTIONS:");
-    eprintln!("  --root <PATH>         Project root directory (default: current directory)");
-    eprintln!("  --repo <NAME=PATH>    Named repository (repeatable for multi-repo)");
-    eprintln!("  --config <PATH>       Load repos from a TOML config file");
-    eprintln!("  --mcp                 Run as MCP stdio server (for Claude Code)");
-    eprintln!("  --dist <PATH>         Path to web UI dist directory");
-    eprintln!("  --tokenizer <NAME>    Token counter: bytes-estimate (default) or tiktoken");
-    #[cfg(feature = "semantic")]
+    #[cfg(unix)]
     {
-        eprintln!("  --no-semantic         Disable semantic code search (enabled by default)");
-        eprintln!(
-            "  --semantic-model <N>  Embedding model: minilm (default), codebert, starencoder"
-        );
-        #[cfg(feature = "cuda")]
-        eprintln!("                        (CUDA GPU acceleration enabled)");
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to register SIGTERM handler");
+        tokio::select! {
+            _ = ctrl_c => info!("Received SIGINT, shutting down..."),
+            _ = sigterm.recv() => info!("Received SIGTERM, shutting down..."),
+        }
     }
-    eprintln!("  --auth-issuer <URL>   Enable OAuth with authorization server URL");
-    eprintln!("  --allowed-origins <O> Comma-separated allowed Origin headers");
-    eprintln!("  --bind-all            Bind to 0.0.0.0 instead of 127.0.0.1 (localhost)");
-    eprintln!("  --help                Show this help message");
-    eprintln!("  --version             Show version");
-    eprintln!();
-    eprintln!("MULTI-REPO:");
-    eprintln!("  codescope-server --mcp --repo engine=/path/to/engine --repo game=/path/to/game");
-    eprintln!("  codescope-server --mcp --config ~/.codescope/repos.toml");
-    eprintln!();
-    eprintln!("ENVIRONMENT:");
-    eprintln!("  PORT                  HTTP server port (default: auto-scan 8432-8441)");
+
+    #[cfg(not(unix))]
+    {
+        ctrl_c.await.expect("failed to listen for Ctrl+C");
+        info!("Received Ctrl+C, shutting down...");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -301,53 +137,56 @@ fn print_help() {
 
 #[tokio::main]
 async fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    // Initialize structured logging
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("codescope=info".parse().unwrap()),
+        )
+        .with_target(false)
+        .init();
 
-    if args.iter().any(|a| a == "--help" || a == "-h") {
-        print_help();
-        return;
+    let cli = Cli::parse();
+
+    // Handle subcommands
+    if let Some(command) = &cli.command {
+        match command {
+            Commands::Init { path, global, semantic } => {
+                // Build args vector matching init::run_init's expected format
+                let mut args = vec!["init".to_string()];
+                if let Some(p) = path {
+                    args.push(p.display().to_string());
+                }
+                if *global {
+                    args.push("--global".to_string());
+                }
+                if *semantic {
+                    args.push("--semantic".to_string());
+                }
+                std::process::exit(codescope_server::init::run_init(&args));
+            }
+            Commands::Doctor { path } => {
+                let mut args = vec!["doctor".to_string()];
+                if let Some(p) = path {
+                    args.push(p.display().to_string());
+                }
+                std::process::exit(codescope_server::init::run_doctor(&args));
+            }
+            Commands::Completions { shell } => {
+                clap_complete::generate(
+                    *shell,
+                    &mut Cli::command(),
+                    "codescope-server",
+                    &mut std::io::stdout(),
+                );
+                return;
+            }
+        }
     }
 
-    if args.iter().any(|a| a == "--version" || a == "-V") {
-        eprintln!("codescope-server {}", env!("CARGO_PKG_VERSION"));
-        return;
-    }
-
-    // Check for subcommands before flag-based parsing
-    if args.get(1).map(|s| s.as_str()) == Some("init") {
-        std::process::exit(init::run_init(&args[1..]));
-    }
-    if args.get(1).map(|s| s.as_str()) == Some("doctor") {
-        std::process::exit(init::run_doctor(&args[1..]));
-    }
-
-    let mcp_mode = args.iter().any(|a| a == "--mcp");
-    let bind_all = args.iter().any(|a| a == "--bind-all");
-
-    // OAuth / transport security flags
-    let auth_issuer: Option<String> = args
-        .iter()
-        .position(|a| a == "--auth-issuer")
-        .and_then(|pos| args.get(pos + 1))
-        .map(|s| s.to_string());
-
-    let cli_allowed_origins: Option<Vec<String>> = args
-        .iter()
-        .position(|a| a == "--allowed-origins")
-        .and_then(|pos| args.get(pos + 1))
-        .map(|s| s.split(',').map(|o| o.trim().to_string()).collect());
-
-    // Tokenizer: --tokenizer flag or default bytes-estimate
-    let tokenizer_name = args
-        .iter()
-        .position(|a| a == "--tokenizer")
-        .and_then(|pos| args.get(pos + 1))
-        .map(|s| s.as_str())
-        .unwrap_or("bytes-estimate");
-
-    let tok = tokenizer::create_tokenizer(tokenizer_name);
-
-    eprintln!("\n  Tokenizer: {}", tok.name());
+    // Tokenizer
+    let tok = tokenizer::create_tokenizer(&cli.tokenizer);
+    info!(tokenizer = tok.name(), "Initialized tokenizer");
 
     // ---------------------------------------------------------------------------
     // Determine repo list from CLI args
@@ -356,61 +195,39 @@ async fn main() {
     let mut repo_specs: Vec<(String, PathBuf)> = Vec::new();
 
     // --repo name=/path flags (repeatable)
-    let mut i = 0;
-    while i < args.len() {
-        if args[i] == "--repo" {
-            if let Some(spec) = args.get(i + 1) {
-                if let Some((name, path)) = spec.split_once('=') {
-                    let root = PathBuf::from(path).canonicalize().unwrap_or_else(|e| {
-                        eprintln!("Error: --repo {name}={path} not found: {e}");
-                        std::process::exit(1);
-                    });
-                    repo_specs.push((name.to_string(), root));
-                } else {
-                    eprintln!("Error: --repo requires NAME=PATH format (e.g. --repo engine=/path/to/engine)");
-                    std::process::exit(1);
-                }
-                i += 2;
-            } else {
-                eprintln!("Error: --repo requires a NAME=PATH argument");
+    for spec in &cli.repos {
+        if let Some((name, path)) = spec.split_once('=') {
+            let root = PathBuf::from(path).canonicalize().unwrap_or_else(|e| {
+                error!(repo = name, path = path, error = %e, "Repository path not found");
                 std::process::exit(1);
-            }
+            });
+            repo_specs.push((name.to_string(), root));
         } else {
-            i += 1;
+            error!(spec = spec.as_str(), "Invalid --repo format, expected NAME=PATH");
+            std::process::exit(1);
         }
     }
 
     // --config file
-    if let Some(pos) = args.iter().position(|a| a == "--config") {
-        let config_path = args.get(pos + 1).unwrap_or_else(|| {
-            eprintln!("Error: --config requires a path argument");
-            std::process::exit(1);
-        });
-        let parsed = parse_repos_toml(std::path::Path::new(config_path));
+    if let Some(config_path) = &cli.config {
+        let parsed = parse_repos_toml(config_path);
         repo_specs.extend(parsed);
     }
 
     // Fallback: --root or cwd (single repo, backwards compat)
     if repo_specs.is_empty() {
-        let project_root = if let Some(pos) = args.iter().position(|a| a == "--root") {
-            match args.get(pos + 1) {
-                Some(path) => PathBuf::from(path),
-                None => {
-                    eprintln!("Error: --root requires a path argument");
-                    std::process::exit(1);
-                }
-            }
+        let project_root = if let Some(root) = &cli.root {
+            root.clone()
         } else {
             // Check global config fallback
             let global_config = config_dir().map(|d| d.join("repos.toml")).unwrap_or_default();
-            if global_config.exists() && mcp_mode {
+            if global_config.exists() && cli.mcp {
                 let parsed = parse_repos_toml(&global_config);
                 repo_specs.extend(parsed);
-                // Fall through — repo_specs now populated
                 PathBuf::new() // won't be used
             } else {
                 std::env::current_dir().unwrap_or_else(|_| {
-                    eprintln!("Error: Could not determine current directory. Use --root <path>");
+                    error!("Could not determine current directory. Use --root <path>");
                     std::process::exit(1);
                 })
             }
@@ -429,24 +246,17 @@ async fn main() {
     // ---------------------------------------------------------------------------
 
     #[cfg(feature = "semantic")]
-    let enable_semantic = !args.iter().any(|a| a == "--no-semantic");
+    let enable_semantic = !cli.no_semantic;
     #[cfg(not(feature = "semantic"))]
     let enable_semantic = false;
 
     #[cfg(feature = "semantic")]
-    let semantic_model: Option<String> = args
-        .iter()
-        .position(|a| a == "--semantic-model")
-        .and_then(|pos| args.get(pos + 1))
-        .map(|s| s.to_string());
+    let semantic_model: Option<String> = cli.semantic_model.clone();
     #[cfg(not(feature = "semantic"))]
     let _semantic_model: Option<String> = None;
 
-    if args.iter().any(|a| a == "--semantic") && !cfg!(feature = "semantic") {
-        eprintln!(
-            "  Warning: --semantic flag ignored. This binary does not include semantic search."
-        );
-        eprintln!("  To enable it, reinstall with: curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --with-semantic");
+    if cli.no_semantic && !cfg!(feature = "semantic") {
+        warn!("--no-semantic flag ignored — this binary does not include semantic search");
     }
 
     // ---------------------------------------------------------------------------
@@ -467,16 +277,11 @@ async fn main() {
     }
 
     // Build cross-repo import edges
-    let cross_repo_edges = scan::resolve_cross_repo_imports(&repos);
+    let cross_repo_edges = codescope_server::scan::resolve_cross_repo_imports(&repos);
 
     let total_files: usize = repos.values().map(|r| r.all_files.len()).sum();
     let total_modules: usize = repos.values().map(|r| r.manifest.len()).sum();
-    eprintln!(
-        "\n  Total: {} files, {} modules across {} repo(s)\n",
-        total_files,
-        total_modules,
-        repos.len()
-    );
+    info!(files = total_files, modules = total_modules, repos = repos.len(), "Scan complete");
 
     // Build unified ServerState (shared by MCP and HTTP modes)
     let server_state = ServerState {
@@ -498,13 +303,12 @@ async fn main() {
         let sem_model = semantic_model.clone();
         std::thread::spawn(move || {
             let s = state_bg.read().unwrap();
-            // Collect (name, files, semantic_index_handle) for each repo
             type SemWork = (
                 String,
                 PathBuf,
                 Vec<ScannedFile>,
-                std::sync::Arc<std::sync::RwLock<Option<types::SemanticIndex>>>,
-                std::sync::Arc<types::SemanticProgress>,
+                std::sync::Arc<std::sync::RwLock<Option<SemanticIndex>>>,
+                std::sync::Arc<SemanticProgress>,
             );
             let work: Vec<SemWork> = s
                 .repos
@@ -519,18 +323,22 @@ async fn main() {
                     )
                 })
                 .collect();
-            drop(s); // release the read lock
+            drop(s);
 
             for (name, root, files, sem_handle, progress) in work {
-                eprintln!("  [{name}] Building semantic index in background...");
+                info!(repo = name.as_str(), "Building semantic index in background...");
                 let sem_start = std::time::Instant::now();
-                if let Some(idx) =
-                    semantic::build_semantic_index(&files, sem_model.as_deref(), &progress, &root)
-                {
-                    eprintln!(
-                        "  [{name}] Semantic index ready: {} chunks ({}ms)",
-                        idx.chunk_meta.len(),
-                        sem_start.elapsed().as_millis()
+                if let Some(idx) = codescope_server::semantic::build_semantic_index(
+                    &files,
+                    sem_model.as_deref(),
+                    &progress,
+                    &root,
+                ) {
+                    info!(
+                        repo = name.as_str(),
+                        chunks = idx.chunk_meta.len(),
+                        time_ms = sem_start.elapsed().as_millis() as u64,
+                        "Semantic index ready"
                     );
                     *sem_handle.write().unwrap() = Some(idx);
                 }
@@ -539,9 +347,9 @@ async fn main() {
     }
 
     // Start file watcher for incremental live re-indexing
-    let _watcher = watch::start_watcher(Arc::clone(&state));
+    let _watcher = codescope_server::watch::start_watcher(Arc::clone(&state));
 
-    if mcp_mode {
+    if cli.mcp {
         run_mcp(state);
         return;
     }
@@ -558,41 +366,31 @@ async fn main() {
         })
     };
 
-    let ctx = AppContext { state: state.clone(), cache };
+    let ctx = AppContext { state: state.clone(), cache, start_time: std::time::Instant::now() };
 
     // Resolve dist dir: --dist flag, then cwd/dist, then ~/.local/share/codescope/dist
-    let dist_dir = if let Some(pos) = args.iter().position(|a| a == "--dist") {
-        match args.get(pos + 1) {
-            Some(path) => PathBuf::from(path),
-            None => {
-                eprintln!("Error: --dist requires a path argument");
-                std::process::exit(1);
-            }
-        }
+    let dist_dir = if let Some(path) = &cli.dist {
+        path.clone()
     } else {
         let cwd = std::env::current_dir().unwrap();
         let home_dist = data_dir().map(|d| d.join("dist")).unwrap_or_default();
         let candidates = [cwd.join("dist"), cwd.join("../dist"), home_dist];
-        candidates
-            .into_iter()
-            .find(|p| p.join("index.html").exists())
-            .unwrap_or_else(|| {
-                eprintln!("  Warning: No dist/ directory found. Run setup.sh with Node.js to build the web UI.");
-                cwd.join("dist")
-            })
+        candidates.into_iter().find(|p| p.join("index.html").exists()).unwrap_or_else(|| {
+            warn!("No dist/ directory found — run setup.sh with Node.js to build the web UI");
+            cwd.join("dist")
+        })
     };
 
     let index_html = dist_dir.join("index.html");
 
     // Bind address: 127.0.0.1 by default (MCP spec), --bind-all for 0.0.0.0
-    let bind_addr = if bind_all { "0.0.0.0" } else { "127.0.0.1" };
+    let bind_addr = if cli.bind_all { "0.0.0.0" } else { "127.0.0.1" };
 
     let explicit_port: Option<u16> = std::env::var("PORT").ok().and_then(|p| p.parse().ok());
 
     let listener = if let Some(port) = explicit_port {
-        // User chose a port explicitly — fail hard if busy
         tokio::net::TcpListener::bind(format!("{bind_addr}:{port}")).await.unwrap_or_else(|e| {
-            eprintln!("Error: Could not bind to port {port}: {e}");
+            error!(port = port, error = %e, "Could not bind to port");
             eprintln!("  PORT={port} was set explicitly. Choose a different port.");
             std::process::exit(1);
         })
@@ -611,7 +409,7 @@ async fn main() {
             }
         }
         found.unwrap_or_else(|| {
-            eprintln!("Error: No free port found in {BASE}..{}", BASE + RANGE - 1);
+            error!(range_start = BASE, range_end = BASE + RANGE - 1, "No free port found");
             eprintln!("  Try: PORT=<port> codescope-server");
             std::process::exit(1);
         })
@@ -620,6 +418,9 @@ async fn main() {
     let port = listener.local_addr().unwrap().port();
 
     // Build MCP HTTP transport config
+    let cli_allowed_origins: Option<Vec<String>> =
+        cli.allowed_origins.map(|s| s.split(',').map(|o| o.trim().to_string()).collect());
+
     let allowed_origins = cli_allowed_origins.unwrap_or_else(|| {
         vec![
             format!("http://localhost:{port}"),
@@ -632,8 +433,8 @@ async fn main() {
 
     let mcp_config = McpConfig {
         allowed_origins,
-        auth_issuer,
-        server_url: format!("http://{}:{port}", if bind_all { "0.0.0.0" } else { "127.0.0.1" }),
+        auth_issuer: cli.auth_issuer,
+        server_url: format!("http://{}:{port}", if cli.bind_all { "0.0.0.0" } else { "127.0.0.1" }),
     };
 
     let sessions: Arc<DashMap<String, McpSession>> = Arc::new(DashMap::new());
@@ -643,16 +444,23 @@ async fn main() {
     let mcp_router = Router::new()
         .route(
             "/mcp",
-            post(mcp_http::handle_mcp_post)
-                .delete(mcp_http::handle_mcp_delete)
-                .get(mcp_http::handle_mcp_get),
+            post(codescope_server::mcp_http::handle_mcp_post)
+                .delete(codescope_server::mcp_http::handle_mcp_delete)
+                .get(codescope_server::mcp_http::handle_mcp_get),
         )
-        .route("/.well-known/oauth-protected-resource/mcp", get(auth::prm_endpoint))
-        .layer(axum::middleware::from_fn_with_state(mcp_ctx.clone(), auth::validate_origin))
+        .route(
+            "/.well-known/oauth-protected-resource/mcp",
+            get(codescope_server::auth::prm_endpoint),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            mcp_ctx.clone(),
+            codescope_server::auth::validate_origin,
+        ))
         .with_state(mcp_ctx);
 
     // Web UI API routes + MCP transport + static files
     let app = Router::new()
+        .route("/health", get(api_health))
         .route("/api/tree", get(api_tree))
         .route("/api/manifest", get(api_manifest))
         .route("/api/deps", get(api_deps))
@@ -665,6 +473,7 @@ async fn main() {
         .route("/api/imports", get(api_imports))
         .merge(mcp_router)
         .fallback_service(ServeDir::new(&dist_dir).not_found_service(ServeFile::new(&index_html)))
+        .layer(TraceLayer::new_for_http())
         .layer(CompressionLayer::new())
         .layer(CorsLayer::permissive())
         .with_state(ctx);
@@ -675,13 +484,20 @@ async fn main() {
         loop {
             interval.tick().await;
             let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(1800);
+            let before = sessions.len();
             sessions.retain(|_, session| session.last_activity > cutoff);
+            let pruned = before - sessions.len();
+            if pruned > 0 {
+                debug!(pruned = pruned, remaining = sessions.len(), "Pruned idle MCP sessions");
+            }
         }
     });
 
-    eprintln!("  Serving UI from {}", dist_dir.display());
-    eprintln!("  MCP HTTP transport at /mcp");
-    eprintln!("  http://localhost:{port}");
+    info!(dist = %dist_dir.display(), "Serving web UI");
+    info!("MCP HTTP transport at /mcp");
+    info!(port = port, "http://localhost:{port}");
+    // Machine-readable line for scripts (not through tracing)
     eprintln!("CODESCOPE_PORT={port}");
-    axum::serve(listener, app).await.unwrap();
+
+    axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await.unwrap();
 }

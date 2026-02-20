@@ -1,3 +1,7 @@
+//! Core types shared across the CodeScope server: scan configuration, file entries,
+//! search indices, import graphs, stub caches, per-repo state, server state,
+//! MCP transport types, and path validation utilities.
+
 use dashmap::DashMap;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -16,9 +20,15 @@ pub struct SessionState {
     pub started_at: Instant,
 }
 
+impl Default for SessionState {
+    fn default() -> Self {
+        Self { files_read: HashMap::new(), total_tokens_served: 0, started_at: Instant::now() }
+    }
+}
+
 impl SessionState {
     pub fn new() -> Self {
-        Self { files_read: HashMap::new(), total_tokens_served: 0, started_at: Instant::now() }
+        Self::default()
     }
 
     pub fn record_read(&mut self, path: &str, tokens: usize) {
@@ -195,8 +205,8 @@ pub struct SemanticProgress {
 }
 
 #[cfg(feature = "semantic")]
-impl SemanticProgress {
-    pub fn new() -> Self {
+impl Default for SemanticProgress {
+    fn default() -> Self {
         Self {
             status: std::sync::atomic::AtomicU8::new(0),
             total_chunks: std::sync::atomic::AtomicUsize::new(0),
@@ -204,6 +214,13 @@ impl SemanticProgress {
             completed_batches: std::sync::atomic::AtomicUsize::new(0),
             device: std::sync::RwLock::new(String::new()),
         }
+    }
+}
+
+#[cfg(feature = "semantic")]
+impl SemanticProgress {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn status_label(&self) -> &'static str {
@@ -244,6 +261,7 @@ pub struct ChunkMeta {
 // ---------------------------------------------------------------------------
 
 /// Per-term document frequency index for IDF-weighted search scoring.
+#[derive(Default)]
 pub struct TermDocFreq {
     pub total_docs: usize,
     pub freq: HashMap<String, usize>,
@@ -385,6 +403,8 @@ pub struct HttpCache {
 pub struct AppContext {
     pub state: Arc<std::sync::RwLock<ServerState>>,
     pub cache: Arc<HttpCache>,
+    /// Server start time for uptime reporting via `/health`.
+    pub start_time: std::time::Instant,
 }
 
 // ---------------------------------------------------------------------------
@@ -473,4 +493,60 @@ pub fn validate_path(project_root: &Path, rel_path: &str) -> Result<PathBuf, &'s
         return Err("Path traversal detected");
     }
     Ok(canonical)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn validate_path_rejects_traversal() {
+        let root = Path::new("/tmp");
+        let result = validate_path(root, "../etc/passwd");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Invalid path");
+    }
+
+    #[test]
+    fn validate_path_rejects_absolute_paths() {
+        let root = Path::new("/tmp");
+        let result = validate_path(root, "/etc/passwd");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Invalid path");
+    }
+
+    #[test]
+    fn validate_path_rejects_empty() {
+        let root = Path::new("/tmp");
+        let result = validate_path(root, "");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Invalid path");
+    }
+
+    #[test]
+    fn validate_path_accepts_valid_relative() {
+        // Use a path that actually exists on the filesystem
+        let root = Path::new("/tmp");
+        // Create a temp file so canonicalize succeeds
+        let test_file = root.join("codescope_test_validate.txt");
+        std::fs::write(&test_file, "test").ok();
+        let result = validate_path(root, "codescope_test_validate.txt");
+        assert!(result.is_ok(), "valid relative path should succeed: {:?}", result);
+        std::fs::remove_file(&test_file).ok();
+    }
+
+    #[test]
+    fn grep_relevance_score_more_matches_higher() {
+        let terms = vec!["foo".to_string()];
+        let idf = vec![1.0];
+
+        let score_low = grep_relevance_score(1, 100, "bar.rs", "rs", &terms, 1, 50, &idf);
+        let score_high = grep_relevance_score(10, 100, "bar.rs", "rs", &terms, 1, 50, &idf);
+
+        assert!(
+            score_high > score_low,
+            "10 matches ({score_high}) should score higher than 1 match ({score_low})"
+        );
+    }
 }

@@ -1,3 +1,9 @@
+//! FZF v2 fuzzy matching with 64-bit bitmask pre-filter for O(1) candidate rejection
+//! and Smith-Waterman dynamic programming for scoring with CamelCase, delimiter, and
+//! consecutive character bonuses.
+//!
+//! Used by `cs_search` for ranked file and module discovery.
+
 use crate::types::{SearchFileEntry, SearchModuleEntry};
 use rayon::prelude::*;
 use serde::Serialize;
@@ -127,7 +133,11 @@ fn find_substring(text: &[u8], pattern: &[u8], case_sensitive: bool) -> Option<u
 // Smith-Waterman DP fuzzy matcher (fzf v2 style)
 // ---------------------------------------------------------------------------
 
-fn fuzzy_score_v2(text: &str, pattern: &str, case_sensitive: bool) -> Option<(f64, Vec<usize>)> {
+pub(crate) fn fuzzy_score_v2(
+    text: &str,
+    pattern: &str,
+    case_sensitive: bool,
+) -> Option<(f64, Vec<usize>)> {
     if pattern.is_empty() {
         return Some((0.0, vec![]));
     }
@@ -562,4 +572,94 @@ pub fn preprocess_search_query(query: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_filename_match_scores_highest() {
+        let files = vec![SearchFileEntry {
+            path: "src/api.rs".into(),
+            path_lower: "src/api.rs".into(),
+            filename: "api.rs".into(),
+            filename_lower: "api.rs".into(),
+            dir: "src".into(),
+            ext: "rs".into(),
+            desc: "API handler".into(),
+            desc_lower: "api handler".into(),
+            category: "src".into(),
+            filename_mask: char_bitmask("api.rs"),
+            path_mask: char_bitmask("src/api.rs"),
+            desc_mask: char_bitmask("api handler"),
+        }];
+        let result = run_search(&files, &[], "api", 10, 10);
+        assert_eq!(result.files.len(), 1);
+        // Exact stem match should give the 10000.0 bonus
+        assert!(
+            result.files[0].score >= 10000.0,
+            "exact match score {} should be >= 10000",
+            result.files[0].score
+        );
+    }
+
+    #[test]
+    fn prefix_match_scores_higher_than_substring() {
+        let prefix_file = SearchFileEntry {
+            path: "src/Actor.h".into(),
+            path_lower: "src/actor.h".into(),
+            filename: "Actor.h".into(),
+            filename_lower: "actor.h".into(),
+            dir: "src".into(),
+            ext: "h".into(),
+            desc: "".into(),
+            desc_lower: "".into(),
+            category: "src".into(),
+            filename_mask: char_bitmask("actor.h"),
+            path_mask: char_bitmask("src/actor.h"),
+            desc_mask: 0,
+        };
+        let substring_file = SearchFileEntry {
+            path: "src/MyActorComponent.h".into(),
+            path_lower: "src/myactorcomponent.h".into(),
+            filename: "MyActorComponent.h".into(),
+            filename_lower: "myactorcomponent.h".into(),
+            dir: "src".into(),
+            ext: "h".into(),
+            desc: "".into(),
+            desc_lower: "".into(),
+            category: "src".into(),
+            filename_mask: char_bitmask("myactorcomponent.h"),
+            path_mask: char_bitmask("src/myactorcomponent.h"),
+            desc_mask: 0,
+        };
+        let result = run_search(&[prefix_file, substring_file], &[], "actor", 10, 10);
+        assert!(result.files.len() == 2);
+        // Prefix match (Actor.h) should rank first
+        assert_eq!(result.files[0].filename, "Actor.h");
+        assert!(result.files[0].score > result.files[1].score);
+    }
+
+    #[test]
+    fn camelcase_boundary_bonus() {
+        // "SM" should match "SearchModule" via CamelCase boundaries
+        let score = fuzzy_score_v2("SearchModule", "SM", true);
+        assert!(score.is_some(), "CamelCase pattern SM should match SearchModule");
+        let (s, _) = score.unwrap();
+        assert!(s > 0.0, "CamelCase match should have positive score");
+    }
+
+    #[test]
+    fn non_matching_returns_none() {
+        let score = fuzzy_score_v2("hello", "xyz", false);
+        assert!(score.is_none(), "non-matching pattern should return None");
+    }
+
+    #[test]
+    fn empty_query_returns_empty_results() {
+        let result = run_search(&[], &[], "", 10, 10);
+        assert!(result.files.is_empty());
+        assert!(result.modules.is_empty());
+    }
 }

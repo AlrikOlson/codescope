@@ -1,3 +1,9 @@
+//! HTTP API handlers for the CodeScope web UI.
+//!
+//! Routes serve file trees, manifests, dependencies, grep results, search results,
+//! and import graphs as JSON. All endpoints are mounted under `/api/*` by the
+//! main HTTP server.
+
 use axum::{
     extract::{Json, Query, State},
     http::StatusCode,
@@ -28,17 +34,36 @@ fn read_state(
 }
 
 // ---------------------------------------------------------------------------
+// Health check endpoint
+// ---------------------------------------------------------------------------
+
+/// Health check endpoint returning server status, version, repo count, and uptime.
+pub async fn api_health(State(ctx): State<AppContext>) -> impl IntoResponse {
+    let s = ctx.state.read().unwrap();
+    let uptime = ctx.start_time.elapsed().as_secs();
+    Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+        "repos": s.repos.len(),
+        "uptime_seconds": uptime,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Static data endpoints (served from pre-computed HttpCache — no lock needed)
 // ---------------------------------------------------------------------------
 
+/// Serve the pre-computed file/module tree as JSON.
 pub async fn api_tree(State(ctx): State<AppContext>) -> impl IntoResponse {
     ([("content-type", "application/json")], ctx.cache.tree_json.clone())
 }
 
+/// Serve the pre-computed category manifest as JSON.
 pub async fn api_manifest(State(ctx): State<AppContext>) -> impl IntoResponse {
     ([("content-type", "application/json")], ctx.cache.manifest_json.clone())
 }
 
+/// Serve the pre-computed module dependency graph as JSON.
 pub async fn api_deps(State(ctx): State<AppContext>) -> impl IntoResponse {
     ([("content-type", "application/json")], ctx.cache.deps_json.clone())
 }
@@ -53,7 +78,7 @@ pub struct FileQuery {
 }
 
 #[derive(Serialize)]
-pub(crate) struct FileResponse {
+pub struct FileResponse {
     content: String,
     lines: usize,
     size: u64,
@@ -61,6 +86,7 @@ pub(crate) struct FileResponse {
     truncated: bool,
 }
 
+/// Read a single file by path, with optional truncation for large files.
 pub async fn api_file(
     State(ctx): State<AppContext>,
     Query(q): Query<FileQuery>,
@@ -115,10 +141,11 @@ enum BatchFileEntry {
 }
 
 #[derive(Serialize)]
-pub(crate) struct BatchFilesResponse {
+pub struct BatchFilesResponse {
     files: HashMap<String, BatchFileEntry>,
 }
 
+/// Batch-read multiple files by path.
 pub async fn api_files(
     State(ctx): State<AppContext>,
     Json(body): Json<BatchFilesRequest>,
@@ -186,7 +213,7 @@ struct GrepFileResult {
 }
 
 #[derive(Serialize)]
-pub(crate) struct GrepResponse {
+pub struct GrepResponse {
     results: Vec<GrepFileResult>,
     #[serde(rename = "totalMatches")]
     total_matches: usize,
@@ -196,6 +223,7 @@ pub(crate) struct GrepResponse {
     query_time: u64,
 }
 
+/// Regex content search across indexed files with context lines.
 pub async fn api_grep(
     State(ctx): State<AppContext>,
     Query(q): Query<GrepQuery>,
@@ -360,6 +388,7 @@ pub struct SearchQuery {
     module_limit: Option<usize>,
 }
 
+/// Fuzzy search for files and modules by query string.
 pub async fn api_search(
     State(ctx): State<AppContext>,
     Query(q): Query<SearchQuery>,
@@ -415,7 +444,7 @@ struct FindResultEntry {
 }
 
 #[derive(Serialize)]
-pub(crate) struct FindResponse {
+pub struct FindResponse {
     results: Vec<FindResultEntry>,
     #[serde(rename = "queryTime")]
     query_time: u64,
@@ -442,6 +471,7 @@ struct MergedFind {
     total_terms: usize,
 }
 
+/// Combined filename + content search with merged scoring.
 pub async fn api_find(
     State(ctx): State<AppContext>,
     Query(q): Query<FindQuery>,
@@ -767,13 +797,14 @@ pub struct ImportsQuery {
 }
 
 #[derive(Serialize)]
-pub(crate) struct ImportsResponse {
+pub struct ImportsResponse {
     path: String,
     imports: Vec<String>,
     #[serde(rename = "importedBy")]
     imported_by: Vec<String>,
 }
 
+/// Query import/include relationships for a file.
 pub async fn api_imports(
     State(ctx): State<AppContext>,
     Query(q): Query<ImportsQuery>,
@@ -798,6 +829,7 @@ pub async fn api_imports(
 // Smart Context (token budget)
 // ---------------------------------------------------------------------------
 
+/// Budget-aware batch file read with importance-weighted compression.
 pub async fn api_context(
     State(ctx): State<AppContext>,
     Json(body): Json<ContextRequest>,
