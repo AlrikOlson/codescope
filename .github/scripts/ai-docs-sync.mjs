@@ -94,7 +94,7 @@ async function main() {
       prompt: buildPrompt(version),
       systemPrompt: SYSTEM_PROMPT,
       maxTurns: 8,
-      readOnly: true,
+      codeScopeOnly: true,
     });
   } catch (err) {
     console.error(`[docs] Agent SDK error: ${err.message}`);

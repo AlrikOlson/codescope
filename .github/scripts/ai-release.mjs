@@ -108,7 +108,7 @@ async function main() {
     text = await runAgent({
       prompt: buildPrompt(lastTag, commits, diffStat),
       systemPrompt: SYSTEM_PROMPT,
-      readOnly: true,
+      codeScopeOnly: true,
     });
   } catch (err) {
     console.error(`Agent SDK error: ${err.message}`);
