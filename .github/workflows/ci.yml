@@ -259,6 +259,38 @@ jobs:
           name: ai-release-output
           path: /tmp
 
+      - name: Install Claude Agent SDK
+        run: npm install @anthropic-ai/claude-agent-sdk
+
+      - name: Download server binary for doc sync
+        uses: actions/download-artifact@v4
+        with:
+          name: codescope-server-ci
+          path: /usr/local/bin
+      - run: chmod +x /usr/local/bin/codescope-server
+
+      - name: Initialize CodeScope index
+        run: codescope-server init .
+
+      - name: AI documentation sync
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NEW_VERSION: ${{ needs.version.outputs.new_tag }}
+        run: node .github/scripts/ai-docs-sync.mjs
+
+      - name: Apply doc updates
+        run: |
+          node -e "
+            const fs = require('fs');
+            const path = '/tmp/ai-docs-sync-output.json';
+            if (!fs.existsSync(path)) process.exit(0);
+            const data = JSON.parse(fs.readFileSync(path, 'utf8'));
+            for (const update of (data.updates || [])) {
+              fs.writeFileSync(update.file, update.content);
+              console.error('Updated: ' + update.file + ' — ' + update.reason);
+            }
+          "
+
       - name: Update version files, commit, and tag
         run: |
           NEW_TAG="${{ needs.version.outputs.new_tag }}"
@@ -305,7 +337,7 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add server/Cargo.toml package.json package-lock.json CHANGELOG.md
+          git add server/Cargo.toml package.json package-lock.json CHANGELOG.md README.md CONTRIBUTING.md
           git diff --cached --quiet || git commit -m "$COMMIT_MSG"
           git tag -f "$NEW_TAG"
           git push origin HEAD:master --tags --force
