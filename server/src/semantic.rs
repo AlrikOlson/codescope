@@ -1166,7 +1166,7 @@ pub fn semantic_search(
     // Filter out low-relevance results before ranking — prevents garbage results
     // for queries with no meaningful matches. Threshold tuned for code search;
     // code vocabulary mismatch requires a lower cutoff than general text (~0.3-0.5).
-    const MIN_SEMANTIC_SCORE: f32 = 0.25;
+    const MIN_SEMANTIC_SCORE: f32 = 0.45;
     scores.retain(|(_, dot)| *dot >= MIN_SEMANTIC_SCORE);
     if scores.is_empty() {
         return Ok(Vec::new());

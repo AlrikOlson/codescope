@@ -1316,11 +1316,6 @@ fn handle_tool_call(
                                     continue;
                                 }
                                 let line_lower = line.to_lowercase();
-                                if require_all_terms
-                                    && !terms_lower.iter().all(|t| line_lower.contains(t.as_str()))
-                                {
-                                    continue;
-                                }
                                 match_count += 1;
                                 if first_match_line_idx == usize::MAX {
                                     first_match_line_idx = i;
@@ -1343,6 +1338,11 @@ fn handle_tool_call(
                                     };
                                     best_snippet = Some(trimmed);
                                 }
+                            }
+                            // File-level all-terms filter: require every term
+                            // appears somewhere in the file (not necessarily same line)
+                            if require_all_terms && terms_seen.len() < terms_lower.len() {
+                                return None;
                             }
                             if match_count == 0 {
                                 return None;
@@ -1440,6 +1440,10 @@ fn handle_tool_call(
             // RRF is rank-based, sidestepping the score normalization problem between
             // keyword scores and cosine similarity. Formula: score = Σ 1/(k + rank).
             #[cfg(feature = "semantic")]
+            let mut top_semantic_score: f32 = 0.0;
+            #[cfg(not(feature = "semantic"))]
+            let top_semantic_score: f32 = 0.0;
+            #[cfg(feature = "semantic")]
             let has_semantic = {
                 let mut fused = false;
                 for repo in &repos {
@@ -1451,6 +1455,7 @@ fn handle_tool_call(
                         {
                             if !sem_results.is_empty() {
                                 fused = true;
+                                top_semantic_score = sem_results.first().map(|r| r.score).unwrap_or(0.0);
                                 const RRF_K: f64 = 60.0;
 
                                 // Build keyword rank map (ranked is already sorted by score)
@@ -1565,13 +1570,17 @@ fn handle_tool_call(
             let query_time = start.elapsed().as_millis();
 
             // Compute confidence and coverage for structured output
-            let top_score = ranked
+            let top_kw_score = ranked
                 .first()
                 .map(|r| r.name_score.max(r.grep_score))
                 .unwrap_or(0.0);
-            let confidence = if ranked.len() >= 3 && top_score > 10.0 {
+            let confidence = if (ranked.len() >= 3 && top_kw_score > 10.0)
+                || (has_semantic && top_semantic_score > 0.6)
+            {
                 "high"
-            } else if !ranked.is_empty() && top_score > 3.0 {
+            } else if (!ranked.is_empty() && top_kw_score > 3.0)
+                || (has_semantic && top_semantic_score > 0.5)
+            {
                 "medium"
             } else {
                 "low"
@@ -1587,6 +1596,8 @@ fn handle_tool_call(
                     "full"
                 } else if best_match > 0 {
                     "partial"
+                } else if has_semantic && !ranked.is_empty() {
+                    "semantic"
                 } else {
                     "none"
                 }

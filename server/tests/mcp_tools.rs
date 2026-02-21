@@ -590,6 +590,83 @@ fn test_search_multi_term_coverage() {
         text.contains("Confidence:") && text.contains("Coverage:"),
         "Multi-term search should show confidence/coverage: {text}"
     );
+    assert!(text.contains("types.rs"), "Config verbose should find types.rs: {text}");
+}
+
+// ---------------------------------------------------------------------------
+// Search relevance tests (cross-line matching, confidence, coverage)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_search_cross_line_multi_term() {
+    // "Config verbose" — both terms exist in types.rs on different lines
+    let mut h = TestHarness::from_fixture("basic");
+    let (text, is_err) = h.call_tool("cs_search", json!({ "query": "Config verbose" }));
+    assert!(!is_err, "cs_search error: {text}");
+    assert!(text.contains("types.rs"), "Should find types.rs with cross-line terms: {text}");
+}
+
+#[test]
+fn test_search_cross_line_coverage_full() {
+    // Cross-line match where all terms are found → Coverage: full
+    let mut h = TestHarness::from_fixture("basic");
+    let (text, is_err) = h.call_tool("cs_search", json!({ "query": "Config verbose" }));
+    assert!(!is_err, "cs_search error: {text}");
+    assert!(text.contains("Coverage: full"), "Cross-line all-terms should be full: {text}");
+}
+
+#[test]
+fn test_search_single_line_still_works() {
+    // "Config name" on the same line (types.rs line 4) must still work
+    let mut h = TestHarness::from_fixture("basic");
+    let (text, is_err) = h.call_tool("cs_search", json!({ "query": "Config name" }));
+    assert!(!is_err, "cs_search error: {text}");
+    assert!(text.contains("types.rs"), "Same-line multi-term should still match: {text}");
+}
+
+#[test]
+fn test_search_no_match_when_term_missing() {
+    // "Config zzznonexistent" — one term not in codebase → no full coverage
+    let mut h = TestHarness::from_fixture("basic");
+    let (text, is_err) = h.call_tool("cs_search", json!({ "query": "Config zzznonexistent" }));
+    assert!(!is_err, "cs_search error: {text}");
+    assert!(!text.contains("Coverage: full"), "Missing term should not be full: {text}");
+}
+
+#[test]
+fn test_confidence_high_on_exact_match() {
+    let mut h = TestHarness::from_fixture("basic");
+    let (text, is_err) = h.call_tool("cs_search", json!({ "query": "Config" }));
+    assert!(!is_err, "cs_search error: {text}");
+    assert!(
+        text.contains("Confidence: high") || text.contains("Confidence: medium"),
+        "Exact match should not be low: {text}"
+    );
+}
+
+#[test]
+fn test_confidence_low_on_gibberish() {
+    let mut h = TestHarness::from_fixture("basic");
+    let (text, is_err) = h.call_tool("cs_search", json!({ "query": "zzzzxyznonexistent" }));
+    assert!(!is_err, "cs_search error: {text}");
+    assert!(text.contains("Confidence: low"), "Gibberish should be low: {text}");
+}
+
+#[test]
+fn test_coverage_full_single_term() {
+    let mut h = TestHarness::from_fixture("basic");
+    let (text, is_err) = h.call_tool("cs_search", json!({ "query": "greet" }));
+    assert!(!is_err, "cs_search error: {text}");
+    assert!(text.contains("Coverage: full"), "Single term should be full: {text}");
+}
+
+#[test]
+fn test_grep_all_mode_still_line_level() {
+    // Regression: cs_grep must keep line-level all-terms matching
+    let mut h = TestHarness::from_fixture("basic");
+    let (text, is_err) = h.call_tool("cs_grep", json!({ "query": "Config verbose", "match_mode": "all" }));
+    assert!(!is_err, "cs_grep error: {text}");
+    assert!(!text.contains("Config"), "cs_grep all-mode should not match cross-line: {text}");
 }
 
 #[test]
