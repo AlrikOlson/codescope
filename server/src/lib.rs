@@ -289,29 +289,20 @@ pub fn merge_global_repos_toml(name: &str, root: &std::path::Path) -> Result<(),
     let mut table: toml::Table = if toml_path.exists() {
         let content = std::fs::read_to_string(&toml_path)
             .map_err(|e| format!("Failed to read {}: {}", toml_path.display(), e))?;
-        content
-            .parse()
-            .map_err(|e| format!("Failed to parse {}: {}", toml_path.display(), e))?
+        content.parse().map_err(|e| format!("Failed to parse {}: {}", toml_path.display(), e))?
     } else {
         toml::Table::new()
     };
 
-    let repos = table
-        .entry("repos")
-        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
-    let repos = repos
-        .as_table_mut()
-        .ok_or("repos is not a table in repos.toml")?;
+    let repos = table.entry("repos").or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let repos = repos.as_table_mut().ok_or("repos is not a table in repos.toml")?;
 
     if repos.contains_key(name) {
         return Ok(());
     }
 
     let mut entry = toml::Table::new();
-    entry.insert(
-        "root".to_string(),
-        toml::Value::String(root.to_string_lossy().to_string()),
-    );
+    entry.insert("root".to_string(), toml::Value::String(root.to_string_lossy().to_string()));
     repos.insert(name.to_string(), toml::Value::Table(entry));
 
     std::fs::create_dir_all(&dir)

@@ -879,10 +879,7 @@ fn write_or_merge_mcp_json(root: &Path) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 fn merge_global_repos_toml(root: &Path) -> Result<(), String> {
-    let repo_name = root
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("default");
+    let repo_name = root.file_name().and_then(|n| n.to_str()).unwrap_or("default");
     crate::merge_global_repos_toml(repo_name, root)?;
     eprintln!("  Added '{}' to ~/.codescope/repos.toml", repo_name);
     Ok(())
