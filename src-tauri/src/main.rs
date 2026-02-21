@@ -467,11 +467,1007 @@ fn get_scan_dirs() -> Vec<String> {
 /// Check whether `codescope` is on PATH.
 #[tauri::command]
 fn check_on_path() -> bool {
-    std::process::Command::new("which")
+    let cmd = if cfg!(target_os = "windows") { "where" } else { "which" };
+    std::process::Command::new(cmd)
         .arg("codescope")
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// Find the directory where `cargo install` puts binaries.
+fn cargo_bin_dir() -> Option<PathBuf> {
+    // Check CARGO_INSTALL_ROOT first (e.g. ~/.local → ~/.local/bin)
+    if let Ok(root) = std::env::var("CARGO_INSTALL_ROOT") {
+        let dir = PathBuf::from(root).join("bin");
+        if dir.is_dir() {
+            return Some(dir);
+        }
+    }
+    // Check CARGO_HOME (defaults to ~/.cargo)
+    if let Ok(home) = std::env::var("CARGO_HOME") {
+        let dir = PathBuf::from(home).join("bin");
+        if dir.is_dir() {
+            return Some(dir);
+        }
+    }
+    // Default: ~/.cargo/bin
+    if let Some(home) = dirs::home_dir() {
+        let dir = home.join(".cargo").join("bin");
+        if dir.is_dir() {
+            return Some(dir);
+        }
+    }
+    None
+}
+
+/// Add the cargo bin directory to the user's PATH, cross-platform.
+/// Returns a human-readable message describing what was done.
+#[tauri::command]
+fn fix_path() -> Result<String, String> {
+    let bin_dir = cargo_bin_dir()
+        .ok_or_else(|| "Could not find cargo bin directory".to_string())?;
+    let bin_str = bin_dir.to_string_lossy().to_string();
+
+    // Check if already on PATH
+    if let Ok(path) = std::env::var("PATH") {
+        let sep = if cfg!(target_os = "windows") { ';' } else { ':' };
+        for entry in path.split(sep) {
+            if PathBuf::from(entry) == bin_dir {
+                return Ok(format!("{} is already on PATH", bin_str));
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        fix_path_windows(&bin_str)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        fix_path_unix(&bin_str)
+    }
+}
+
+/// Windows: Add to user-level PATH via the registry and broadcast the change.
+#[cfg(target_os = "windows")]
+fn fix_path_windows(bin_dir: &str) -> Result<String, String> {
+    use std::os::windows::ffi::OsStrExt;
+
+    // Read current user PATH from HKCU\Environment
+    let output = std::process::Command::new("reg")
+        .args(["query", r"HKCU\Environment", "/v", "Path"])
+        .output()
+        .map_err(|e| format!("Failed to query registry: {}", e))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let current_path = stdout
+        .lines()
+        .find(|l| l.contains("REG_SZ") || l.contains("REG_EXPAND_SZ"))
+        .and_then(|l| {
+            // Format: "    Path    REG_EXPAND_SZ    value"
+            l.split("REG_SZ").last()
+                .or_else(|| l.split("REG_EXPAND_SZ").last())
+                .map(|v| v.trim().to_string())
+        })
+        .unwrap_or_default();
+
+    // Check if already present (case-insensitive on Windows)
+    let bin_lower = bin_dir.to_lowercase();
+    for entry in current_path.split(';') {
+        if entry.trim().to_lowercase() == bin_lower {
+            return Ok(format!("{} is already on PATH", bin_dir));
+        }
+    }
+
+    // Append to user PATH
+    let new_path = if current_path.is_empty() {
+        bin_dir.to_string()
+    } else if current_path.ends_with(';') {
+        format!("{}{}", current_path, bin_dir)
+    } else {
+        format!("{};{}", current_path, bin_dir)
+    };
+
+    let status = std::process::Command::new("reg")
+        .args(["add", r"HKCU\Environment", "/v", "Path", "/t", "REG_EXPAND_SZ", "/d", &new_path, "/f"])
+        .status()
+        .map_err(|e| format!("Failed to write registry: {}", e))?;
+
+    if !status.success() {
+        return Err("Failed to update PATH in registry".to_string());
+    }
+
+    // Broadcast WM_SETTINGCHANGE so new terminals pick up the change
+    fn wide(s: &str) -> Vec<u16> {
+        std::ffi::OsStr::new(s)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    }
+    extern "system" {
+        fn SendMessageTimeoutW(
+            hwnd: usize, msg: u32, wparam: usize, lparam: *const u16,
+            flags: u32, timeout: u32, result: *mut usize,
+        ) -> usize;
+    }
+    const HWND_BROADCAST: usize = 0xFFFF;
+    const WM_SETTINGCHANGE: u32 = 0x001A;
+    const SMTO_ABORTIFHUNG: u32 = 0x0002;
+    let env = wide("Environment");
+    let mut _result: usize = 0;
+    unsafe {
+        SendMessageTimeoutW(
+            HWND_BROADCAST, WM_SETTINGCHANGE, 0,
+            env.as_ptr(), SMTO_ABORTIFHUNG, 5000, &mut _result,
+        );
+    }
+
+    Ok(format!("Added {} to PATH. New terminals will pick it up automatically.", bin_dir))
+}
+
+/// Unix: Append an export line to the user's shell profile.
+#[cfg(not(target_os = "windows"))]
+fn fix_path_unix(bin_dir: &str) -> Result<String, String> {
+    use std::io::Write;
+
+    let home = dirs::home_dir()
+        .ok_or_else(|| "Could not determine home directory".to_string())?;
+
+    // Determine which shell profile to modify
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    let profile_path = if shell.ends_with("zsh") {
+        home.join(".zshrc")
+    } else if shell.ends_with("bash") {
+        // Prefer .bashrc if it exists, otherwise .bash_profile (macOS)
+        let bashrc = home.join(".bashrc");
+        if bashrc.exists() { bashrc } else { home.join(".bash_profile") }
+    } else if shell.ends_with("fish") {
+        // Fish uses a different syntax, handled below
+        home.join(".config").join("fish").join("config.fish")
+    } else {
+        home.join(".profile")
+    };
+
+    let profile_name = profile_path.file_name()
+        .unwrap_or_default().to_string_lossy().to_string();
+
+    // Check if the export line is already present
+    if let Ok(content) = std::fs::read_to_string(&profile_path) {
+        if content.contains(bin_dir) {
+            return Ok(format!("{} already contains {}", profile_name, bin_dir));
+        }
+    }
+
+    let line = if shell.ends_with("fish") {
+        format!("\n# Added by CodeScope\nfish_add_path {}\n", bin_dir)
+    } else {
+        format!("\n# Added by CodeScope\nexport PATH=\"{}:$PATH\"\n", bin_dir)
+    };
+
+    // Ensure parent directory exists (for fish config)
+    if let Some(parent) = profile_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&profile_path)
+        .map_err(|e| format!("Failed to open {}: {}", profile_name, e))?;
+
+    file.write_all(line.as_bytes())
+        .map_err(|e| format!("Failed to write to {}: {}", profile_name, e))?;
+
+    Ok(format!("Added {} to {}. Run `source ~/{}` or open a new terminal.", bin_dir, profile_name, profile_name))
+}
+
+// ---------------------------------------------------------------------------
+// MCP configuration
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Serialize)]
+struct McpStatus {
+    configured: usize,
+    total: usize,
+    /// Paths that are missing .mcp.json or the codescope entry
+    missing: Vec<String>,
+}
+
+/// Check how many of the selected repos have .mcp.json with a codescope entry.
+#[tauri::command]
+fn check_mcp_status(paths: Vec<String>) -> McpStatus {
+    let mut configured = 0;
+    let mut missing = Vec::new();
+    for p in &paths {
+        let mcp_path = PathBuf::from(p).join(".mcp.json");
+        if mcp_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&mcp_path) {
+                if let Ok(data) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if data.get("mcpServers")
+                        .and_then(|v| v.as_object())
+                        .map(|o| o.contains_key("codescope"))
+                        .unwrap_or(false)
+                    {
+                        configured += 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        missing.push(p.clone());
+    }
+    McpStatus { configured, total: paths.len(), missing }
+}
+
+/// Create or merge .mcp.json for the given repo paths.
+#[tauri::command]
+fn configure_mcp(paths: Vec<String>) -> Result<String, String> {
+    let mut ok = 0;
+    let mut errors = Vec::new();
+    for p in &paths {
+        let root = PathBuf::from(p);
+        match init::write_or_merge_mcp_json(&root) {
+            Ok(()) => ok += 1,
+            Err(e) => errors.push(format!("{}: {}", p, e)),
+        }
+    }
+    if errors.is_empty() {
+        Ok(format!("Configured .mcp.json for {} project{}", ok, if ok == 1 { "" } else { "s" }))
+    } else {
+        Err(format!("Configured {} but failed for: {}", ok, errors.join("; ")))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shell completions
+// ---------------------------------------------------------------------------
+
+/// Detect which completions file path to use based on the current platform/shell.
+/// Returns (shell_name_for_clap, install_path).
+fn completions_target() -> Option<(String, PathBuf)> {
+    let home = dirs::home_dir()?;
+
+    if cfg!(target_os = "windows") {
+        // Install to a separate file; install_completions() dot-sources it from the PowerShell profile
+        let comp_file = home.join(".config").join("codescope").join("completions.ps1");
+        return Some(("powershell".to_string(), comp_file));
+    }
+
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    if shell.ends_with("zsh") {
+        Some(("zsh".to_string(), home.join(".zfunc").join("_codescope")))
+    } else if shell.ends_with("fish") {
+        Some(("fish".to_string(), home.join(".config").join("fish").join("completions").join("codescope.fish")))
+    } else {
+        // Bash (default)
+        Some(("bash".to_string(), home.join(".local").join("share").join("bash-completion").join("completions").join("codescope")))
+    }
+}
+
+/// Check if shell completions are installed at the standard location.
+#[tauri::command]
+fn check_completions() -> bool {
+    completions_target()
+        .map(|(_, path)| path.exists())
+        .unwrap_or(false)
+}
+
+/// Install shell completions by running `codescope completions <shell>` and writing the output.
+#[tauri::command]
+fn install_completions() -> Result<String, String> {
+    let (shell_name, install_path) = completions_target()
+        .ok_or_else(|| "Could not determine shell completions target".to_string())?;
+
+    // Find the codescope binary
+    let bin = find_codescope_binary()
+        .ok_or_else(|| "codescope binary not found. Install it first with `cargo install --path server`".to_string())?;
+
+    // Generate completions
+    let output = std::process::Command::new(&bin)
+        .args(["completions", &shell_name])
+        .output()
+        .map_err(|e| format!("Failed to run codescope completions: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("codescope completions failed: {}", stderr.trim()));
+    }
+
+    let completions_content = String::from_utf8_lossy(&output.stdout);
+
+    // Ensure parent directory exists
+    if let Some(parent) = install_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directory {}: {}", parent.display(), e))?;
+    }
+
+    // Write completions file
+    std::fs::write(&install_path, completions_content.as_bytes())
+        .map_err(|e| format!("Failed to write {}: {}", install_path.display(), e))?;
+
+    // Shell-specific profile updates
+    #[cfg(target_os = "windows")]
+    {
+        // Dot-source the completions file from the PowerShell profile
+        let home = dirs::home_dir().unwrap();
+        let profile = home
+            .join("Documents")
+            .join("PowerShell")
+            .join("Microsoft.PowerShell_profile.ps1");
+        let source_line = format!(". \"{}\"", install_path.display());
+        let needs_update = std::fs::read_to_string(&profile)
+            .map(|c| !c.contains(&source_line))
+            .unwrap_or(true);
+        if needs_update {
+            if let Some(parent) = profile.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&profile)
+                .map_err(|e| format!("Failed to update PowerShell profile: {}", e))?;
+            use std::io::Write;
+            writeln!(file, "\n# CodeScope tab completions\n{}", source_line)
+                .map_err(|e| format!("Failed to write to profile: {}", e))?;
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let shell_env = std::env::var("SHELL").unwrap_or_default();
+        if shell_env.ends_with("zsh") {
+            // Ensure fpath includes ~/.zfunc and compinit is called
+            let home = dirs::home_dir().unwrap();
+            let zshrc = home.join(".zshrc");
+            let zfunc_line = "fpath=(~/.zfunc $fpath)";
+            let needs_fpath = std::fs::read_to_string(&zshrc)
+                .map(|c| !c.contains(zfunc_line))
+                .unwrap_or(true);
+            if needs_fpath {
+                let mut file = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&zshrc)
+                    .map_err(|e| format!("Failed to update .zshrc: {}", e))?;
+                use std::io::Write;
+                writeln!(file, "\n# CodeScope completions\n{}\nautoload -Uz compinit && compinit", zfunc_line)
+                    .map_err(|e| format!("Failed to write to .zshrc: {}", e))?;
+            }
+        }
+        // bash and fish auto-discover from their standard directories — no profile edit needed
+    }
+
+    Ok(format!("Installed {} completions to {}", shell_name, install_path.display()))
+}
+
+/// Find the codescope binary, checking PATH first then known cargo bin locations.
+fn find_codescope_binary() -> Option<PathBuf> {
+    let bin_name = if cfg!(target_os = "windows") { "codescope.exe" } else { "codescope" };
+
+    // Check if it's on PATH
+    let which_cmd = if cfg!(target_os = "windows") { "where" } else { "which" };
+    if let Ok(output) = std::process::Command::new(which_cmd).arg("codescope").output() {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().lines().next()?.to_string();
+            return Some(PathBuf::from(path));
+        }
+    }
+
+    // Check cargo bin directory
+    if let Some(bin_dir) = cargo_bin_dir() {
+        let candidate = bin_dir.join(bin_name);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+// ---------------------------------------------------------------------------
+// GPU detection & CUDA installation
+// ---------------------------------------------------------------------------
+
+/// GPU and CUDA toolkit status returned to the frontend.
+#[derive(Clone, Serialize)]
+struct GpuInfo {
+    gpu_detected: bool,
+    gpu_name: String,
+    driver_version: String,
+    cuda_installed: bool,
+    cuda_version: String,
+    cuda_path: String,
+    /// "windows" | "linux" | "macos"
+    platform: String,
+    /// Whether automatic CUDA install is possible
+    can_auto_install: bool,
+    /// Shell command for manual install (Linux)
+    manual_install_cmd: String,
+}
+
+fn detect_nvidia_gpu() -> (bool, String, String) {
+    let output = std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=name,driver_version", "--format=csv,noheader,nounits"])
+        .output();
+    match output {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let line = stdout.trim();
+            if let Some((name, driver)) = line.split_once(',') {
+                (true, name.trim().to_string(), driver.trim().to_string())
+            } else {
+                (true, line.to_string(), String::new())
+            }
+        }
+        _ => (false, String::new(), String::new()),
+    }
+}
+
+fn detect_cuda_toolkit() -> (bool, String, String) {
+    // 1. Check CUDA_PATH env var
+    if let Ok(path) = std::env::var("CUDA_PATH") {
+        let p = PathBuf::from(&path);
+        let nvcc = if cfg!(target_os = "windows") {
+            p.join("bin").join("nvcc.exe")
+        } else {
+            p.join("bin").join("nvcc")
+        };
+        if nvcc.exists() {
+            let version = nvcc_version(&path);
+            return (true, version, path);
+        }
+    }
+
+    // 2. Check known install paths
+    #[cfg(target_os = "windows")]
+    {
+        let base = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA";
+        if let Ok(entries) = std::fs::read_dir(base) {
+            let mut versions: Vec<std::fs::DirEntry> = entries
+                .flatten()
+                .filter(|e| e.path().join("bin").join("nvcc.exe").exists())
+                .collect();
+            versions.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+            if let Some(entry) = versions.first() {
+                let path = entry.path().to_string_lossy().to_string();
+                let version = entry
+                    .file_name()
+                    .to_string_lossy()
+                    .trim_start_matches('v')
+                    .to_string();
+                return (true, version, path);
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        for p in &["/usr/local/cuda", "/opt/cuda"] {
+            if PathBuf::from(p).join("bin/nvcc").exists() {
+                let version = nvcc_version(p);
+                return (true, version, p.to_string());
+            }
+        }
+        // Also try nvcc on PATH
+        if let Ok(o) = std::process::Command::new("nvcc").arg("--version").output() {
+            if o.status.success() {
+                let out = String::from_utf8_lossy(&o.stdout);
+                let version = parse_nvcc_output(&out);
+                return (true, version, String::new());
+            }
+        }
+    }
+
+    (false, String::new(), String::new())
+}
+
+fn nvcc_version(cuda_path: &str) -> String {
+    let nvcc = if cfg!(target_os = "windows") {
+        PathBuf::from(cuda_path).join("bin").join("nvcc.exe")
+    } else {
+        PathBuf::from(cuda_path).join("bin").join("nvcc")
+    };
+    if let Ok(o) = std::process::Command::new(nvcc).arg("--version").output() {
+        if o.status.success() {
+            return parse_nvcc_output(&String::from_utf8_lossy(&o.stdout));
+        }
+    }
+    String::new()
+}
+
+/// Parse "release 12.6" from nvcc --version output.
+fn parse_nvcc_output(output: &str) -> String {
+    for line in output.lines() {
+        if let Some(idx) = line.find("release ") {
+            let rest = &line[idx + 8..];
+            if let Some(end) = rest.find(',') {
+                return rest[..end].trim().to_string();
+            }
+            return rest.trim().to_string();
+        }
+    }
+    String::new()
+}
+
+fn linux_install_command() -> String {
+    // Detect distro for the right command
+    let os_release = std::fs::read_to_string("/etc/os-release").unwrap_or_default();
+    if os_release.contains("Ubuntu") || os_release.contains("Debian") {
+        let codename = if os_release.contains("24.04") {
+            "ubuntu2404"
+        } else if os_release.contains("22.04") {
+            "ubuntu2204"
+        } else {
+            "ubuntu2204"
+        };
+        format!(
+            "wget https://developer.download.nvidia.com/compute/cuda/repos/{codename}/x86_64/cuda-keyring_1.1-1_all.deb && \
+sudo dpkg -i cuda-keyring_1.1-1_all.deb && \
+sudo apt-get update && \
+sudo apt-get install -y cuda-toolkit-12-6"
+        )
+    } else if os_release.contains("Fedora") || os_release.contains("Red Hat") || os_release.contains("CentOS") {
+        "sudo dnf config-manager --add-repo \
+https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo && \
+sudo dnf install -y cuda-toolkit-12-6".to_string()
+    } else if os_release.contains("Arch") {
+        "sudo pacman -S --noconfirm cuda".to_string()
+    } else {
+        "# Visit https://developer.nvidia.com/cuda-downloads for your distribution".to_string()
+    }
+}
+
+/// Detect GPU and CUDA toolkit status.
+#[tauri::command]
+fn detect_gpu() -> GpuInfo {
+    let platform = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    };
+
+    let (gpu_detected, gpu_name, driver_version) = detect_nvidia_gpu();
+    let (cuda_installed, cuda_version, cuda_path) = detect_cuda_toolkit();
+
+    let can_auto_install = platform == "windows" && gpu_detected && !cuda_installed;
+    let manual_install_cmd = if platform == "linux" && gpu_detected && !cuda_installed {
+        linux_install_command()
+    } else {
+        String::new()
+    };
+
+    GpuInfo {
+        gpu_detected,
+        gpu_name,
+        driver_version,
+        cuda_installed,
+        cuda_version,
+        cuda_path,
+        platform: platform.to_string(),
+        can_auto_install,
+        manual_install_cmd,
+    }
+}
+
+/// CUDA install progress event.
+#[derive(Clone, Serialize)]
+struct CudaInstallEvent {
+    /// "downloading" | "installing" | "complete" | "failed"
+    status: String,
+    /// 0.0–1.0 download progress
+    progress: f64,
+    message: String,
+}
+
+/// Download and install CUDA toolkit. Emits `cuda-install-progress` events.
+#[tauri::command]
+fn install_cuda(app: AppHandle) {
+    std::thread::spawn(move || {
+        let result = run_cuda_install(&app);
+        if let Err(e) = result {
+            let _ = app.emit(
+                "cuda-install-progress",
+                CudaInstallEvent {
+                    status: "failed".to_string(),
+                    progress: 0.0,
+                    message: e,
+                },
+            );
+        }
+    });
+}
+
+fn emit_cuda(app: &AppHandle, status: &str, progress: f64, message: &str) {
+    let _ = app.emit(
+        "cuda-install-progress",
+        CudaInstallEvent {
+            status: status.to_string(),
+            progress,
+            message: message.to_string(),
+        },
+    );
+}
+
+fn run_cuda_install(app: &AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        run_cuda_install_windows(app)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        Err("Automatic CUDA installation is only supported on Windows. Use the manual command shown above.".to_string())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn run_cuda_install_windows(app: &AppHandle) -> Result<(), String> {
+    use std::time::Duration;
+
+    let temp_dir = std::env::temp_dir();
+    let installer_path = temp_dir.join("cuda_12.6_network_installer.exe");
+    let installer_str = installer_path.to_string_lossy().to_string();
+    let log_dir = temp_dir.join("codescope-cuda-log");
+    let url =
+        "https://developer.download.nvidia.com/compute/cuda/12.6.3/network_installers/cuda_12.6.3_windows_network.exe";
+    // Network installer is ~30MB
+    let expected_size: u64 = 32_000_000;
+
+    emit_cuda(app, "downloading", 0.0, "Downloading CUDA 12.6 installer...");
+
+    // Download using curl.exe (built into Windows 10+)
+    let dl_path = installer_str.clone();
+    let download_handle = std::thread::spawn(move || {
+        std::process::Command::new("curl.exe")
+            .args(["-L", "-o", &dl_path, "--silent", "--show-error", url])
+            .output()
+    });
+
+    // Poll file size for progress
+    loop {
+        if download_handle.is_finished() {
+            break;
+        }
+        if let Ok(meta) = std::fs::metadata(&installer_path) {
+            let progress = (meta.len() as f64 / expected_size as f64).min(0.99);
+            let mb = meta.len() as f64 / 1_000_000.0;
+            emit_cuda(
+                app,
+                "downloading",
+                progress,
+                &format!("Downloading... {:.1} MB", mb),
+            );
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+
+    let output = download_handle
+        .join()
+        .map_err(|_| "Download thread panicked".to_string())?
+        .map_err(|e| format!("Failed to start download: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Download failed: {}", stderr.trim()));
+    }
+
+    // Verify file exists and has reasonable size
+    let meta = std::fs::metadata(&installer_path)
+        .map_err(|_| "Downloaded file not found".to_string())?;
+    if meta.len() < 1_000_000 {
+        let _ = std::fs::remove_file(&installer_path);
+        return Err("Downloaded file is too small — download may have failed".to_string());
+    }
+
+    emit_cuda(
+        app,
+        "installing",
+        0.0,
+        "Installing CUDA Toolkit — this will request administrator access...",
+    );
+
+    // Prepare log directory for progress monitoring
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_dir_str = log_dir.to_string_lossy().to_string();
+
+    // Launch installer with logging enabled for progress tracking.
+    // -s: silent, -n: no reboot, -log: write install logs, -loglevel:6: max verbosity
+    let install_args = format!("-s -n -log:\"{}\" -loglevel:6", log_dir_str);
+    let process = shell_execute_runas(&installer_path, &install_args)?;
+
+    // CUDA install directory — monitor for subdirectory creation as progress signal
+    let cuda_install_dir = std::path::PathBuf::from(
+        r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6"
+    );
+
+    // Known components that get installed as subdirectories, in rough order.
+    // Each one created bumps the progress bar forward.
+    let component_dirs: &[(&str, &str)] = &[
+        ("bin",       "Installing CUDA binaries..."),
+        ("include",   "Installing CUDA headers..."),
+        ("lib",       "Installing CUDA libraries..."),
+        ("nvvm",      "Installing NVVM compiler..."),
+        ("extras",    "Installing extras & samples..."),
+        ("libnvvp",   "Installing Visual Profiler..."),
+        ("nsight",    "Installing Nsight tools..."),
+        ("compute-sanitizer", "Installing Compute Sanitizer..."),
+    ];
+
+    // Track which components we've seen so far
+    let mut seen_components = vec![false; component_dirs.len()];
+    let mut last_log_size: u64 = 0;
+    let mut last_log_component = String::new();
+
+    // Poll for progress until the installer exits
+    loop {
+        // Check if the process has finished
+        if let Some(exit_code) = process.try_wait() {
+            // Clean up installer and log dir
+            let _ = std::fs::remove_file(&installer_path);
+            let _ = std::fs::remove_dir_all(&log_dir);
+
+            if exit_code != 0 {
+                return Err(format!(
+                    "Installer exited with code {}. You may need to download and run the installer manually from https://developer.nvidia.com/cuda-downloads",
+                    exit_code
+                ));
+            }
+            break;
+        }
+
+        // --- Progress source 1: Monitor target directory for component subdirectories ---
+        let mut components_found = 0usize;
+        for (i, (dir_name, msg)) in component_dirs.iter().enumerate() {
+            if !seen_components[i] && cuda_install_dir.join(dir_name).exists() {
+                seen_components[i] = true;
+                last_log_component = msg.to_string();
+            }
+            if seen_components[i] {
+                components_found += 1;
+            }
+        }
+
+        // --- Progress source 2: Poll the log file for component extraction info ---
+        let log_message = scan_cuda_log_dir(&log_dir, &mut last_log_size);
+
+        // Compute progress: directory monitoring gives us a 0..1 range over known components
+        // Reserve 0.0-0.05 for "starting", 0.05-0.95 for component installs, 0.95-1.0 for finalization
+        let dir_progress = if component_dirs.is_empty() {
+            0.0
+        } else {
+            components_found as f64 / component_dirs.len() as f64
+        };
+        let progress = 0.05 + dir_progress * 0.90;
+
+        // Pick the best status message: log file detail > component dir > generic
+        let message = if let Some(ref log_msg) = log_message {
+            log_msg.clone()
+        } else if !last_log_component.is_empty() {
+            last_log_component.clone()
+        } else {
+            "Installing CUDA Toolkit components...".to_string()
+        };
+
+        emit_cuda(app, "installing", progress.min(0.95), &message);
+
+        std::thread::sleep(Duration::from_millis(800));
+    }
+
+    // Give Windows a moment to finalize PATH changes
+    std::thread::sleep(Duration::from_secs(2));
+
+    // Verify installation
+    let (installed, version, _path) = detect_cuda_toolkit();
+    if installed {
+        emit_cuda(
+            app,
+            "complete",
+            1.0,
+            &format!("CUDA {} installed successfully! Restart the app to enable GPU acceleration.", version),
+        );
+    } else {
+        emit_cuda(
+            app,
+            "complete",
+            1.0,
+            "Installation finished. A system restart may be needed for CUDA to be detected.",
+        );
+    }
+
+    Ok(())
+}
+
+/// Scan the CUDA installer log directory for the most recent meaningful status line.
+/// Tracks `last_size` to only read new content since the last poll.
+#[cfg(target_os = "windows")]
+fn scan_cuda_log_dir(log_dir: &std::path::Path, last_size: &mut u64) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    // Find the most recently modified .log file in the directory
+    let log_file = std::fs::read_dir(log_dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .map(|ext| ext == "log")
+                .unwrap_or(false)
+        })
+        .max_by_key(|e| e.metadata().ok().and_then(|m| m.modified().ok()))?;
+
+    let path = log_file.path();
+    let file_size = std::fs::metadata(&path).ok()?.len();
+
+    // Only read if the file has grown
+    if file_size <= *last_size {
+        return None;
+    }
+
+    let mut file = std::fs::File::open(&path).ok()?;
+    // Seek to where we left off (or near the end for large files)
+    let seek_pos = if *last_size > 0 {
+        *last_size
+    } else {
+        file_size.saturating_sub(4096)
+    };
+    file.seek(SeekFrom::Start(seek_pos)).ok()?;
+
+    let mut buf = String::new();
+    file.read_to_string(&mut buf).ok()?;
+    *last_size = file_size;
+
+    // Look for meaningful status lines in the new log content.
+    // NVIDIA installer logs contain lines like:
+    //   [Component Name]: Extracting...
+    //   Installing <component>...
+    //   Extracting <component>...
+    let mut best_line = None;
+    for line in buf.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Look for lines that indicate component progress
+        if trimmed.contains("Installing") || trimmed.contains("Extracting")
+            || trimmed.contains("Configuring") || trimmed.contains("Setting up")
+        {
+            // Clean up the line for display — strip timestamps and noise
+            let display = trimmed
+                .trim_start_matches(|c: char| c.is_ascii_digit() || c == '-' || c == ':' || c == '.' || c == ' ' || c == 'T' || c == 'Z');
+            if !display.is_empty() && display.len() < 120 {
+                best_line = Some(display.to_string());
+                break;
+            }
+        }
+    }
+
+    best_line
+}
+
+/// Opaque handle to an elevated process launched via UAC.
+#[cfg(target_os = "windows")]
+struct ElevatedProcess {
+    handle: usize,
+}
+
+#[cfg(target_os = "windows")]
+impl ElevatedProcess {
+    /// Check if the process has exited. Returns `Some(exit_code)` if done, `None` if still running.
+    fn try_wait(&self) -> Option<u32> {
+        extern "system" {
+            fn WaitForSingleObject(hHandle: usize, dwMilliseconds: u32) -> u32;
+            fn GetExitCodeProcess(hProcess: usize, lpExitCode: *mut u32) -> i32;
+        }
+        const WAIT_OBJECT_0: u32 = 0;
+        let result = unsafe { WaitForSingleObject(self.handle, 0) }; // 0ms = non-blocking
+        if result == WAIT_OBJECT_0 {
+            let mut exit_code: u32 = 1;
+            unsafe { GetExitCodeProcess(self.handle, &mut exit_code) };
+            Some(exit_code)
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for ElevatedProcess {
+    fn drop(&mut self) {
+        extern "system" {
+            fn CloseHandle(hObject: usize) -> i32;
+        }
+        if self.handle != 0 {
+            unsafe { CloseHandle(self.handle) };
+        }
+    }
+}
+
+/// Launch an executable elevated via UAC ("Run as administrator").
+/// Returns an ElevatedProcess handle that can be polled for completion.
+#[cfg(target_os = "windows")]
+fn shell_execute_runas(exe: &std::path::Path, args: &str) -> Result<ElevatedProcess, String> {
+    use std::os::windows::ffi::OsStrExt;
+
+    // Wide-string helper
+    fn wide(s: &str) -> Vec<u16> {
+        std::ffi::OsStr::new(s)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    }
+    fn wide_path(p: &std::path::Path) -> Vec<u16> {
+        p.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    }
+
+    let verb = wide("runas");
+    let file = wide_path(exe);
+    let params = wide(args);
+
+    // SHELLEXECUTEINFOW struct — 112 bytes on 64-bit
+    // We build it manually to avoid pulling in the `windows` crate API surface.
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    struct SHELLEXECUTEINFOW {
+        cbSize: u32,
+        fMask: u32,
+        hwnd: usize,
+        lpVerb: *const u16,
+        lpFile: *const u16,
+        lpParameters: *const u16,
+        lpDirectory: *const u16,
+        nShow: i32,
+        hInstApp: usize,
+        lpIDList: usize,
+        lpClass: *const u16,
+        hkeyClass: usize,
+        dwHotKey: u32,
+        hIcon: usize,   // union with hMonitor
+        hProcess: usize,
+    }
+
+    const SEE_MASK_NOCLOSEPROCESS: u32 = 0x00000040;
+    const SW_SHOWNORMAL: i32 = 1;
+
+    extern "system" {
+        fn ShellExecuteExW(pExecInfo: *mut SHELLEXECUTEINFOW) -> i32;
+    }
+
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        hwnd: 0,
+        lpVerb: verb.as_ptr(),
+        lpFile: file.as_ptr(),
+        lpParameters: params.as_ptr(),
+        lpDirectory: std::ptr::null(),
+        nShow: SW_SHOWNORMAL,
+        hInstApp: 0,
+        lpIDList: 0,
+        lpClass: std::ptr::null(),
+        hkeyClass: 0,
+        dwHotKey: 0,
+        hIcon: 0,
+        hProcess: 0,
+    };
+
+    let ok = unsafe { ShellExecuteExW(&mut info) };
+    if ok == 0 || info.hProcess == 0 {
+        return Err(
+            "Failed to launch installer with administrator privileges. \
+             The UAC prompt may have been declined."
+                .to_string(),
+        );
+    }
+
+    Ok(ElevatedProcess { handle: info.hProcess })
 }
 
 // ---------------------------------------------------------------------------
@@ -922,6 +1918,13 @@ fn main() {
             get_version,
             get_scan_dirs,
             check_on_path,
+            fix_path,
+            check_mcp_status,
+            configure_mcp,
+            check_completions,
+            install_completions,
+            detect_gpu,
+            install_cuda,
             open_search_window,
             search_find,
             search_read_file,

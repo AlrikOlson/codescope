@@ -1861,6 +1861,287 @@ input[type="checkbox"] {
   }
 }
 
+/* --- GPU Screen --- */
+.gpu-detect-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text3);
+  font-size: 0.73rem;
+  padding: 24px 0;
+}
+
+.gpu-detect-loading svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.gpu-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  margin-bottom: 6px;
+  transition: all 180ms var(--ease);
+  animation: rowSlideIn var(--slow) var(--ease) both;
+}
+
+.gpu-card:nth-child(2) { animation-delay: 60ms; }
+
+.gpu-card.detected {
+  border-color: color-mix(in oklch, var(--green) 25%, var(--border));
+  background: color-mix(in oklch, var(--green) 3%, var(--surface));
+}
+
+.gpu-card.missing {
+  border-color: color-mix(in oklch, var(--yellow) 25%, var(--border));
+  background: color-mix(in oklch, var(--yellow) 3%, var(--surface));
+}
+
+.gpu-card.none {
+  opacity: 0.7;
+}
+
+.gpu-card:hover {
+  border-color: var(--border-strong);
+  background: var(--surface2);
+}
+
+.gpu-card-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gpu-card-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.gpu-card-title {
+  font-weight: 600;
+  font-size: 0.78rem;
+  color: var(--text);
+}
+
+.gpu-card-meta {
+  font-size: 0.62rem;
+  color: var(--text3);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gpu-card-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: var(--r-full);
+  font-size: 0.52rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.gpu-card-badge.detected {
+  background: color-mix(in oklch, var(--green) 12%, transparent);
+  color: var(--green);
+}
+
+.gpu-info-banner {
+  padding: 10px 14px;
+  background: color-mix(in oklch, var(--accent) 6%, var(--surface));
+  border: 1px solid color-mix(in oklch, var(--accent) 15%, var(--border));
+  border-radius: var(--r-md);
+  font-size: 0.68rem;
+  color: var(--text2);
+  margin-bottom: 6px;
+  animation: rowSlideIn var(--slow) var(--ease) both;
+}
+
+.gpu-install-section {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding-top: 10px;
+  animation: rowSlideIn var(--slow) var(--ease) both;
+}
+
+.btn-sm {
+  padding: 4px 12px;
+  font-size: 0.6rem;
+  gap: 4px;
+}
+
+.btn-accent {
+  background: linear-gradient(135deg, var(--green), color-mix(in oklch, var(--green) 70%, var(--neon-cyan)));
+  color: var(--deep-black);
+  box-shadow: 0 2px 12px color-mix(in oklch, var(--green) 20%, transparent);
+}
+
+.btn-accent:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow:
+    0 6px 20px color-mix(in oklch, var(--green) 30%, transparent),
+    0 0 0 1px color-mix(in oklch, var(--green) 12%, transparent);
+}
+
+.btn-accent:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  transition-duration: 80ms;
+}
+
+.gpu-install-btn {
+  padding: 10px 24px;
+}
+
+.gpu-install-note {
+  font-size: 0.58rem;
+  color: var(--text3);
+  line-height: 1.5;
+}
+
+.gpu-install-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--glass);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  margin-top: 10px;
+  animation: rowSlideIn var(--slow) var(--ease);
+}
+
+.gpu-progress-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.68rem;
+  color: var(--text2);
+}
+
+.gpu-result-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--r-md);
+  font-size: 0.68rem;
+  margin-top: 10px;
+  line-height: 1.5;
+  animation: rowSlideIn var(--slow) var(--ease);
+}
+
+.gpu-result-banner.success {
+  background: color-mix(in oklch, var(--green) 8%, var(--surface));
+  border: 1px solid color-mix(in oklch, var(--green) 25%, var(--border));
+  color: var(--green);
+}
+
+.gpu-result-banner.success svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.gpu-result-banner.error {
+  background: color-mix(in oklch, var(--red) 8%, var(--surface));
+  border: 1px solid color-mix(in oklch, var(--red) 25%, var(--border));
+  color: var(--red);
+}
+
+.gpu-result-banner.error svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.gpu-manual-section {
+  margin-top: 10px;
+  animation: rowSlideIn var(--slow) var(--ease) both;
+}
+
+.gpu-manual-label {
+  font-size: 0.68rem;
+  color: var(--text2);
+  margin-bottom: 8px;
+}
+
+.gpu-manual-cmd {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+
+.gpu-manual-cmd pre {
+  padding: 12px 40px 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  line-height: 1.7;
+  color: var(--accent);
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+}
+
+.gpu-copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  border-radius: var(--r-sm);
+  color: var(--text3);
+  cursor: pointer;
+  transition: all 180ms var(--ease);
+}
+
+.gpu-copy-btn:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+  background: var(--surface3);
+}
+
+.gpu-copy-btn.copied {
+  border-color: var(--green);
+  color: var(--green);
+  background: color-mix(in oklch, var(--green) 8%, var(--surface2));
+}
+
+.gpu-redetect-btn {
+  margin-top: 10px;
+}
+
+.gpu-download-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.6rem;
+  color: var(--text3);
+  text-decoration: none;
+  margin-top: 12px;
+  padding: 4px 0;
+  transition: color 180ms var(--ease);
+}
+
+.gpu-download-link:hover {
+  color: var(--accent);
+}
+
 /* --- Reduced Motion --- */
 @media (prefers-reduced-motion: reduce) {
   .setup-content[data-direction="forward"],
@@ -1929,5 +2210,13 @@ input[type="checkbox"] {
   }
   .doctor-ring-arc {
     transition-duration: 0.01ms;
+  }
+  .gpu-card,
+  .gpu-install-section,
+  .gpu-install-progress,
+  .gpu-result-banner,
+  .gpu-manual-section,
+  .gpu-info-banner {
+    animation: none;
   }
 }

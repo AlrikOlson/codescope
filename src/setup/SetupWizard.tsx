@@ -5,12 +5,13 @@ import { X, Check } from 'lucide-react';
 import { WelcomeScreen } from './screens/WelcomeScreen';
 import { RepoPickerScreen } from './screens/RepoPickerScreen';
 import { SemanticScreen } from './screens/SemanticScreen';
+import { GpuScreen } from './screens/GpuScreen';
 import { IntegrationScreen } from './screens/IntegrationScreen';
 import { DoctorScreen } from './screens/DoctorScreen';
 import { DoneScreen } from './screens/DoneScreen';
 import './setup.css';
 
-type Screen = 'welcome' | 'repos' | 'semantic' | 'integration' | 'doctor' | 'done';
+type Screen = 'welcome' | 'repos' | 'semantic' | 'gpu' | 'integration' | 'doctor' | 'done';
 
 export interface RepoInfo {
   path: string;
@@ -36,6 +37,7 @@ const STEPS: { id: Screen; label: string }[] = [
   { id: 'welcome', label: 'Welcome' },
   { id: 'repos', label: 'Repositories' },
   { id: 'semantic', label: 'Semantic' },
+  { id: 'gpu', label: 'GPU' },
   { id: 'integration', label: 'Integrations' },
   { id: 'doctor', label: 'Initialize' },
   { id: 'done', label: 'Done' },
@@ -183,8 +185,15 @@ export function SetupWizard() {
                 onBack={back}
               />
             )}
+            {screen === 'gpu' && (
+              <GpuScreen onNext={next} onBack={back} />
+            )}
             {screen === 'integration' && (
-              <IntegrationScreen onNext={next} onBack={back} />
+              <IntegrationScreen
+                selectedRepos={selectedRepos}
+                onNext={next}
+                onBack={back}
+              />
             )}
             {screen === 'doctor' && (
               <DoctorScreen
