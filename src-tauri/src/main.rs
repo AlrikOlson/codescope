@@ -850,6 +850,53 @@ async fn search_read_file(path: String) -> Result<serde_json::Value, String> {
     }
 }
 
+/// Return status info about indexed repos (for the empty-state display).
+#[tauri::command]
+async fn search_status() -> Result<serde_json::Value, String> {
+    let state = get_search_state()?;
+    match tauri::async_runtime::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        let s = state.read().map_err(|_| "State lock poisoned".to_string())?;
+        let mut repos = Vec::new();
+        let mut total_files = 0usize;
+        let mut lang_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+        for (_name, repo) in &s.repos {
+            let file_count = repo.all_files.len();
+            total_files += file_count;
+
+            // Count extensions for language breakdown
+            for f in &repo.all_files {
+                if !f.ext.is_empty() {
+                    *lang_counts.entry(f.ext.clone()).or_default() += 1;
+                }
+            }
+
+            repos.push(serde_json::json!({
+                "name": repo.name,
+                "root": repo.root.to_string_lossy(),
+                "files": file_count,
+                "scanTime": repo.scan_time_ms,
+            }));
+        }
+
+        // Top languages sorted by count
+        let mut langs: Vec<_> = lang_counts.into_iter().collect();
+        langs.sort_by(|a, b| b.1.cmp(&a.1));
+        let top_langs: Vec<_> = langs.into_iter().take(8).map(|(ext, count)| {
+            serde_json::json!({ "ext": ext, "count": count })
+        }).collect();
+
+        Ok(serde_json::json!({
+            "repos": repos,
+            "totalFiles": total_files,
+            "topLangs": top_langs,
+        }))
+    }).await {
+        Ok(inner) => inner,
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -872,6 +919,7 @@ fn main() {
             open_search_window,
             search_find,
             search_read_file,
+            search_status,
         ])
         .setup(move |app| {
             if search_mode {

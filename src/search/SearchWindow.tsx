@@ -6,6 +6,7 @@ import { MetadataStrip } from './components/MetadataStrip';
 import { ResultsList } from './components/ResultsList';
 import { CodePreview } from './components/CodePreview';
 import { ShortcutsBar } from './components/ShortcutsBar';
+import { IndexOverview } from './components/IndexOverview';
 
 export function SearchWindow() {
   const {
@@ -113,16 +114,20 @@ export function SearchWindow() {
         />
       )}
 
-      {/* Split panel */}
-      <div className="sw-split">
-        <ResultsList
-          results={results}
-          activeIdx={activeIdx}
-          onSetActive={setActiveIdx}
-          onSelect={handleSelect}
-        />
-        <CodePreview path={selectedPath} />
-      </div>
+      {/* Split panel or overview */}
+      {hasQuery ? (
+        <div className="sw-split">
+          <ResultsList
+            results={results}
+            activeIdx={activeIdx}
+            onSetActive={setActiveIdx}
+            onSelect={handleSelect}
+          />
+          <CodePreview path={selectedPath} />
+        </div>
+      ) : (
+        <IndexOverview />
+      )}
 
       {/* Shortcuts bar */}
       <ShortcutsBar />
