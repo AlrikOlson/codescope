@@ -21,4 +21,4 @@ RUN touch server/src/main.rs && \
     cargo build --release --manifest-path server/Cargo.toml --features semantic
 
 FROM scratch AS output
-COPY --from=builder /app/server/target/release/codescope-server /codescope-server
+COPY --from=builder /app/server/target/release/codescope /codescope

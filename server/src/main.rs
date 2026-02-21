@@ -29,7 +29,7 @@ use codescope_server::{config_dir, data_dir, parse_repos_toml, scan_repo_with_op
 
 /// Fast codebase indexer and search server — MCP server for Claude Code and standalone web UI.
 #[derive(Parser)]
-#[command(name = "codescope-server", version, about, long_about = None)]
+#[command(name = "codescope", version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -100,6 +100,11 @@ enum Commands {
     },
     /// Check project setup and diagnose issues
     Doctor {
+        /// Project path (default: current directory)
+        path: Option<PathBuf>,
+    },
+    /// Launch the web UI in a browser
+    Web {
         /// Project path (default: current directory)
         path: Option<PathBuf>,
     },
@@ -176,11 +181,47 @@ async fn main() {
                 }
                 std::process::exit(codescope_server::init::run_doctor(&args));
             }
+            Commands::Web { path } => {
+                let root = path
+                    .as_ref()
+                    .map(|p| p.clone())
+                    .unwrap_or_else(|| std::env::current_dir().unwrap());
+                let root = root.canonicalize().unwrap_or_else(|e| {
+                    eprintln!("Error: Path '{}' not found: {}", root.display(), e);
+                    std::process::exit(1);
+                });
+
+                // Resolve dist directory
+                let dist_dir = data_dir()
+                    .map(|d| d.join("dist"))
+                    .filter(|d| d.join("index.html").exists())
+                    .unwrap_or_else(|| {
+                        eprintln!("Error: Web UI not installed.");
+                        eprintln!("  Re-run setup.sh with Node.js available to build the web UI.");
+                        std::process::exit(1);
+                    });
+
+                eprintln!("Project: {}", root.display());
+
+                // Build the command to re-exec ourselves as a server
+                let exe = std::env::current_exe().unwrap();
+                let status = std::process::Command::new(&exe)
+                    .arg("--root")
+                    .arg(&root)
+                    .arg("--dist")
+                    .arg(&dist_dir)
+                    .status()
+                    .unwrap_or_else(|e| {
+                        eprintln!("Error: Failed to start server: {}", e);
+                        std::process::exit(1);
+                    });
+                std::process::exit(status.code().unwrap_or(1));
+            }
             Commands::Completions { shell } => {
                 clap_complete::generate(
                     *shell,
                     &mut Cli::command(),
-                    "codescope-server",
+                    "codescope",
                     &mut std::io::stdout(),
                 );
                 return;
@@ -420,7 +461,7 @@ async fn main() {
         }
         found.unwrap_or_else(|| {
             error!(range_start = BASE, range_end = BASE + RANGE - 1, "No free port found");
-            eprintln!("  Try: PORT=<port> codescope-server");
+            eprintln!("  Try: PORT=<port> codescope");
             std::process::exit(1);
         })
     };

@@ -11,7 +11,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-BINARY="$PROJECT_DIR/server/target/release/codescope-server"
+BINARY="$PROJECT_DIR/server/target/release/codescope"
 PORT=18434
 BASE="http://localhost:$PORT"
 PASSED=0

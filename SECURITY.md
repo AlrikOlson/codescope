@@ -12,7 +12,7 @@ If you discover a security vulnerability in CodeScope, please report it responsi
 
 This policy covers:
 
-- The `codescope-server` binary (MCP and HTTP modes)
+- The `codescope` binary (MCP and HTTP modes)
 - The web UI frontend
 - The setup and installation scripts
 

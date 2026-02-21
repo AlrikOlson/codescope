@@ -101,4 +101,4 @@ Open a [GitHub issue](https://github.com/AlrikOlson/codescope/issues) with:
 - What you expected to happen
 - What actually happened
 - Steps to reproduce
-- CodeScope version (`codescope-server --version`)
+- CodeScope version (`codescope --version`)

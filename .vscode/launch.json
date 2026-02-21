@@ -5,7 +5,7 @@
             "name": "CodeScope",
             "type": "node",
             "request": "launch",
-            "runtimeExecutable": "${workspaceFolder}/server/target/release/codescope-server",
+            "runtimeExecutable": "${workspaceFolder}/server/target/release/codescope",
             "runtimeArgs": [
                 "--root", ".",
                 "--dist", "${workspaceFolder}/dist"

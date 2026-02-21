@@ -282,38 +282,38 @@ jobs:
         include:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-            archive: codescope-server-linux-x86_64.tar.gz
+            archive: codescope-linux-x86_64.tar.gz
             use_cross: true
             features: semantic
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            archive: codescope-server-linux-x86_64-cuda.tar.gz
+            archive: codescope-linux-x86_64-cuda.tar.gz
             use_cross: false
             features: semantic,cuda
             cuda: true
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
-            archive: codescope-server-linux-aarch64.tar.gz
+            archive: codescope-linux-aarch64.tar.gz
             use_cross: true
             features: semantic
           - target: x86_64-apple-darwin
             os: macos-latest
-            archive: codescope-server-macos-x86_64.tar.gz
+            archive: codescope-macos-x86_64.tar.gz
             use_cross: false
             features: semantic
           - target: aarch64-apple-darwin
             os: macos-latest
-            archive: codescope-server-macos-aarch64.tar.gz
+            archive: codescope-macos-aarch64.tar.gz
             use_cross: false
             features: semantic
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            archive: codescope-server-windows-x86_64.zip
+            archive: codescope-windows-x86_64.zip
             use_cross: false
             features: semantic
           - target: aarch64-pc-windows-msvc
             os: windows-latest
-            archive: codescope-server-windows-aarch64.zip
+            archive: codescope-windows-aarch64.zip
             use_cross: false
             features: semantic
 
@@ -393,16 +393,11 @@ jobs:
         run: |
           mkdir -p staging
           if [[ "${{ matrix.archive }}" == *.zip ]]; then
-            cp server/target/${{ matrix.target }}/release/codescope-server.exe staging/
-            cp server/codescope-init staging/
-            cp server/codescope-web staging/
+            cp server/target/${{ matrix.target }}/release/codescope.exe staging/
             cp LICENSE README.md staging/
             cd staging && 7z a -tzip ../${{ matrix.archive }} . && cd ..
           else
-            cp server/target/${{ matrix.target }}/release/codescope-server staging/
-            cp server/codescope-init staging/
-            cp server/codescope-web staging/
-            chmod +x staging/codescope-init staging/codescope-web
+            cp server/target/${{ matrix.target }}/release/codescope staging/
             cp LICENSE README.md staging/
             tar czf ${{ matrix.archive }} -C staging .
           fi
@@ -411,9 +406,9 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ matrix.archive }}" == *.zip ]]; then
-            7z l ${{ matrix.archive }} | grep codescope-server > /dev/null
+            7z l ${{ matrix.archive }} | grep codescope > /dev/null
           else
-            tar tzf ${{ matrix.archive }} | grep codescope-server > /dev/null
+            tar tzf ${{ matrix.archive }} | grep codescope > /dev/null
           fi
 
       - name: Upload artifact
@@ -464,41 +459,15 @@ jobs:
 
       # ── AI Doc Sync (full releases only) ──
 
+      - uses: ./.github/actions/setup-codescope
+        if: steps.tag.outputs.needs_commit == 'true' && inputs.skip_ai_docs != true
+        with:
+          init-args: '. --semantic'
+
       - uses: actions/setup-node@v4
         if: steps.tag.outputs.needs_commit == 'true'
         with:
           node-version: 22
-
-      - name: Restore codescope-server binary
-        if: steps.tag.outputs.needs_commit == 'true' && inputs.skip_ai_docs != true
-        id: docsync-cache
-        uses: actions/cache@v4
-        with:
-          path: server/target/release/codescope-server
-          key: codescope-server-linux-x64-${{ hashFiles('server/src/**', 'server/Cargo.toml', 'server/Cargo.lock') }}
-
-      - uses: dtolnay/rust-toolchain@stable
-        if: steps.tag.outputs.needs_commit == 'true' && inputs.skip_ai_docs != true && steps.docsync-cache.outputs.cache-hit != 'true'
-
-      - uses: Swatinem/rust-cache@v2
-        if: steps.tag.outputs.needs_commit == 'true' && inputs.skip_ai_docs != true && steps.docsync-cache.outputs.cache-hit != 'true'
-        with:
-          workspaces: server
-
-      - name: Build CodeScope for doc sync
-        if: steps.tag.outputs.needs_commit == 'true' && inputs.skip_ai_docs != true && steps.docsync-cache.outputs.cache-hit != 'true'
-        run: cargo build --release --manifest-path server/Cargo.toml
-
-      - name: Restore BERT model cache
-        if: steps.tag.outputs.needs_commit == 'true' && inputs.skip_ai_docs != true
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2
-          key: bert-all-MiniLM-L6-v2-v1
-
-      - name: Initialize CodeScope index
-        if: steps.tag.outputs.needs_commit == 'true' && inputs.skip_ai_docs != true
-        run: ./server/target/release/codescope-server init . --semantic
 
       - name: Install Claude Agent SDK
         if: steps.tag.outputs.needs_commit == 'true'
@@ -560,7 +529,7 @@ jobs:
 
           # Cargo.toml + Cargo.lock (keep lockfile version in sync)
           sed -i "s/^version = \".*\"/version = \"$VERSION\"/" server/Cargo.toml
-          sed -i '/^name = "codescope-server"$/{n;s/^version = ".*"/version = "'"$VERSION"'"/;}' server/Cargo.lock
+          sed -i '/^name = "codescope"$/{n;s/^version = ".*"/version = "'"$VERSION"'"/;}' server/Cargo.lock
 
           # package.json + package-lock.json
           node -e "

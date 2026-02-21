@@ -58,7 +58,7 @@ export function codeScopeServer(): Plugin {
   let backendPort = DEFAULT_BACKEND_PORT;
 
   return {
-    name: 'codescope-server',
+    name: 'codescope',
 
     async config(): Promise<Partial<UserConfig>> {
       backendPort = await findFreePort(DEFAULT_BACKEND_PORT);
@@ -76,7 +76,7 @@ export function codeScopeServer(): Plugin {
 
     configureServer(server) {
       const serverDir = path.resolve(server.config.root, 'server');
-      const binaryName = process.platform === 'win32' ? 'codescope-server.exe' : 'codescope-server';
+      const binaryName = process.platform === 'win32' ? 'codescope.exe' : 'codescope';
       const binaryPath = path.join(serverDir, 'target', 'release', binaryName);
 
       // Resolve project root from env or Vite config root

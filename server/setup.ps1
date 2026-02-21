@@ -46,7 +46,7 @@ function Install-CodeScope {
         return
     }
 
-    $archive = "codescope-server-${platform}.zip"
+    $archive = "codescope-${platform}.zip"
     $url = "https://github.com/$Repo/releases/download/$tag/$archive"
 
     Write-Info "Downloading CodeScope $tag ($platform)..."
@@ -68,28 +68,20 @@ function Install-CodeScope {
     Expand-Archive -Path $archivePath -DestinationPath $extractDir -Force
 
     # Find binary
-    $binary = Get-ChildItem -Path $extractDir -Filter "codescope-server.exe" -Recurse | Select-Object -First 1
+    $binary = Get-ChildItem -Path $extractDir -Filter "codescope.exe" -Recurse | Select-Object -First 1
     if (-not $binary) {
         Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
-        Write-Err "Archive did not contain codescope-server.exe"
+        Write-Err "Archive did not contain codescope.exe"
         return
     }
 
     # Install
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    $dest = Join-Path $InstallDir "codescope-server.exe"
+    $dest = Join-Path $InstallDir "codescope.exe"
     # Remove old binary first to avoid locking issues
     Remove-Item -Force $dest -ErrorAction SilentlyContinue
     Copy-Item -Path $binary.FullName -Destination $dest -Force
-    Write-Ok "Installed codescope-server.exe -> $InstallDir\"
-
-    # Install helper scripts if present
-    foreach ($script in @("codescope-init.exe", "codescope-web.exe")) {
-        $found = Get-ChildItem -Path $extractDir -Filter $script -Recurse | Select-Object -First 1
-        if ($found) {
-            Copy-Item -Path $found.FullName -Destination (Join-Path $InstallDir $script) -Force
-        }
-    }
+    Write-Ok "Installed codescope.exe -> $InstallDir\"
 
     Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
 }
@@ -115,14 +107,14 @@ Write-Host "  Next steps:"
 Write-Host ""
 Write-Host "    1. Set up a project:"
 Write-Host "       cd C:\path\to\your\project"
-Write-Host "       codescope-server init"
+Write-Host "       codescope init"
 Write-Host ""
 Write-Host "    2. Open Claude Code in that directory — CodeScope is ready to use."
 Write-Host ""
 Write-Host "  Semantic search enabled by default. Disable with --no-semantic if needed."
 Write-Host ""
 
-if (-not (Get-Command codescope-server -ErrorAction SilentlyContinue)) {
+if (-not (Get-Command codescope -ErrorAction SilentlyContinue)) {
     Write-Host "  NOTE: Restart your terminal to pick up the new PATH." -ForegroundColor Yellow
     Write-Host ""
 }

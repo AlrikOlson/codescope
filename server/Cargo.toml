@@ -10,6 +10,10 @@ authors = ["Alrik Olson"]
 keywords = ["codebase", "indexer", "search", "mcp", "code-navigation"]
 categories = ["command-line-utilities", "development-tools"]
 
+[[bin]]
+name = "codescope"
+path = "src/main.rs"
+
 [features]
 default = ["semantic"]
 tiktoken = ["dep:tiktoken-rs"]

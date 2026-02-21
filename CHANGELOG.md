@@ -31,7 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 - `--wait-semantic` CLI flag to block startup until semantic index is ready
 - Comprehensive MCP HTTP transport test suite for protocol compliance
-- Caching of codescope-server binary and BERT model across CI jobs
+- Caching of codescope binary and BERT model across CI jobs
 - E2E tests for semantic relevance with agent-crafted queries
 - Structured outputs using Claude Agent SDK
 
@@ -74,7 +74,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 - Library crate (`lib.rs`) — CodeScope can now be embedded as a Rust library
 - CLI powered by `clap` with derive macros, auto-generated `--help`, and error messages
-- Shell completions: `codescope-server completions bash/zsh/fish/powershell`
+- Shell completions: `codescope completions bash/zsh/fish/powershell`
 - Structured logging via `tracing` — control verbosity with `RUST_LOG` env var
 - Graceful shutdown on SIGINT/SIGTERM with connection draining
 - `/health` endpoint returning server status, version, repo count, and uptime
@@ -116,7 +116,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Relevance reranking in `cs_semantic_search`: 6× oversampling with `adjusted_score()` path-based signals
 - `SEMANTIC_SKIP_DIRS` filter excludes `ThirdParty`, `External`, `Intermediate`, `Deploy` from embedding
 - Device (CPU/GPU), batch progress %, and chunk count displayed in `cs_status` semantic output
-- `--semantic` flag for `codescope-server init` subcommand
+- `--semantic` flag for `codescope init` subcommand
 
 ### Changed
 - Semantic cache format version 1 → 2 (includes path context; old caches are discarded and rebuilt automatically)

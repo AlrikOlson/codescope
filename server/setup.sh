@@ -130,11 +130,11 @@ download_binary() {
     local os_part="${platform%%-*}"
     local archive binary_name
     if [ "$os_part" = "windows" ]; then
-        archive="codescope-server-${platform}.zip"
-        binary_name="codescope-server.exe"
+        archive="codescope-${platform}.zip"
+        binary_name="codescope.exe"
     else
-        archive="codescope-server-${platform}.tar.gz"
-        binary_name="codescope-server"
+        archive="codescope-${platform}.tar.gz"
+        binary_name="codescope"
     fi
     info "Downloading CodeScope $tag ($platform)..."
     local tmpdir
@@ -147,7 +147,7 @@ download_binary() {
             || [ -d /usr/local/cuda ] \
             || [ -f /usr/lib/x86_64-linux-gnu/libcuda.so ] \
             || command -v nvidia-smi &>/dev/null; then
-            local cuda_archive="codescope-server-linux-x86_64-cuda.tar.gz"
+            local cuda_archive="codescope-linux-x86_64-cuda.tar.gz"
             local cuda_url="https://github.com/$REPO/releases/download/$tag/$cuda_archive"
             if curl -fsSL --connect-timeout 5 --max-time 120 -o "$tmpdir/$cuda_archive" "$cuda_url" 2>/dev/null; then
                 info "CUDA detected — using GPU-accelerated binary"
@@ -206,35 +206,8 @@ download_binary() {
 
     ok "Installed $binary_name -> $INSTALL_DIR/"
 
-    # Install helper scripts from tarball if present
-    for script in codescope-init codescope-web; do
-        local found
-        found="$(find "$tmpdir/extracted" -name "$script" -type f | head -1)"
-        if [ -n "$found" ]; then
-            cp "$found" "$INSTALL_DIR/$script"
-            chmod +x "$INSTALL_DIR/$script"
-            if [ "$(uname -s)" = "Darwin" ]; then
-                xattr -d com.apple.quarantine "$INSTALL_DIR/$script" 2>/dev/null || true
-            fi
-        fi
-    done
-
     rm -rf "$tmpdir"
     return 0
-}
-
-# --- Download helper scripts separately (fallback) ---
-install_helper_scripts() {
-    for script in codescope-init codescope-web; do
-        if [ ! -f "$INSTALL_DIR/$script" ]; then
-            local url="https://raw.githubusercontent.com/$REPO/$BRANCH/server/$script"
-            if curl -fsSL --connect-timeout 10 --max-time 30 -o "$INSTALL_DIR/$script" "$url" 2>/dev/null; then
-                chmod +x "$INSTALL_DIR/$script"
-            else
-                err "Could not download $script (non-critical)"
-            fi
-        fi
-    done
 }
 
 # --- Compile from source (fallback) ---
@@ -242,7 +215,7 @@ install_from_source() {
     local script_dir="$1"
 
     # If we don't have the source, clone it
-    if [ -z "$script_dir" ] || ! grep -q 'name = "codescope-server"' "$script_dir/Cargo.toml" 2>/dev/null; then
+    if [ -z "$script_dir" ] || ! grep -q 'name = "codescope"' "$script_dir/Cargo.toml" 2>/dev/null; then
         info "Downloading source code..."
         local tmpdir
         tmpdir="$(mktemp -d)"
@@ -274,19 +247,12 @@ install_from_source() {
 
     # Install binary
     mkdir -p "$INSTALL_DIR"
-    rm -f "$INSTALL_DIR/codescope-server"
-    cp "$script_dir/target/release/codescope-server" "$INSTALL_DIR/codescope-server"
-    ok "Installed codescope-server -> $INSTALL_DIR/"
+    rm -f "$INSTALL_DIR/codescope"
+    cp "$script_dir/target/release/codescope" "$INSTALL_DIR/codescope"
+    ok "Installed codescope -> $INSTALL_DIR/"
 
-    # Install helper scripts from source tree
     local repo_root
     repo_root="$(cd "$script_dir/.." && pwd)"
-    for script in codescope-init codescope-web; do
-        if [ -f "$script_dir/$script" ]; then
-            cp "$script_dir/$script" "$INSTALL_DIR/$script"
-            chmod +x "$INSTALL_DIR/$script"
-        fi
-    done
 
     # Build web UI if npm is available
     if command -v npm >/dev/null 2>&1; then
@@ -385,9 +351,6 @@ else
     fi
 fi
 
-# Make sure helper scripts are installed
-install_helper_scripts
-
 # PATH setup
 ensure_path
 
@@ -395,7 +358,7 @@ ensure_path
 if [ -n "$PROJECT_PATH" ]; then
     echo ""
     info "Setting up CodeScope in $PROJECT_PATH..."
-    "$INSTALL_DIR/codescope-server" init "$PROJECT_PATH"
+    "$INSTALL_DIR/codescope" init "$PROJECT_PATH"
 fi
 
 # --- Done ---
@@ -406,7 +369,7 @@ echo "  Next steps:"
 echo ""
 echo "    1. Set up a project:"
 echo "       cd /path/to/your/project"
-echo "       codescope-server init"
+echo "       codescope init"
 echo ""
 echo "    2. Open Claude Code in that directory — CodeScope is ready to use."
 echo ""
@@ -425,12 +388,12 @@ if [ "$EDGE" = "0" ] && [ "$DEV" = "0" ]; then
 fi
 if grep -qi microsoft /proc/version 2>/dev/null; then
     echo "  NOTE: You're running in WSL. The binary was installed for Linux/WSL only."
-    echo "        Run codescope-server from WSL (bash/zsh), not from PowerShell."
+    echo "        Run codescope from WSL (bash/zsh), not from PowerShell."
     echo ""
     echo "  For native Windows (PowerShell), use the PowerShell installer instead:"
     echo "    irm https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.ps1 | iex"
     echo ""
-elif ! command -v codescope-server >/dev/null 2>&1; then
+elif ! command -v codescope >/dev/null 2>&1; then
     echo "  NOTE: Restart your terminal to pick up the new PATH."
     echo ""
 fi

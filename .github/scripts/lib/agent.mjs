@@ -8,17 +8,17 @@ const DEFAULT_MAX_TURNS = 10;
 const DEFAULT_MAX_BUDGET_USD = 2.0;
 
 /**
- * Resolve the codescope-server binary path.
+ * Resolve the codescope binary path.
  * Checks CI build output first, then falls back to PATH.
  * @param {string} cwd - working directory
  * @returns {string}
  */
 function resolveCodeScopeBinary(cwd) {
-  // CI builds to server/target/release/codescope-server
-  const ciBinary = join(cwd, "server", "target", "release", "codescope-server");
+  // CI builds to server/target/release/codescope
+  const ciBinary = join(cwd, "server", "target", "release", "codescope");
   if (existsSync(ciBinary)) return ciBinary;
   // Fall back to PATH
-  return "codescope-server";
+  return "codescope";
 }
 
 /**
