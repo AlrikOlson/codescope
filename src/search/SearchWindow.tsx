@@ -17,6 +17,7 @@ export function SearchWindow() {
   const [activeIdx, setActiveIdx] = useState(0);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   // Refs for stable keyboard handler — avoids re-registering on every state change
   const stateRef = useRef<{
@@ -56,6 +57,23 @@ export function SearchWindow() {
 
   handleClearRef.current = handleClear;
 
+  // Lock root scroll — WebView2 may auto-scroll to keep the focused input visible,
+  // bypassing overflow: hidden. Force scrollTop = 0 on root + body at all times.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const lock = () => {
+      if (root.scrollTop !== 0) root.scrollTop = 0;
+      if (document.documentElement.scrollTop !== 0) document.documentElement.scrollTop = 0;
+    };
+    root.addEventListener('scroll', lock);
+    document.addEventListener('scroll', lock);
+    return () => {
+      root.removeEventListener('scroll', lock);
+      document.removeEventListener('scroll', lock);
+    };
+  }, []);
+
   // Global keyboard handler — registered ONCE, reads mutable refs for current state
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -89,7 +107,7 @@ export function SearchWindow() {
   const hasQuery = query.trim().length > 0;
 
   return (
-    <div className="sw-root">
+    <div ref={rootRef} className="sw-root">
       {/* Custom titlebar (drag region only, no label — label is inside hero field) */}
       <div className="sw-titlebar" data-tauri-drag-region>
         <div className="sw-titlebar-spacer" data-tauri-drag-region />
@@ -105,8 +123,8 @@ export function SearchWindow() {
         onClear={handleClear}
       />
 
-      {/* Metadata strip */}
-      {hasQuery && results.length > 0 && (
+      {/* Metadata strip — always rendered when querying to reserve vertical space */}
+      {hasQuery && (
         <MetadataStrip
           count={results.length}
           queryTime={findResults.queryTime}

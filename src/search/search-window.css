@@ -12,6 +12,7 @@
   background: var(--bg);
   position: relative;
   overflow: hidden;
+  overscroll-behavior: none;
 }
 
 /* Ambient glow orbs */
@@ -219,7 +220,9 @@
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 380px 1fr;
+  grid-template-columns: clamp(260px, 33%, 400px) 1fr;
+  grid-template-rows: 1fr;
+  overflow: hidden;
   border-top: 1px solid var(--border);
   background: var(--glass);
 }
@@ -227,10 +230,12 @@
 /* --- Results Panel --- */
 .sw-results {
   overflow-y: auto;
+  min-height: 0;
   border-right: 1px solid var(--border);
   scrollbar-width: thin;
   scrollbar-color: color-mix(in oklch, var(--neon-cyan) 20%, transparent) transparent;
-  contain: strict;
+  contain: layout paint;
+  scrollbar-gutter: stable;
 }
 .sw-results::-webkit-scrollbar { width: 4px; }
 .sw-results::-webkit-scrollbar-thumb { background: color-mix(in oklch, var(--neon-cyan) 20%, transparent); border-radius: 4px; }
@@ -251,6 +256,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-height: 0;
   background: var(--bg);
 }
 .sw-preview .preview-header {
@@ -258,8 +264,10 @@
 }
 .sw-preview .preview-body {
   flex: 1;
-  overflow-y: auto;
-  contain: strict;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  contain: layout;
 }
 .sw-preview-empty {
   display: flex;
@@ -284,6 +292,7 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   align-items: center;

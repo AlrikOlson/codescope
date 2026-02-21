@@ -9,7 +9,9 @@ interface Props {
 }
 
 export function MetadataStrip({ count, queryTime, topExts, extFilter, onFilterExt }: Props) {
-  if (count === 0 && topExts.length === 0) return null;
+  if (count === 0 && topExts.length === 0) {
+    return <div className="sw-metadata" style={{ visibility: 'hidden' }}>&nbsp;</div>;
+  }
 
   return (
     <div className="sw-metadata">

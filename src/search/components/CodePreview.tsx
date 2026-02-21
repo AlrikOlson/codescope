@@ -1,7 +1,10 @@
 import { useMemo, useRef, useEffect } from 'react';
-import { useVirtualizer } from '@tanstack/react-virtual';
+import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
+import { EditorView } from '@codemirror/view';
+import { EditorState } from '@codemirror/state';
 import { useFileContent } from '../../hooks/useFileContent';
-import { tokenizeCode } from '../../syntax';
+import { useCodeMirrorLang } from '../useCodeMirrorLang';
+import { catppuccinTheme } from '../cmTheme';
 import { getExtColor } from '../../colors';
 import { getFilename, getExt } from '../../utils';
 
@@ -11,27 +14,31 @@ interface Props {
 
 export function CodePreview({ path }: Props) {
   const { data, loading, error } = useFileContent(path);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const cmRef = useRef<ReactCodeMirrorRef>(null);
 
   const filename = path ? getFilename(path) : '';
   const ext = path ? getExt(path) : '';
   const color = getExtColor(ext);
+  const langExtension = useCodeMirrorLang(ext);
 
-  const tokenizedLines = useMemo(() => {
-    if (!data?.content) return [];
-    return tokenizeCode(data.content, ext);
-  }, [data?.content, ext]);
-
-  const virtualizer = useVirtualizer({
-    count: tokenizedLines.length,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => 20,
-    overscan: 20,
-  });
+  const extensions = useMemo(() => {
+    const exts: import('@codemirror/state').Extension[] = [
+      EditorView.editable.of(false),
+      EditorState.readOnly.of(true),
+      catppuccinTheme,
+    ];
+    if (langExtension) exts.push(langExtension);
+    return exts;
+  }, [langExtension]);
 
   // Reset scroll to top when file changes
   useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+    const view = cmRef.current?.view;
+    if (view) {
+      view.dispatch({
+        effects: EditorView.scrollIntoView(0, { y: 'start' }),
+      });
+    }
   }, [path]);
 
   if (!path) {
@@ -58,7 +65,7 @@ export function CodePreview({ path }: Props) {
           )}
         </div>
       </div>
-      <div ref={scrollRef} className="preview-body">
+      <div className="preview-body">
         {loading && (
           <div className="preview-loading">
             <div className="spinner" />
@@ -69,35 +76,34 @@ export function CodePreview({ path }: Props) {
           <div className="preview-error">Failed to load: {error}</div>
         )}
         {data && !loading && (
-          <pre className="preview-code">
-            <code style={{ height: virtualizer.getTotalSize(), position: 'relative', display: 'block' }}>
-              {virtualizer.getVirtualItems().map(vi => {
-                const lineTokens = tokenizedLines[vi.index];
-                return (
-                  <div
-                    key={vi.index}
-                    className="preview-line"
-                    style={{
-                      position: 'absolute',
-                      top: vi.start,
-                      height: vi.size,
-                      width: '100%',
-                    }}
-                  >
-                    <span className="preview-linenum">{vi.index + 1}</span>
-                    <span className="preview-linetext">
-                      {lineTokens.length === 0
-                        ? '\n'
-                        : lineTokens.map((tok, j) => (
-                            <span key={j} className={`syntax-${tok.type}`}>{tok.text}</span>
-                          ))
-                      }
-                    </span>
-                  </div>
-                );
-              })}
-            </code>
-          </pre>
+          <CodeMirror
+            ref={cmRef}
+            value={data.content}
+            extensions={extensions}
+            theme="none"
+            readOnly={true}
+            editable={false}
+            basicSetup={{
+              lineNumbers: true,
+              foldGutter: false,
+              dropCursor: false,
+              allowMultipleSelections: false,
+              indentOnInput: false,
+              bracketMatching: false,
+              closeBrackets: false,
+              autocompletion: false,
+              rectangularSelection: false,
+              crosshairCursor: false,
+              highlightActiveLine: false,
+              highlightSelectionMatches: false,
+              closeBracketsKeymap: false,
+              searchKeymap: false,
+              foldKeymap: false,
+              completionKeymap: false,
+              lintKeymap: false,
+            }}
+            className="cm-preview"
+          />
         )}
       </div>
     </div>

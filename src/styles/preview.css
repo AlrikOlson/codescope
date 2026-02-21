@@ -175,3 +175,54 @@
 .syntax-preprocessor { color: var(--peach); font-weight: 500; }
 .syntax-number { color: var(--peach); }
 .syntax-plain { color: var(--text); }
+
+
+/* ============================================
+   CodeMirror Integration (Search Preview)
+   ============================================ */
+.cm-preview {
+  flex: 1;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.cm-preview .cm-editor {
+  height: 100%;
+  background: var(--bg);
+}
+.cm-preview .cm-scroller {
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--neon-cyan) 20%, transparent) transparent;
+}
+.cm-preview .cm-scroller::-webkit-scrollbar { width: 4px; height: 4px; }
+.cm-preview .cm-scroller::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--neon-cyan) 20%, transparent);
+  border-radius: 4px;
+}
+.cm-preview .cm-scroller::-webkit-scrollbar-track { background: transparent; }
+.cm-preview .cm-gutters {
+  background: var(--bg);
+  border-right: none;
+}
+.cm-preview .cm-lineNumbers .cm-gutterElement {
+  color: var(--neon-cyan);
+  opacity: 0.25;
+  font-size: 11px;
+  padding: 0 16px 0 4px;
+  min-width: 48px;
+}
+.cm-preview .cm-editor.cm-focused {
+  outline: none;
+}
+.cm-preview .cm-cursor,
+.cm-preview .cm-dropCursor {
+  display: none !important;
+}
+.cm-preview .cm-activeLine,
+.cm-preview .cm-activeLineGutter {
+  background: transparent;
+}
+.cm-preview .cm-content {
+  padding: 0;
+}
