@@ -182,9 +182,7 @@ async fn main() {
                 std::process::exit(codescope_server::init::run_doctor(&args));
             }
             Commands::Web { path } => {
-                let root = path
-                    .clone()
-                    .unwrap_or_else(|| std::env::current_dir().unwrap());
+                let root = path.clone().unwrap_or_else(|| std::env::current_dir().unwrap());
                 let root = root.canonicalize().unwrap_or_else(|e| {
                     eprintln!("Error: Path '{}' not found: {}", root.display(), e);
                     std::process::exit(1);
