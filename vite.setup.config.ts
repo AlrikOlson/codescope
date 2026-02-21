@@ -8,7 +8,10 @@ export default defineConfig({
     outDir: 'dist-setup',
     emptyOutDir: true,
     rollupOptions: {
-      input: 'setup.html',
+      input: {
+        setup: 'setup.html',
+        search: 'search.html',
+      },
     },
   },
   server: {

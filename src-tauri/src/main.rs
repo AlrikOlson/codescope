@@ -5,7 +5,7 @@ use codescope_server::init;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering::Relaxed;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 // ---------------------------------------------------------------------------
 // Types shared with frontend
@@ -466,6 +466,46 @@ fn check_on_path() -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Search window
+// ---------------------------------------------------------------------------
+
+/// Probe localhost ports 8432..8442 to find a running codescope server.
+fn find_server_port() -> Option<u16> {
+    for port in 8432..8442u16 {
+        let addr: std::net::SocketAddr = ([127, 0, 0, 1], port).into();
+        if std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50)).is_ok()
+        {
+            return Some(port);
+        }
+    }
+    None
+}
+
+/// Open (or focus) the search window, connecting to a running codescope server.
+#[tauri::command]
+fn open_search_window(app: AppHandle) -> Result<(), String> {
+    // If the window already exists, just focus it
+    if let Some(w) = app.get_webview_window("search") {
+        w.set_focus().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    let port = find_server_port().ok_or("No running codescope server found (tried ports 8432-8441). Run `codescope web` first.")?;
+
+    let url = format!("search.html?port={}", port);
+    tauri::WebviewWindowBuilder::new(&app, "search", tauri::WebviewUrl::App(url.into()))
+        .title("CodeScope Search")
+        .inner_size(1100.0, 750.0)
+        .center()
+        .decorations(false)
+        .resizable(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
@@ -482,6 +522,7 @@ fn main() {
             get_version,
             get_scan_dirs,
             check_on_path,
+            open_search_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running CodeScope Setup");

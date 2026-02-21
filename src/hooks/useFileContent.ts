@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
+import { useApiBase, apiUrl } from '../shared/api';
 import type { FileContentResponse } from '../types';
 
 export function useFileContent(path: string | null) {
+  const baseUrl = useApiBase();
   const [data, setData] = useState<FileContentResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,7 +27,7 @@ export function useFileContent(path: string | null) {
     setLoading(true);
     setError(null);
 
-    fetch(`/api/file?path=${encodeURIComponent(path)}`)
+    fetch(apiUrl(baseUrl, `/api/file?path=${encodeURIComponent(path)}`))
       .then(r => {
         if (!r.ok) throw new Error(`${r.status}`);
         return r.json();
@@ -48,7 +50,7 @@ export function useFileContent(path: string | null) {
       });
 
     return () => { cancelled = true; };
-  }, [path]);
+  }, [path, baseUrl]);
 
   return { data, loading, error };
 }

@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from 'react';
-import { CheckCircle2, Globe, Stethoscope, FolderPlus } from 'lucide-react';
+import { CheckCircle2, Globe, Stethoscope, FolderPlus, Search } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { invoke } from '@tauri-apps/api/core';
 
 interface Props {
   repoCount: number;
@@ -66,7 +67,14 @@ export function DoneScreen({ repoCount, semantic, semanticModel }: Props) {
           </div>
         </div>
 
-        <div className="btn-row" style={{ marginTop: 32 }}>
+        <div className="btn-row" style={{ marginTop: 32, gap: 10 }}>
+          <button
+            className="btn btn-secondary"
+            onClick={() => invoke('open_search_window').catch(() => {})}
+          >
+            <Search size={14} />
+            Search
+          </button>
           <button
             className="btn btn-primary"
             onClick={() => getCurrentWindow().close()}

@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { FileIcon } from './icons';
-import { HighlightedText, EMPTY_FIND } from './search-utils';
+import { HighlightedText } from './search-utils';
 import { getExtColor } from './colors';
-import type { FindResponse, FindResult } from './types';
+import { useSearch } from './hooks/useSearch';
+import { MatchTypeBadge } from './components/MatchTypeBadge';
 import './styles/sidebar.css';
 
 interface Props {
@@ -17,49 +18,16 @@ interface Props {
 export default function SearchSidebar({
   selected, onToggleFile, onPreview, onSearchResults, autoFocus,
 }: Props) {
-  const [query, setQuery] = useState('');
+  const {
+    query, setQuery, findResults, results, loading, extFilter, setExtFilter, topExts,
+  } = useSearch();
   const [activeIdx, setActiveIdx] = useState(0);
-  const [findResults, setFindResults] = useState<FindResponse>(EMPTY_FIND);
-  const [loading, setLoading] = useState(false);
-  const [extFilter, setExtFilter] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (autoFocus) inputRef.current?.focus();
   }, [autoFocus]);
-
-  // Unified find search
-  useEffect(() => {
-    const q = query.trim();
-    if (!q) {
-      setFindResults(EMPTY_FIND);
-      return;
-    }
-
-    setLoading(true);
-    const controller = new AbortController();
-
-    const timer = setTimeout(() => {
-      const params = new URLSearchParams({ q, limit: '50' });
-      if (extFilter) params.set('ext', extFilter);
-
-      fetch(`/api/find?${params}`, { signal: controller.signal })
-        .then(r => r.json() as Promise<FindResponse>)
-        .then(data => {
-          setFindResults(data);
-          setLoading(false);
-        })
-        .catch(() => {
-          // Aborted or error — don't update state
-        });
-    }, 150);
-
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-    };
-  }, [query, extFilter]);
 
   // Push search results to parent for FileList display
   useEffect(() => {
@@ -72,15 +40,12 @@ export default function SearchSidebar({
     onSearchResults(paths, q);
   }, [findResults, query, onSearchResults]);
 
-  const results = findResults.results;
-
   const virtualizer = useVirtualizer({
     count: results.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: (i) => {
       const item = results[i];
       if (!item) return 52;
-      // Cards with content match snippet are taller
       return item.topMatch ? 72 : 52;
     },
     overscan: 15,
@@ -126,17 +91,9 @@ export default function SearchSidebar({
         inputRef.current?.blur();
       }
     }
-  }, [activeIdx, results, onToggleFile, onPreview, virtualizer, query, extFilter]);
+  }, [activeIdx, results, onToggleFile, onPreview, virtualizer, query, extFilter, setQuery, setExtFilter]);
 
   const hasQuery = query.trim().length > 0;
-
-  // Top extension chips from facets
-  const topExts = useMemo(() => {
-    return Object.entries(findResults.extCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 6);
-  }, [findResults.extCounts]);
-
   const totalResults = results.length;
 
   return (
@@ -274,10 +231,4 @@ export default function SearchSidebar({
       </div>
     </div>
   );
-}
-
-function MatchTypeBadge({ type, count }: { type: FindResult['matchType']; count: number }) {
-  const label = type === 'both' ? `name+${count}` : type === 'content' ? `${count} matches` : 'name';
-  const cls = `match-type-badge match-type-${type}`;
-  return <span className={cls}>{label}</span>;
 }

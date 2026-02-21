@@ -1,0 +1,288 @@
+/* ============================================
+   Search Window — CodeScope Cyberpunk Terminal
+   ============================================ */
+@import '../styles/sidebar.css';
+@import '../styles/preview.css';
+
+/* --- Root Layout --- */
+.sw-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Ambient glow orbs */
+.sw-root::before,
+.sw-root::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 0;
+}
+.sw-root::before {
+  top: -200px;
+  right: -200px;
+  width: 600px;
+  height: 600px;
+  background: radial-gradient(circle, color-mix(in oklch, var(--neon-cyan) 6%, transparent), transparent 70%);
+  filter: blur(160px);
+}
+.sw-root::after {
+  bottom: -150px;
+  left: -150px;
+  width: 400px;
+  height: 400px;
+  background: radial-gradient(circle, color-mix(in oklch, var(--neon-magenta) 4%, transparent), transparent 70%);
+  filter: blur(160px);
+}
+
+/* All direct children above the orbs */
+.sw-root > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* --- Custom Titlebar --- */
+.sw-titlebar {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 12px;
+  background: var(--glass-strong);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+.sw-titlebar-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text3);
+  flex: 1;
+  pointer-events: none;
+}
+.sw-titlebar-close {
+  -webkit-app-region: no-drag;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--text3);
+  font-size: 18px;
+  cursor: pointer;
+  transition: all var(--fast) var(--ease);
+}
+.sw-titlebar-close:hover {
+  color: var(--red);
+  border-color: color-mix(in oklch, var(--red) 30%, transparent);
+  background: color-mix(in oklch, var(--red) 8%, transparent);
+}
+
+/* --- Hero Search Input --- */
+.sw-hero {
+  display: flex;
+  justify-content: center;
+  padding: 20px 24px 12px;
+  flex-shrink: 0;
+}
+.sw-hero-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 700px;
+  padding: 10px 16px;
+  background: var(--deep-black);
+  border: 1.5px solid color-mix(in oklch, var(--neon-cyan) 20%, transparent);
+  border-radius: var(--r-lg);
+  transition: all var(--normal) var(--ease);
+}
+.sw-hero-field:focus-within {
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--neon-cyan) 10%, transparent),
+              0 0 20px color-mix(in oklch, var(--neon-cyan) 8%, transparent),
+              0 0 60px color-mix(in oklch, var(--neon-cyan) 3%, transparent);
+}
+.sw-hero-icon {
+  flex-shrink: 0;
+  opacity: 0.35;
+  transition: all var(--fast) var(--ease);
+}
+.sw-hero-field:focus-within .sw-hero-icon {
+  opacity: 0.8;
+  color: var(--neon-cyan);
+}
+.sw-hero-input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  min-width: 0;
+  caret-color: var(--neon-cyan);
+}
+.sw-hero-input::placeholder {
+  color: var(--text3);
+  opacity: 0.5;
+}
+.sw-hero-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid color-mix(in oklch, var(--neon-cyan) 20%, transparent);
+  border-top-color: var(--neon-cyan);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  flex-shrink: 0;
+}
+.sw-hero-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: none;
+  border: none;
+  color: var(--text3);
+  font-size: 16px;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  transition: all var(--fast) var(--ease);
+  flex-shrink: 0;
+}
+.sw-hero-clear:hover {
+  color: var(--text);
+  background: var(--hover-accent);
+}
+
+/* --- Metadata Strip --- */
+.sw-metadata {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 24px 8px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text3);
+}
+.sw-metadata-count {
+  color: var(--neon-cyan);
+  font-weight: 600;
+}
+.sw-metadata-sep {
+  opacity: 0.3;
+}
+.sw-metadata-time {
+  font-variant-numeric: tabular-nums;
+}
+.sw-metadata-chips {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* --- Split Panel --- */
+.sw-split {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  border-top: 1px solid var(--border);
+  background: var(--glass);
+}
+
+/* --- Results Panel --- */
+.sw-results {
+  overflow-y: auto;
+  border-right: 1px solid var(--border);
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--neon-cyan) 20%, transparent) transparent;
+}
+.sw-results::-webkit-scrollbar { width: 4px; }
+.sw-results::-webkit-scrollbar-thumb { background: color-mix(in oklch, var(--neon-cyan) 20%, transparent); border-radius: 4px; }
+.sw-results::-webkit-scrollbar-track { background: transparent; }
+
+.sw-results-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text3);
+  font-size: 12px;
+  opacity: 0.5;
+}
+
+/* --- Code Preview Panel --- */
+.sw-preview {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+.sw-preview .preview-header {
+  border-bottom: 1px solid var(--border);
+}
+.sw-preview .preview-body {
+  flex: 1;
+  overflow-y: auto;
+}
+.sw-preview-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 100%;
+  color: var(--text3);
+  font-size: 12px;
+  opacity: 0.5;
+}
+.sw-preview-lines {
+  font-size: 11px;
+  color: var(--text3);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Shortcuts Bar --- */
+.sw-shortcuts {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 24px;
+  border-top: 1px solid var(--border);
+  background: var(--glass-strong);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text3);
+  opacity: 0.7;
+}
+.sw-shortcuts kbd {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  padding: 1px 5px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text2);
+}
+.sw-shortcuts span {
+  margin-right: 6px;
+}
