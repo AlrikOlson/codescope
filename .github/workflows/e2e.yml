@@ -64,6 +64,7 @@ jobs:
           if echo "$CHANGED" | grep -qE '^\.github/'; then SHOULD_RUN=true; fi
           if echo "$CHANGED" | grep -qE '^tests/'; then SHOULD_RUN=true; fi
           if echo "$CHANGED" | grep -qE '^(src/|package\.json$|tsconfig)'; then SHOULD_RUN=true; fi
+          if echo "$CHANGED" | grep -qE '^(rust-toolchain|Cargo\.toml|Cargo\.lock)'; then SHOULD_RUN=true; fi
 
           echo "should_run=$SHOULD_RUN" >> "$GITHUB_OUTPUT"
           echo "should_run=$SHOULD_RUN"

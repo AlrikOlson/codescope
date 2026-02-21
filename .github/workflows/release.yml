@@ -148,6 +148,7 @@ jobs:
           if echo "$CHANGED" | grep -qE '^(src/|package\.json$|package-lock\.json$|tsconfig|vite\.config)'; then HAS_CODE=true; fi
           if echo "$CHANGED" | grep -qE '^server/(setup\.sh$|setup\.ps1$|codescope-)'; then HAS_CODE=true; fi
           if echo "$CHANGED" | grep -qE '^\.github/scripts/'; then HAS_CODE=true; fi
+          if echo "$CHANGED" | grep -qE '^rust-toolchain'; then HAS_CODE=true; fi
 
           if [ "$HAS_CODE" = "false" ]; then
             echo "action=skip" >> "$GITHUB_OUTPUT"
