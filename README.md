@@ -9,17 +9,19 @@ Scans 200K files in ~2 seconds. 20+ languages. Also ships with a standalone web 
 
 ## Install
 
+**Linux / macOS / Git Bash:**
+
 ```bash
 curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash
 ```
 
-Detects your platform (Linux, macOS, Windows via WSL/Git Bash), downloads a ~5MB binary to `~/.local/bin/` (Linux/macOS) or `%LOCALAPPDATA%\codescope\bin` (Windows). Semantic search included (CPU). Never modifies your PATH — tells you what to add.
-
-On Windows, use `curl.exe` (not `curl`, which is a PowerShell alias):
+**Windows (PowerShell):**
 
 ```powershell
-curl.exe -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash
+irm https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.ps1 | iex
 ```
+
+Detects your platform, downloads a ~5MB binary to `~/.local/bin/` (Linux/macOS) or `%LOCALAPPDATA%\codescope\bin` (Windows). Semantic search included (CPU). Never modifies your PATH — tells you what to add.
 
 Or grab a binary from [Releases](https://github.com/AlrikOlson/codescope/releases) and add it to your PATH.
 
@@ -38,9 +40,12 @@ curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/s
 
 # Build from source with CUDA GPU acceleration (auto-detected)
 curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --cuda
+```
 
-# Windows (PowerShell — delegates to bash via WSL or Git Bash)
-irm https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.ps1 | iex
+On Windows, prefix with `wsl` to run these from PowerShell:
+
+```powershell
+wsl bash -c "curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --edge"
 ```
 </details>
 
@@ -237,7 +242,7 @@ Environment:
 
 **WSL** — The installer detects WSL automatically and installs the Windows binary to `%LOCALAPPDATA%\codescope\bin`. Building from source (`--from-source` / `--cuda`) produces a Linux binary for use within WSL.
 
-**PowerShell `curl` fails** — In PowerShell 5.1, `curl` is an alias for `Invoke-WebRequest`. Use `curl.exe` instead, or use the PowerShell installer: `irm .../setup.ps1 | iex`.
+**PowerShell install does nothing** — `curl ... | bash` doesn't work from PowerShell (pipe encoding breaks between PS and WSL). Use the PowerShell installer instead: `irm .../setup.ps1 | iex`, or run inside WSL: `wsl bash -c "curl -sSL ... | bash"`.
 
 ---
 

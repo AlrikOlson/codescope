@@ -2,12 +2,12 @@
 set -euo pipefail
 
 # CodeScope — Cross-Platform Install Script
-# Works from: Linux, macOS, Windows (Git Bash), PowerShell (via WSL bash)
+# Works from: Linux, macOS, Git Bash, WSL
 #
 # Usage:
 #   curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash
-#   curl.exe -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash
 #   bash setup.sh --cuda
+#   Windows: irm .../setup.ps1 | iex  (or: wsl bash -c "curl ... | bash")
 
 REPO="AlrikOlson/codescope"
 BRANCH="master"
