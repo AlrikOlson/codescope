@@ -364,14 +364,7 @@ async fn main() {
         let wait = cli.wait_semantic;
         let handle = std::thread::spawn(move || {
             let s = state_bg.read().unwrap();
-            type SemWork = (
-                String,
-                PathBuf,
-                Vec<ScannedFile>,
-                std::sync::Arc<std::sync::RwLock<Option<SemanticIndex>>>,
-                std::sync::Arc<SemanticProgress>,
-            );
-            let work: Vec<SemWork> = s
+            let work: Vec<_> = s
                 .repos
                 .values()
                 .map(|r| {
@@ -381,12 +374,19 @@ async fn main() {
                         r.all_files.clone(),
                         std::sync::Arc::clone(&r.semantic_index),
                         std::sync::Arc::clone(&r.semantic_progress),
+                        #[cfg(feature = "treesitter")]
+                        r.ast_index.read().unwrap().clone(),
                     )
                 })
                 .collect();
             drop(s);
 
-            for (name, root, files, sem_handle, progress) in work {
+            for entry in work {
+                #[cfg(feature = "treesitter")]
+                let (name, root, files, sem_handle, progress, ast_idx) = entry;
+                #[cfg(not(feature = "treesitter"))]
+                let (name, root, files, sem_handle, progress) = entry;
+
                 info!(repo = name.as_str(), "Building semantic index...");
                 let sem_start = std::time::Instant::now();
                 if let Some(idx) = codescope_server::semantic::build_semantic_index(
@@ -394,6 +394,8 @@ async fn main() {
                     sem_model.as_deref(),
                     &progress,
                     &root,
+                    #[cfg(feature = "treesitter")]
+                    Some(&ast_idx),
                 ) {
                     info!(
                         repo = name.as_str(),

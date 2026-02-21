@@ -294,6 +294,8 @@ pub struct RepoState {
     pub stub_cache: DashMap<String, CachedStub>,
     pub term_doc_freq: TermDocFreq,
     pub scan_time_ms: u64,
+    #[cfg(feature = "treesitter")]
+    pub ast_index: std::sync::Arc<std::sync::RwLock<crate::ast::AstIndex>>,
     #[cfg(feature = "semantic")]
     pub semantic_index: std::sync::Arc<std::sync::RwLock<Option<SemanticIndex>>>,
     #[cfg(feature = "semantic")]

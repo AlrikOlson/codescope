@@ -1886,6 +1886,11 @@ fn handle_add_repo(state: &mut ServerState, args: &serde_json::Value) -> (String
         let progress = std::sync::Arc::clone(&new_state.semantic_progress);
         let repo_root = root.clone();
         let model = state.semantic_model.clone();
+        #[cfg(feature = "treesitter")]
+        let ast_idx_clone = {
+            let guard = new_state.ast_index.read().unwrap();
+            guard.clone()
+        };
         let thread_name = name.clone();
         std::thread::spawn(move || {
             tracing::info!(repo = thread_name.as_str(), "Building semantic index in background");
@@ -1895,6 +1900,8 @@ fn handle_add_repo(state: &mut ServerState, args: &serde_json::Value) -> (String
                 model.as_deref(),
                 &progress,
                 &repo_root,
+                #[cfg(feature = "treesitter")]
+                Some(&ast_idx_clone),
             ) {
                 tracing::info!(
                     repo = thread_name.as_str(),

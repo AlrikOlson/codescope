@@ -898,11 +898,16 @@ pub fn build_semantic_index(root: &Path, model: Option<&str>) {
     let progress = crate::types::SemanticProgress::new();
     let sem_model = model.map(|s| s.to_string()).or_else(|| config.semantic_model.clone());
     let start = std::time::Instant::now();
+    #[cfg(feature = "treesitter")]
+    let ast_index = crate::ast::build_ast_index(&all_files);
+
     match crate::semantic::build_semantic_index(
         &all_files,
         sem_model.as_deref(),
         &progress,
         root,
+        #[cfg(feature = "treesitter")]
+        Some(&ast_index),
     ) {
         Some(idx) => {
             let chunks: usize = idx.chunk_meta.len();

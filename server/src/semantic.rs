@@ -8,6 +8,9 @@
 use crate::stubs::extract_stubs;
 use crate::types::{ChunkMeta, ScannedFile, SemanticIndex};
 
+#[cfg(feature = "treesitter")]
+use crate::ast::{AstIndex, FileAst};
+
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
 use std::collections::HashMap;
@@ -199,6 +202,87 @@ fn split_stubs_into_chunks(stubs: &str, max_chunk_chars: usize) -> Vec<Chunk> {
     chunks
 }
 
+/// Split source content into chunks at AST symbol boundaries.
+///
+/// For each top-level symbol (parent_idx == None):
+///   1. Include doc comment lines above the symbol
+///   2. Extract content from doc_start..symbol.end_line
+///   3. If oversized, truncate to signature + first max_chars
+///   4. Drop chunks < 40 chars
+///
+/// Falls back to blank-line chunking if AST produces no usable chunks.
+#[cfg(feature = "treesitter")]
+fn split_by_ast_boundaries(
+    content: &str,
+    file_ast: &FileAst,
+    max_chunk_chars: usize,
+) -> Vec<Chunk> {
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.is_empty() || file_ast.symbols.is_empty() {
+        return Vec::new();
+    }
+
+    let mut chunks = Vec::new();
+
+    for sym in &file_ast.symbols {
+        // Only chunk top-level symbols (methods are included in their parent's chunk)
+        if sym.parent_idx.is_some() {
+            continue;
+        }
+
+        let sym_start = sym.start_line.saturating_sub(1); // 0-based index
+        let sym_end = sym.end_line.min(lines.len()); // 1-based inclusive -> exclusive
+
+        if sym_start >= lines.len() {
+            continue;
+        }
+
+        // Scan upward for doc comments above the symbol
+        let mut doc_start = sym_start;
+        while doc_start > 0 {
+            let prev = lines[doc_start - 1].trim();
+            if prev.starts_with("///")
+                || prev.starts_with("//!")
+                || prev.starts_with("/**")
+                || prev.starts_with("* ")
+                || prev.starts_with("*/")
+                || prev.starts_with("#[")     // Rust attributes
+                || prev.starts_with("@")      // Java/TS decorators
+                || prev.starts_with("#")       // Python decorators (# comments too)
+                || prev.starts_with("\"\"\"")  // Python docstrings
+            {
+                doc_start -= 1;
+            } else {
+                break;
+            }
+        }
+
+        // Extract the chunk text
+        let chunk_lines: Vec<&str> = lines[doc_start..sym_end].to_vec();
+        let mut text = chunk_lines.join("\n");
+
+        // Truncate oversized chunks (keep signature + beginning)
+        if text.len() > max_chunk_chars {
+            // Try to keep at least the signature line
+            let mut end = max_chunk_chars;
+            while !text.is_char_boundary(end) && end > 0 {
+                end -= 1;
+            }
+            text = text[..end].to_string();
+            text.push_str("\n// ...");
+        }
+
+        if text.len() >= 40 {
+            chunks.push(Chunk {
+                start_line: doc_start + 1, // 1-based
+                text,
+            });
+        }
+    }
+
+    chunks
+}
+
 /// Convert a file path into a context line for embedding.
 /// Strips noise directories and creates a breadcrumb like:
 ///   "// File: SaveGame.h (Engine > GameFramework)"
@@ -222,7 +306,14 @@ fn path_context(rel_path: &str) -> String {
 
 /// Extract embeddable chunks grouped by file. Parallelized via rayon.
 /// Pre-filters by extension and file size. Returns file metadata for cache keying.
-fn extract_chunks_by_file(files: &[ScannedFile], max_chunk_chars: usize) -> Vec<FileChunks> {
+///
+/// When `ast_index` is provided (treesitter feature), uses AST-boundary chunking
+/// for files with parsed ASTs, falling back to blank-line stub chunking otherwise.
+fn extract_chunks_by_file(
+    files: &[ScannedFile],
+    max_chunk_chars: usize,
+    #[cfg(feature = "treesitter")] ast_index: Option<&AstIndex>,
+) -> Vec<FileChunks> {
     use rayon::prelude::*;
 
     files
@@ -242,12 +333,36 @@ fn extract_chunks_by_file(files: &[ScannedFile], max_chunk_chars: usize) -> Vec<
                 .unwrap_or(0);
 
             let content = std::fs::read_to_string(&file.abs_path).ok()?;
-            let stubs = extract_stubs(&content, &file.ext);
-            if stubs.trim().is_empty() {
-                return None;
-            }
 
-            let chunks = split_stubs_into_chunks(&stubs, max_chunk_chars);
+            // Try AST-boundary chunking first (when treesitter feature is enabled)
+            #[cfg(feature = "treesitter")]
+            let chunks = {
+                let ast_chunks = ast_index
+                    .and_then(|idx| idx.get(&file.rel_path))
+                    .map(|file_ast| split_by_ast_boundaries(&content, file_ast, max_chunk_chars))
+                    .unwrap_or_default();
+
+                if !ast_chunks.is_empty() {
+                    ast_chunks
+                } else {
+                    // Fallback to blank-line stub chunking
+                    let stubs = extract_stubs(&content, &file.ext);
+                    if stubs.trim().is_empty() {
+                        return None;
+                    }
+                    split_stubs_into_chunks(&stubs, max_chunk_chars)
+                }
+            };
+
+            #[cfg(not(feature = "treesitter"))]
+            let chunks = {
+                let stubs = extract_stubs(&content, &file.ext);
+                if stubs.trim().is_empty() {
+                    return None;
+                }
+                split_stubs_into_chunks(&stubs, max_chunk_chars)
+            };
+
             if chunks.is_empty() {
                 return None;
             }
@@ -350,7 +465,7 @@ fn create_embedding_model(config: &TierConfig) -> Result<TextEmbedding, String> 
 // Later entries for the same path supersede earlier ones (HashMap insert).
 
 const CACHE_MAGIC: &[u8; 4] = b"CSEM";
-const CACHE_VERSION: u16 = 4; // bumped: fastembed + nomic model produces different embeddings
+const CACHE_VERSION: u16 = 5; // bumped: AST-boundary chunking produces different chunks
 
 /// Cached embeddings for one source file.
 struct CachedFile {
@@ -674,13 +789,19 @@ pub fn build_semantic_index(
     model_name: Option<&str>,
     progress: &crate::types::SemanticProgress,
     repo_root: &Path,
+    #[cfg(feature = "treesitter")] ast_index: Option<&AstIndex>,
 ) -> Option<SemanticIndex> {
     use std::sync::atomic::Ordering::Relaxed;
 
     // Phase 1: Extract chunks grouped by file
     progress.status.store(1, Relaxed);
     let tier = resolve_model(model_name);
-    let file_chunks = extract_chunks_by_file(files, tier.max_chunk_chars);
+    let file_chunks = extract_chunks_by_file(
+        files,
+        tier.max_chunk_chars,
+        #[cfg(feature = "treesitter")]
+        ast_index,
+    );
 
     let total_chunks: usize = file_chunks.iter().map(|fc| fc.chunks.len()).sum();
     if total_chunks == 0 {

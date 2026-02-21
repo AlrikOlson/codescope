@@ -180,6 +180,18 @@ fn process_changes(paths: &[PathBuf], state: &Arc<RwLock<ServerState>>) {
                             &repo.all_files,
                         );
 
+                        // Update AST index
+                        #[cfg(feature = "treesitter")]
+                        {
+                            let mut ast_idx = repo.ast_index.write().unwrap();
+                            crate::ast::update_ast_for_file(
+                                &mut ast_idx,
+                                &rel_path,
+                                abs_path,
+                                &scanned.ext,
+                            );
+                        }
+
                         changed_count += 1;
                     }
                     None => {
@@ -222,4 +234,9 @@ fn remove_file_from_repo(repo: &mut crate::types::RepoState, rel_path: &str) {
         targets.retain(|t| t != rel_path);
     }
     repo.import_graph.imported_by.remove(rel_path);
+    #[cfg(feature = "treesitter")]
+    {
+        let mut ast_idx = repo.ast_index.write().unwrap();
+        ast_idx.remove(rel_path);
+    }
 }

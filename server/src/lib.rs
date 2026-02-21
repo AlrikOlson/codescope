@@ -22,6 +22,8 @@
 //! - [`semantic`] — BERT-based semantic code search (feature-gated)
 
 pub mod api;
+#[cfg(feature = "treesitter")]
+pub mod ast;
 pub mod auth;
 pub mod budget;
 pub mod fuzzy;
@@ -240,6 +242,12 @@ pub fn scan_repo_with_options(
     let import_graph = scan_imports(&all_files);
     let term_doc_freq = build_term_doc_freq(&all_files);
 
+    #[cfg(feature = "treesitter")]
+    let ast_index = {
+        let idx = ast::build_ast_index(&all_files);
+        std::sync::Arc::new(std::sync::RwLock::new(idx))
+    };
+
     #[cfg(feature = "semantic")]
     let semantic_index = std::sync::Arc::new(std::sync::RwLock::new(None));
     #[cfg(feature = "semantic")]
@@ -270,6 +278,8 @@ pub fn scan_repo_with_options(
         stub_cache: DashMap::new(),
         term_doc_freq,
         scan_time_ms,
+        #[cfg(feature = "treesitter")]
+        ast_index,
         #[cfg(feature = "semantic")]
         semantic_index,
         #[cfg(feature = "semantic")]
