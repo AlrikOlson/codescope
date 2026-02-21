@@ -1,13 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-
-interface RepoInfo {
-  path: string;
-  name: string;
-  ecosystems: string[];
-  workspace_info: string | null;
-  file_count: number;
-}
+import { Check, X, Loader2, Circle, ArrowLeft, ArrowRight } from 'lucide-react';
+import type { RepoInfo } from '../SetupWizard';
 
 interface Props {
   repos: RepoInfo[];
@@ -24,7 +18,7 @@ interface InitResult {
 
 export function DoctorScreen({ repos, semantic, onNext, onBack }: Props) {
   const [results, setResults] = useState<InitResult[]>(
-    repos.map((r) => ({ name: r.name, status: 'pending', message: '' }))
+    repos.map((r) => ({ name: r.name, status: 'pending' as const, message: '' }))
   );
   const [running, setRunning] = useState(false);
   const [done, setDone] = useState(false);
@@ -65,28 +59,50 @@ export function DoctorScreen({ repos, semantic, onNext, onBack }: Props) {
 
   const statusIcon = (status: string) => {
     switch (status) {
-      case 'done': return <span className="check-icon status-pass">&#x2713;</span>;
-      case 'error': return <span className="check-icon status-fail">&#x2717;</span>;
-      case 'running': return <span className="check-icon" style={{ color: '#4a6cf7' }}>&#x25CF;</span>;
-      default: return <span className="check-icon" style={{ color: '#444' }}>&#x25CB;</span>;
+      case 'done':
+        return <Check size={16} className="status-pass" />;
+      case 'error':
+        return <X size={16} className="status-fail" />;
+      case 'running':
+        return <Loader2 size={16} className="spinning" style={{ color: 'var(--accent)' }} />;
+      default:
+        return <Circle size={16} style={{ color: 'var(--text3)' }} />;
     }
   };
 
+  const doneCount = results.filter((r) => r.status === 'done').length;
+  const errorCount = results.filter((r) => r.status === 'error').length;
+
   return (
     <div className="screen">
-      <h2>Setting Up</h2>
+      <h2>
+        {done
+          ? (errorCount > 0 ? <X size={18} /> : <Check size={18} />)
+          : <Loader2 size={18} className="spinning" />
+        }
+        {done ? 'Setup Complete' : 'Setting Up'}
+      </h2>
       <p className="subtitle">
-        Initializing {repos.length} project{repos.length !== 1 ? 's' : ''}...
+        {done
+          ? `${doneCount} of ${repos.length} project${repos.length !== 1 ? 's' : ''} initialized${errorCount > 0 ? `, ${errorCount} failed` : ''}.`
+          : `Initializing ${repos.length} project${repos.length !== 1 ? 's' : ''}...`
+        }
       </p>
 
       <div style={{ marginBottom: '1rem' }}>
-        {results.map((r) => (
-          <div key={r.name} className="check-item">
-            {statusIcon(r.status)}
-            <div>
-              <div style={{ fontWeight: 500 }}>{r.name}</div>
+        {results.map((r, idx) => (
+          <div
+            key={r.name}
+            className="check-item"
+            style={{ '--row-idx': idx } as React.CSSProperties}
+          >
+            <div className="check-icon">
+              {statusIcon(r.status)}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="check-name">{r.name}</div>
               {r.message && (
-                <div style={{ fontSize: '0.8rem', color: r.status === 'error' ? '#f87171' : '#666' }}>
+                <div className={`check-message ${r.status === 'error' ? 'error' : ''}`}>
                   {r.message}
                 </div>
               )}
@@ -96,9 +112,11 @@ export function DoctorScreen({ repos, semantic, onNext, onBack }: Props) {
       </div>
 
       <div className="btn-row">
-        <button className="btn btn-secondary" onClick={onBack} disabled={running}>Back</button>
+        <button className="btn btn-secondary" onClick={onBack} disabled={running}>
+          <ArrowLeft size={14} /> Back
+        </button>
         <button className="btn btn-primary" onClick={onNext} disabled={running}>
-          {done ? 'Finish' : 'Setting up...'}
+          {done ? 'Finish' : 'Setting up...'} {done && <ArrowRight size={14} />}
         </button>
       </div>
     </div>

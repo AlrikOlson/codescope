@@ -1,4 +1,5 @@
 import React from 'react';
+import { Search, ArrowRight } from 'lucide-react';
 
 interface Props {
   version: string;
@@ -9,18 +10,19 @@ export function WelcomeScreen({ version, onNext }: Props) {
   return (
     <div className="screen">
       <div className="welcome-center">
-        <div className="welcome-logo">&#x1F50D;</div>
-        <h1>CodeScope</h1>
+        <div className="welcome-logo">
+          <Search size={56} strokeWidth={1.5} />
+        </div>
+        <h1 className="welcome-title">CodeScope</h1>
+        {version && <span className="version-badge">v{version}</span>}
         <p className="subtitle">
-          {version ? `v${version} — ` : ''}Fast codebase indexer and search server
-        </p>
-        <p className="subtitle" style={{ maxWidth: 420 }}>
-          Let's set up CodeScope. We'll scan for projects, configure semantic
-          search, and integrate with your tools.
+          Fast codebase indexer and MCP search server.
+          Let's scan for projects, configure semantic search,
+          and integrate with your tools.
         </p>
         <div className="btn-row">
           <button className="btn btn-primary" onClick={onNext}>
-            Get Started
+            Get Started <ArrowRight size={14} />
           </button>
         </div>
       </div>

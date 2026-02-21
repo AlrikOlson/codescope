@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { X } from 'lucide-react';
 import { WelcomeScreen } from './screens/WelcomeScreen';
 import { RepoPickerScreen } from './screens/RepoPickerScreen';
 import { SemanticScreen } from './screens/SemanticScreen';
@@ -10,7 +12,7 @@ import './setup.css';
 
 type Screen = 'welcome' | 'repos' | 'semantic' | 'integration' | 'doctor' | 'done';
 
-interface RepoInfo {
+export interface RepoInfo {
   path: string;
   name: string;
   ecosystems: string[];
@@ -53,55 +55,69 @@ export function SetupWizard() {
 
   return (
     <div className="setup-wizard">
-      {/* Progress bar */}
-      <div className="progress-bar">
-        {screens.map((s, i) => (
-          <div
-            key={s}
-            className={`progress-dot ${i <= currentIndex ? 'active' : ''} ${i === currentIndex ? 'current' : ''}`}
-          />
-        ))}
+      {/* Custom titlebar */}
+      <div className="titlebar" data-tauri-drag-region>
+        <span className="titlebar-label" data-tauri-drag-region>CodeScope Setup</span>
+        <button
+          className="titlebar-close"
+          onClick={() => getCurrentWindow().close()}
+          aria-label="Close"
+        >
+          <X size={14} />
+        </button>
       </div>
 
-      {/* Screen content */}
-      <div className="screen-content">
-        {screen === 'welcome' && (
-          <WelcomeScreen version={version} onNext={next} />
-        )}
-        {screen === 'repos' && (
-          <RepoPickerScreen
-            selectedRepos={selectedRepos}
-            onSelectedReposChange={setSelectedRepos}
-            onNext={next}
-            onBack={back}
-          />
-        )}
-        {screen === 'semantic' && (
-          <SemanticScreen
-            enabled={enableSemantic}
-            onEnabledChange={setEnableSemantic}
-            hasSemantic={config?.has_semantic ?? false}
-            onNext={next}
-            onBack={back}
-          />
-        )}
-        {screen === 'integration' && (
-          <IntegrationScreen onNext={next} onBack={back} />
-        )}
-        {screen === 'doctor' && (
-          <DoctorScreen
-            repos={selectedRepos}
-            semantic={enableSemantic}
-            onNext={next}
-            onBack={back}
-          />
-        )}
-        {screen === 'done' && (
-          <DoneScreen
-            repoCount={selectedRepos.length}
-            semantic={enableSemantic}
-          />
-        )}
+      <div className="setup-content">
+        {/* Progress bar */}
+        <div className="progress-bar">
+          {screens.map((s, i) => (
+            <div
+              key={s}
+              className={`progress-dot ${i <= currentIndex ? 'active' : ''} ${i === currentIndex ? 'current' : ''}`}
+            />
+          ))}
+        </div>
+
+        {/* Screen content */}
+        <div className="screen-content">
+          {screen === 'welcome' && (
+            <WelcomeScreen version={version} onNext={next} />
+          )}
+          {screen === 'repos' && (
+            <RepoPickerScreen
+              selectedRepos={selectedRepos}
+              onSelectedReposChange={setSelectedRepos}
+              onNext={next}
+              onBack={back}
+            />
+          )}
+          {screen === 'semantic' && (
+            <SemanticScreen
+              enabled={enableSemantic}
+              onEnabledChange={setEnableSemantic}
+              hasSemantic={config?.has_semantic ?? false}
+              onNext={next}
+              onBack={back}
+            />
+          )}
+          {screen === 'integration' && (
+            <IntegrationScreen onNext={next} onBack={back} />
+          )}
+          {screen === 'doctor' && (
+            <DoctorScreen
+              repos={selectedRepos}
+              semantic={enableSemantic}
+              onNext={next}
+              onBack={back}
+            />
+          )}
+          {screen === 'done' && (
+            <DoneScreen
+              repoCount={selectedRepos.length}
+              semantic={enableSemantic}
+            />
+          )}
+        </div>
       </div>
     </div>
   );

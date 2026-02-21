@@ -1,4 +1,5 @@
 import React from 'react';
+import { CheckCircle2, Globe, Stethoscope, FolderPlus } from 'lucide-react';
 
 interface Props {
   repoCount: number;
@@ -9,18 +10,29 @@ export function DoneScreen({ repoCount, semantic }: Props) {
   return (
     <div className="screen">
       <div className="welcome-center">
-        <div className="welcome-logo" style={{ fontSize: '4rem' }}>&#x2713;</div>
-        <h1>You're all set!</h1>
+        <div className="done-icon">
+          <CheckCircle2 size={64} strokeWidth={1.5} />
+        </div>
+        <h1 className="welcome-title">You're all set</h1>
         <p className="subtitle">
           {repoCount} project{repoCount !== 1 ? 's' : ''} indexed
           {semantic ? ' with semantic search' : ''}.
         </p>
-        <div style={{ textAlign: 'left', maxWidth: 400, margin: '1rem auto' }}>
-          <p style={{ color: '#888', marginBottom: '1rem' }}>Get started:</p>
-          <div style={{ fontFamily: 'monospace', fontSize: '0.9rem', lineHeight: 2 }}>
-            <div><span style={{ color: '#4a6cf7' }}>codescope web</span> &mdash; Open the web UI</div>
-            <div><span style={{ color: '#4a6cf7' }}>codescope doctor</span> &mdash; Check your setup</div>
-            <div><span style={{ color: '#4a6cf7' }}>codescope init &lt;path&gt;</span> &mdash; Add another project</div>
+        <div className="done-commands">
+          <div className="done-command">
+            <Globe size={15} />
+            <span className="done-command-name">codescope web</span>
+            <span className="done-command-desc">Open the web UI</span>
+          </div>
+          <div className="done-command">
+            <Stethoscope size={15} />
+            <span className="done-command-name">codescope doctor</span>
+            <span className="done-command-desc">Check your setup</span>
+          </div>
+          <div className="done-command">
+            <FolderPlus size={15} />
+            <span className="done-command-name">codescope init &lt;path&gt;</span>
+            <span className="done-command-desc">Add another project</span>
           </div>
         </div>
       </div>
