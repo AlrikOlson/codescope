@@ -1744,15 +1744,20 @@ fn search_find_blocking(q: String, ext: Option<String>, limit: Option<usize>, st
 
             // Merge parallel grep results into the merged map
             for (path, grep_find) in grep_hits {
-                let entry = merged.entry(path).or_insert(grep_find);
-                if entry.grep_score == 0.0 {
-                    // Entry existed from filename search — fill in grep data
-                    entry.grep_score = grep_find.grep_score;
-                    entry.grep_count = grep_find.grep_count;
-                    entry.top_match = grep_find.top_match;
-                    entry.top_match_line = grep_find.top_match_line;
-                    entry.terms_matched = grep_find.terms_matched;
-                    entry.total_terms = grep_find.total_terms;
+                match merged.entry(path) {
+                    std::collections::hash_map::Entry::Occupied(mut e) => {
+                        // Entry existed from filename search — fill in grep data
+                        let entry = e.get_mut();
+                        entry.grep_score = grep_find.grep_score;
+                        entry.grep_count = grep_find.grep_count;
+                        entry.top_match = grep_find.top_match;
+                        entry.top_match_line = grep_find.top_match_line;
+                        entry.terms_matched = grep_find.terms_matched;
+                        entry.total_terms = grep_find.total_terms;
+                    }
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert(grep_find);
+                    }
                 }
             }
         }
