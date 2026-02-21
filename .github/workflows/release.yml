@@ -558,8 +558,9 @@ jobs:
           TAG="${{ steps.tag.outputs.tag }}"
           VERSION="${TAG#v}"
 
-          # Cargo.toml
+          # Cargo.toml + Cargo.lock (keep lockfile version in sync)
           sed -i "s/^version = \".*\"/version = \"$VERSION\"/" server/Cargo.toml
+          sed -i '/^name = "codescope-server"$/{n;s/^version = ".*"/version = "'"$VERSION"'"/;}' server/Cargo.lock
 
           # package.json + package-lock.json
           node -e "
@@ -613,7 +614,7 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add server/Cargo.toml package.json package-lock.json CHANGELOG.md README.md CONTRIBUTING.md
+          git add server/Cargo.toml server/Cargo.lock package.json package-lock.json CHANGELOG.md README.md CONTRIBUTING.md
           if git diff --cached --quiet; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "No changes to commit"

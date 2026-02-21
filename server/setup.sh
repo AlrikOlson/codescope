@@ -36,8 +36,9 @@ Options:
   --help, -h        Show this help
 
 All pre-built binaries include semantic search, enabled by default.
-Disable with --no-semantic if needed. GPU acceleration is automatic
-when CUDA is available.
+Disable with --no-semantic if needed. On Linux x86_64, GPU-accelerated
+binaries are downloaded automatically when CUDA is detected on the host.
+When building from source, CUDA is also auto-detected.
 
 Examples:
   # Standard install (downloads pre-built binary, ~10 seconds)
@@ -135,16 +136,35 @@ download_binary() {
         archive="codescope-server-${platform}.tar.gz"
         binary_name="codescope-server"
     fi
-    local url="https://github.com/$REPO/releases/download/$tag/$archive"
-
     info "Downloading CodeScope $tag ($platform)..."
     local tmpdir
     tmpdir="$(mktemp -d)"
 
-    if ! curl -fsSL --connect-timeout 10 --max-time 120 -o "$tmpdir/$archive" "$url"; then
-        rm -rf "$tmpdir"
-        err "Download failed. Your platform ($platform) may not have a pre-built binary."
-        return 1
+    # On Linux x86_64, prefer CUDA binary if CUDA runtime is available
+    local cuda_ok=false
+    if [ "$platform" = "linux-x86_64" ]; then
+        if command -v nvcc &>/dev/null \
+            || [ -d /usr/local/cuda ] \
+            || [ -f /usr/lib/x86_64-linux-gnu/libcuda.so ] \
+            || command -v nvidia-smi &>/dev/null; then
+            local cuda_archive="codescope-server-linux-x86_64-cuda.tar.gz"
+            local cuda_url="https://github.com/$REPO/releases/download/$tag/$cuda_archive"
+            if curl -fsSL --connect-timeout 5 --max-time 120 -o "$tmpdir/$cuda_archive" "$cuda_url" 2>/dev/null; then
+                info "CUDA detected — using GPU-accelerated binary"
+                archive="$cuda_archive"
+                cuda_ok=true
+            fi
+        fi
+    fi
+
+    # Download the standard binary (skip if CUDA binary already downloaded)
+    if [ "$cuda_ok" = "false" ]; then
+        local url="https://github.com/$REPO/releases/download/$tag/$archive"
+        if ! curl -fsSL --connect-timeout 10 --max-time 120 -o "$tmpdir/$archive" "$url"; then
+            rm -rf "$tmpdir"
+            err "Download failed. Your platform ($platform) may not have a pre-built binary."
+            return 1
+        fi
     fi
 
     # Extract
