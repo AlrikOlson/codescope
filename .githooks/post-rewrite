@@ -1,0 +1,22 @@
+#!/bin/sh
+# Auto-sync Cargo.lock after rebase/amend if version drifted
+#
+# When a rebase lands on top of a bot version-bump commit, git's text merge
+# keeps whatever version was in our Cargo.lock — but Cargo.toml now has the
+# new version. This hook detects the mismatch and amends the commit.
+
+case "$1" in
+  rebase)
+    # Check if Cargo.lock version matches Cargo.toml version
+    TOML_VER=$(grep -m1 '^version = ' server/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+    LOCK_VER=$(awk '/^name = "codescope-server"/{getline; print}' server/Cargo.lock | sed 's/version = "\(.*\)"/\1/')
+
+    if [ -n "$TOML_VER" ] && [ -n "$LOCK_VER" ] && [ "$TOML_VER" != "$LOCK_VER" ]; then
+      echo "post-rewrite: Cargo.lock version ($LOCK_VER) != Cargo.toml ($TOML_VER) — syncing..."
+      (cd server && cargo check --quiet 2>/dev/null)
+      git add server/Cargo.lock
+      git commit --amend --no-edit --quiet
+      echo "post-rewrite: Cargo.lock synced to $TOML_VER"
+    fi
+    ;;
+esac
