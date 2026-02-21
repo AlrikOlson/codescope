@@ -1,4 +1,4 @@
-//! Hero search input component.
+//! Hero search input component with debounced search.
 
 use dioxus::prelude::*;
 use std::time::Instant;
@@ -8,6 +8,7 @@ use crate::state::*;
 
 #[component]
 pub fn SearchInput() -> Element {
+    let mut debounce_gen = use_signal(|| 0u64);
     let query = QUERY.read();
     let has_query = !query.trim().is_empty();
 
@@ -48,7 +49,24 @@ pub fn SearchInput() -> Element {
                         *QUERY.write() = value.clone();
                         *ACTIVE_IDX.write() = 0;
                         *EXT_FILTER.write() = None;
-                        run_search_query(&value);
+
+                        if value.trim().is_empty() {
+                            *RESULTS.write() = vec![];
+                            *MODULE_RESULTS.write() = vec![];
+                            *SELECTED_PATH.write() = None;
+                            return;
+                        }
+
+                        // Debounce: increment generation, spawn delayed search
+                        let gen = *debounce_gen.read() + 1;
+                        *debounce_gen.write() = gen;
+
+                        spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+                            if *debounce_gen.read() == gen {
+                                run_search_query(&value);
+                            }
+                        });
                     },
                 }
 

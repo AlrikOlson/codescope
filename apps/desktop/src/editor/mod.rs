@@ -1,5 +1,6 @@
 //! Editor / code preview panel.
 
+mod highlight;
 mod viewer;
 
 use dioxus::prelude::*;

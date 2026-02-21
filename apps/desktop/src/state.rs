@@ -1,5 +1,6 @@
 //! Global application state using Dioxus signals.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use codescope_core::fuzzy::{SearchFileResult, SearchModuleResult};
@@ -77,3 +78,9 @@ pub static EXT_FILTER: GlobalSignal<Option<String>> = Signal::global(|| None);
 
 /// Search timing in ms
 pub static QUERY_TIME_MS: GlobalSignal<f64> = Signal::global(|| 0.0);
+
+/// Expanded directories in the file tree
+pub static EXPANDED_DIRS: GlobalSignal<HashSet<String>> = Signal::global(|| HashSet::new());
+
+/// Sidebar width in pixels (for resizable split pane)
+pub static SIDEBAR_WIDTH: GlobalSignal<f64> = Signal::global(|| 300.0);

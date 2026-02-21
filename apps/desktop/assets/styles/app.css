@@ -19,6 +19,9 @@
   color: var(--text);
   font-family: var(--font-mono);
 }
+.app-shell:focus {
+  outline: none;
+}
 
 /* --- Titlebar --- */
 .titlebar {
@@ -195,9 +198,32 @@
 /* --- Split Panel --- */
 .split-panel {
   display: grid;
-  grid-template-columns: clamp(260px, 30%, 400px) 1fr;
+  /* Default; overridden by inline style when resizing */
+  grid-template-columns: 300px 4px 1fr;
   overflow: hidden;
   min-height: 0;
+  position: relative;
+}
+
+/* --- Resize Handle --- */
+.resize-handle {
+  width: 4px;
+  cursor: col-resize;
+  background: var(--border);
+  transition: background var(--fast) var(--ease);
+  z-index: 10;
+}
+.resize-handle:hover,
+.resize-handle:active {
+  background: var(--neon-cyan);
+}
+
+/* --- Drag Overlay (captures mouse during resize) --- */
+.drag-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  cursor: col-resize;
 }
 
 /* --- Sidebar Panel (Results) --- */
@@ -314,6 +340,7 @@
   font-size: 12px;
   line-height: 1.6;
   padding: 8px 0;
+  background: transparent !important;
 }
 .code-line {
   display: flex;
@@ -336,15 +363,65 @@
   white-space: pre;
   padding-right: 16px;
 }
-
-/* --- File Tree (placeholder) --- */
-.file-tree {
-  padding: 12px;
+.code-truncated {
+  padding: 12px 16px;
+  color: var(--amber);
+  font-size: 11px;
+  opacity: 0.8;
+  border-top: 1px solid var(--border);
 }
-.file-tree-placeholder {
+
+/* --- File Tree --- */
+.file-tree {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.file-tree-header {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
   color: var(--text3);
-  font-size: 12px;
   opacity: 0.5;
+  padding: 8px 12px 6px;
+}
+.file-tree-content {
+  overflow-y: auto;
+  flex: 1;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--neon-cyan) 20%, transparent) transparent;
+}
+.tree-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  cursor: pointer;
+  font-size: 12px;
+  padding-right: 8px;
+  transition: background var(--fast) var(--ease);
+}
+.tree-item:hover {
+  background: var(--hover-accent);
+}
+.tree-file.active {
+  background: var(--hover-accent-mid);
+  border-right: 2px solid var(--neon-cyan);
+}
+.tree-arrow {
+  font-size: 10px;
+  color: var(--text3);
+  width: 12px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.tree-dir-name {
+  color: var(--text2);
+  font-weight: 600;
+}
+.tree-file-name {
+  color: var(--text);
 }
 
 /* --- Status Bar --- */

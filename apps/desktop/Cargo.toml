@@ -16,5 +16,7 @@ treesitter = ["codescope-core/treesitter"]
 [dependencies]
 codescope-core = { path = "../../crates/core", default-features = false }
 dioxus = { version = "0.7", features = [] }
+syntect = "5"
+tokio = { version = "1", features = ["time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
