@@ -439,6 +439,35 @@ fn legacy_cache_path(repo_root: &Path) -> PathBuf {
     repo_root.join(".codescope").join("semantic.cache")
 }
 
+/// Info about a repo's semantic cache state.
+pub struct CacheInfo {
+    pub model: String,
+    pub chunks: usize,
+    /// Whether the cache version matches the current binary (false = needs rebuild)
+    pub current: bool,
+}
+
+/// Check if a repo has an existing semantic cache.
+/// Returns `Some(CacheInfo)` if meta.json exists with chunks > 0, `None` otherwise.
+/// `current` is true only if the stored cache_version matches `CACHE_VERSION`.
+pub fn check_semantic_cache(repo_root: &Path) -> Option<CacheInfo> {
+    let cp = cache_path(repo_root);
+    let meta_path = cp.parent()?.join("meta.json");
+    let content = std::fs::read_to_string(&meta_path).ok()?;
+    let meta: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let model = meta["model"].as_str().unwrap_or("unknown").to_string();
+    let chunks = meta["chunks"].as_u64().unwrap_or(0) as usize;
+    if chunks == 0 {
+        return None;
+    }
+    let stored_version = meta["cache_version"].as_u64().unwrap_or(0) as u16;
+    Some(CacheInfo {
+        model,
+        chunks,
+        current: stored_version == CACHE_VERSION,
+    })
+}
+
 /// Write a meta.json alongside the cache for debugging/discovery.
 fn write_cache_meta(repo_root: &Path, model: &str, chunks: usize) {
     let cp = cache_path(repo_root);
@@ -452,6 +481,7 @@ fn write_cache_meta(repo_root: &Path, model: &str, chunks: usize) {
             "last_path": repo_root.to_string_lossy(),
             "model": model,
             "chunks": chunks,
+            "cache_version": CACHE_VERSION,
             "built": chrono_now_iso(),
         });
         let _ = std::fs::write(&meta_path, serde_json::to_string_pretty(&meta).unwrap_or_default());

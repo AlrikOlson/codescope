@@ -1955,7 +1955,7 @@ pub(crate) fn negotiate_version(client_version: &str) -> &'static str {
 /// Returns `None` for notifications (no `id` field).
 /// The `initialized` flag is checked by the caller — this function assumes
 /// the request has already passed init enforcement.
-pub(crate) fn dispatch_jsonrpc(
+pub fn dispatch_jsonrpc(
     state: &Arc<RwLock<ServerState>>,
     msg: &serde_json::Value,
     session: &mut Option<SessionState>,

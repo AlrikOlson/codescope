@@ -18,6 +18,14 @@ struct RepoInfo {
     ecosystems: Vec<String>,
     workspace_info: Option<String>,
     file_count: usize,
+    /// "ready" | "stale" | "needs_setup" | "new"
+    status: String,
+    /// Human-readable explanation of the status
+    status_detail: String,
+    /// Number of embedded chunks (0 if no cache)
+    semantic_chunks: usize,
+    /// Semantic model name ("" if no cache)
+    semantic_model: String,
 }
 
 #[allow(dead_code)]
@@ -45,10 +53,80 @@ struct RepoEntry {
 // Tauri commands
 // ---------------------------------------------------------------------------
 
-/// Scan common directories for project repos.
+/// Build a RepoInfo for a path, computing status from registered set + semantic cache.
+fn make_repo_info(
+    entry_path: &std::path::Path,
+    registered_set: &std::collections::HashSet<PathBuf>,
+    canonical: &PathBuf,
+) -> RepoInfo {
+    let detection = init::detect_project(entry_path);
+    let ecosystems: Vec<String> =
+        detection.ecosystems.iter().map(|e| e.label().to_string()).collect();
+    let name = entry_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let is_registered = registered_set.contains(canonical);
+    let cache = codescope_server::semantic::check_semantic_cache(entry_path);
+
+    let (status, status_detail, semantic_model, semantic_chunks) = match (is_registered, &cache) {
+        (true, Some(ci)) if ci.current => (
+            "ready",
+            format!("{} chunks · {} model", ci.chunks, ci.model),
+            ci.model.clone(),
+            ci.chunks,
+        ),
+        (true, Some(ci)) => (
+            "stale",
+            format!("Embeddings outdated — will rebuild ({} chunks, {} model)", ci.chunks, ci.model),
+            ci.model.clone(),
+            ci.chunks,
+        ),
+        (true, None) => (
+            "needs_setup",
+            "Registered · not yet indexed".to_string(),
+            String::new(),
+            0,
+        ),
+        (false, Some(ci)) if ci.current => (
+            "ready",
+            format!("{} chunks · {} model", ci.chunks, ci.model),
+            ci.model.clone(),
+            ci.chunks,
+        ),
+        (false, Some(ci)) => (
+            "new",
+            format!("Has outdated embeddings ({} chunks)", ci.chunks),
+            ci.model.clone(),
+            ci.chunks,
+        ),
+        (false, None) => (
+            "new",
+            String::new(),
+            String::new(),
+            0,
+        ),
+    };
+
+    RepoInfo {
+        path: entry_path.to_string_lossy().to_string(),
+        name,
+        ecosystems,
+        workspace_info: detection.workspace_info,
+        file_count: 0,
+        status: status.to_string(),
+        status_detail,
+        semantic_chunks,
+        semantic_model,
+    }
+}
+
+/// Scan common directories for project repos (depth-2) and merge registered repos.
 /// Only does cheap marker detection — skips full file counting for speed.
 #[tauri::command]
-fn scan_for_repos(dirs: Vec<String>) -> Vec<RepoInfo> {
+fn scan_for_repos(dirs: Vec<String>, registered: Vec<String>) -> Vec<RepoInfo> {
     let mut repos = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let project_markers = [
@@ -59,11 +137,32 @@ fn scan_for_repos(dirs: Vec<String>) -> Vec<RepoInfo> {
         "setup.py",
         "CMakeLists.txt",
     ];
-    // Heavy dirs to skip when scanning home
     let skip_dirs = [
         "node_modules", ".cargo", ".rustup", ".cache", ".local",
         ".npm", ".nvm", ".pyenv", ".conda", "snap", ".steam",
+        "target", "dist", "build", ".git",
     ];
+
+    let registered_set: std::collections::HashSet<PathBuf> = registered
+        .iter()
+        .filter_map(|p| PathBuf::from(p).canonicalize().ok())
+        .collect();
+
+    // Try to add a directory as a repo. Returns true if it had project markers.
+    let try_add = |entry_path: &std::path::Path,
+                   seen: &mut std::collections::HashSet<PathBuf>,
+                   repos: &mut Vec<RepoInfo>| -> bool {
+        let canonical = entry_path.canonicalize().unwrap_or(entry_path.to_path_buf());
+        if !seen.insert(canonical.clone()) {
+            return true;
+        }
+        let has_marker = project_markers.iter().any(|m| entry_path.join(m).exists());
+        if !has_marker {
+            return false;
+        }
+        repos.push(make_repo_info(entry_path, &registered_set, &canonical));
+        true
+    };
 
     for dir in &dirs {
         let path = PathBuf::from(dir);
@@ -83,30 +182,47 @@ fn scan_for_repos(dirs: Vec<String>) -> Vec<RepoInfo> {
             if name.starts_with('.') || skip_dirs.contains(&name.as_str()) {
                 continue;
             }
-            // Deduplicate across scan dirs
-            let canonical = entry_path.canonicalize().unwrap_or(entry_path.clone());
-            if !seen.insert(canonical) {
-                continue;
+            let found = try_add(&entry_path, &mut seen, &mut repos);
+            if !found {
+                // Depth 2: scan children of non-project dirs
+                if let Ok(children) = std::fs::read_dir(&entry_path) {
+                    for child in children.flatten() {
+                        let child_path = child.path();
+                        if !child_path.is_dir() {
+                            continue;
+                        }
+                        let child_name = child.file_name().to_string_lossy().to_string();
+                        if child_name.starts_with('.') || skip_dirs.contains(&child_name.as_str()) {
+                            continue;
+                        }
+                        try_add(&child_path, &mut seen, &mut repos);
+                    }
+                }
             }
-            // Check for project markers (cheap fs::exists checks)
-            let has_marker = project_markers.iter().any(|m| entry_path.join(m).exists());
-            if !has_marker {
-                continue;
-            }
-            // Quick ecosystem detection — skip expensive file counting
-            let detection = init::detect_project(&entry_path);
-            let ecosystems: Vec<String> =
-                detection.ecosystems.iter().map(|e| e.label().to_string()).collect();
-
-            repos.push(RepoInfo {
-                path: entry_path.to_string_lossy().to_string(),
-                name,
-                ecosystems,
-                workspace_info: detection.workspace_info,
-                file_count: 0, // filled on demand, not during scan
-            });
         }
     }
+
+    // Merge registered repos not found by scan
+    for reg_path in &registered {
+        let path = PathBuf::from(reg_path);
+        if !path.is_dir() {
+            continue;
+        }
+        let canonical = path.canonicalize().unwrap_or(path.clone());
+        if seen.contains(&canonical) {
+            continue;
+        }
+        seen.insert(canonical.clone());
+        repos.push(make_repo_info(&path, &registered_set, &canonical));
+    }
+
+    // Sort: ready first (informational), then actionable, then new — alpha within each
+    repos.sort_by(|a, b| {
+        let order = |s: &str| match s { "ready" => 0, "stale" => 1, "needs_setup" => 2, _ => 3 };
+        order(&a.status).cmp(&order(&b.status))
+            .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
     repos
 }
 
@@ -130,6 +246,10 @@ fn detect_project(path: String) -> RepoInfo {
         ecosystems,
         workspace_info: detection.workspace_info,
         file_count,
+        status: "new".to_string(),
+        status_detail: String::new(),
+        semantic_chunks: 0,
+        semantic_model: String::new(),
     }
 }
 
@@ -179,7 +299,7 @@ struct SemanticEvent {
 /// Build semantic indexes for multiple repos on a background thread.
 /// Emits `semantic-progress` events so the frontend can show granular progress.
 #[tauri::command]
-fn build_semantic_async(app: AppHandle, paths: Vec<String>) {
+fn build_semantic_async(app: AppHandle, paths: Vec<String>, model: String) {
     std::thread::spawn(move || {
         for path in &paths {
             let root = match PathBuf::from(path).canonicalize() {
@@ -195,7 +315,12 @@ fn build_semantic_async(app: AppHandle, paths: Vec<String>) {
             let config = codescope_server::load_codescope_config(&root);
             let (all_files, _categories) = codescope_server::scan::scan_files(&config);
             let progress = codescope_server::types::SemanticProgress::new();
-            let sem_model = config.semantic_model.clone();
+            // Use wizard-selected model, falling back to config file
+            let sem_model = if model.is_empty() {
+                config.semantic_model.clone()
+            } else {
+                Some(model.clone())
+            };
 
             // Poll progress on a separate thread while the build runs
             let app2 = app.clone();
@@ -208,24 +333,33 @@ fn build_semantic_async(app: AppHandle, paths: Vec<String>) {
             let poller = std::thread::spawn(move || {
                 let status_labels = ["idle", "extracting", "embedding", "ready", "failed"];
                 loop {
+                    // Read completed first, then status — if status is terminal,
+                    // completed_batches is guaranteed to be final (build sets completed
+                    // before status with store ordering).
+                    let completed = progress_ref.completed_batches.load(Relaxed);
+                    let total_b = progress_ref.total_batches.load(Relaxed);
+                    let total_c = progress_ref.total_chunks.load(Relaxed);
                     let status_val = progress_ref.status.load(Relaxed) as usize;
                     let status = status_labels.get(status_val).unwrap_or(&"unknown");
+                    let device = progress_ref
+                        .device
+                        .read()
+                        .map(|d| d.clone())
+                        .unwrap_or_default();
+
                     let _ = app2.emit(
                         "semantic-progress",
                         SemanticEvent {
                             repo: repo2.clone(),
                             status: status.to_string(),
-                            total_chunks: progress_ref.total_chunks.load(Relaxed),
-                            total_batches: progress_ref.total_batches.load(Relaxed),
-                            completed_batches: progress_ref.completed_batches.load(Relaxed),
-                            device: progress_ref
-                                .device
-                                .read()
-                                .map(|d| d.clone())
-                                .unwrap_or_default(),
+                            total_chunks: total_c,
+                            total_batches: total_b,
+                            // On terminal status, force completed = total to avoid
+                            // stale-read jitter from Relaxed ordering
+                            completed_batches: if status_val >= 3 { total_b } else { completed },
+                            device,
                         },
                     );
-                    // Stop polling once terminal state reached
                     if status_val >= 3 {
                         break;
                     }
@@ -244,29 +378,12 @@ fn build_semantic_async(app: AppHandle, paths: Vec<String>) {
             // Ensure we reached a terminal state
             let final_status = progress.status.load(Relaxed);
             if final_status < 3 {
-                progress.status.store(4, Relaxed); // mark failed if it didn't finish
+                progress.status.store(4, Relaxed);
             }
 
-            // Wait for poller to see the terminal state and stop
+            // Wait for poller to see the terminal state and exit
             let _ = poller.join();
-
-            // Emit final event
-            let status_labels = ["idle", "extracting", "embedding", "ready", "failed"];
-            let final_val = progress.status.load(Relaxed) as usize;
-            let _ = app.emit(
-                "semantic-progress",
-                SemanticEvent {
-                    repo: repo_name.clone(),
-                    status: status_labels
-                        .get(final_val)
-                        .unwrap_or(&"unknown")
-                        .to_string(),
-                    total_chunks: progress.total_chunks.load(Relaxed),
-                    total_batches: progress.total_batches.load(Relaxed),
-                    completed_batches: progress.completed_batches.load(Relaxed),
-                    device: progress.device.read().map(|d| d.clone()).unwrap_or_default(),
-                },
-            );
+            // No second emit — the poller already emitted the terminal event
         }
     });
 }

@@ -21,9 +21,12 @@ export function WelcomeScreen({ version, onNext }: Props) {
           and connect to your tools.
         </p>
         <div className="btn-row" style={{ marginTop: 24 }}>
-          <button className="btn btn-primary" onClick={onNext}>
+          <button className="btn btn-primary" onClick={onNext} autoFocus>
             Get Started <ArrowRight size={13} />
           </button>
+          <span className="kbd-hint">
+            or press <kbd className="kbd">Enter</kbd>
+          </span>
         </div>
       </div>
     </div>

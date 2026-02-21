@@ -479,6 +479,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "tempfile",
  "tiktoken-rs",
  "tokio",
  "toml",

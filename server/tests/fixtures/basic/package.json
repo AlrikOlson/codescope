@@ -1,0 +1,11 @@
+{
+  "name": "basic-fixture",
+  "version": "1.0.0",
+  "dependencies": {
+    "express": "^4.18.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  }
+}
