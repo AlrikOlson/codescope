@@ -1,74 +1,89 @@
-//! Semantic code search using BERT embeddings (all-MiniLM-L6-v2 by default).
+//! Semantic code search using sentence embeddings (nomic-embed-text-v1.5 by default).
 //!
-//! Chunks source files by logical boundaries, generates embeddings via candle,
-//! and ranks results by cosine similarity. Supports CUDA GPU acceleration and
-//! persistent caching to avoid re-embedding unchanged files.
+//! Chunks source files by logical boundaries, generates embeddings via fastembed
+//! (ONNX Runtime), and ranks results by cosine similarity. Supports GPU acceleration
+//! via CUDA, CoreML, DirectML, Metal, and Accelerate execution providers.
+//! Persistent caching avoids re-embedding unchanged files.
 
 use crate::stubs::extract_stubs;
 use crate::types::{ChunkMeta, ScannedFile, SemanticIndex};
 
-use candle_core::{DType, Device, Tensor};
-use candle_nn::VarBuilder;
-use candle_transformers::models::bert::{BertModel, Config as BertConfig};
-use hf_hub::{api::sync::Api, Repo, RepoType};
-use tokenizers::Tokenizer;
+use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
 use std::collections::HashMap;
 use std::io::{Read as IoRead, Write as IoWrite};
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
-// Model configuration — presets and custom HuggingFace models
+// Model tiers — built-in presets with auto-selection
 // ---------------------------------------------------------------------------
 
-/// Configuration for an embedding model.
-pub struct ModelConfig {
-    pub model_id: String,
+/// Configuration for an embedding model tier.
+pub struct TierConfig {
+    pub fastembed_model: EmbeddingModel,
     pub dim: usize,
     pub max_chunk_chars: usize,
+    /// Prefix prepended to queries during search (e.g. "search_query: ").
+    pub query_prefix: Option<&'static str>,
+    /// Prefix prepended to documents during embedding (e.g. "search_document: ").
+    pub document_prefix: Option<&'static str>,
+    /// Name stored in cache file for validation.
+    pub cache_name: &'static str,
 }
 
-/// Resolve a model name to its configuration.
+/// Resolve a model name to its tier configuration.
 ///
-/// Accepts preset names ("minilm", "codebert", "starencoder"), returns the
-/// default (minilm) for `None`, or treats any other string as a custom
-/// HuggingFace model ID (defaults to dim=768, chunk=2000 — override dim
-/// in .codescope.toml for non-768 models).
-pub fn resolve_model(name: Option<&str>) -> ModelConfig {
+/// Accepts tier names ("standard", "lightweight", "quality", "code"),
+/// legacy names ("modernbert" → standard, "minilm" → lightweight),
+/// or defaults to "standard" (nomic-embed-text-v1.5 quantized) for `None`/`"auto"`.
+pub fn resolve_model(name: Option<&str>) -> TierConfig {
     match name {
-        None | Some("minilm") => ModelConfig {
-            model_id: "sentence-transformers/all-MiniLM-L6-v2".into(),
+        None | Some("auto") | Some("standard") | Some("nomic") | Some("modernbert") => {
+            TierConfig {
+                fastembed_model: EmbeddingModel::NomicEmbedTextV15Q,
+                dim: 768,
+                max_chunk_chars: 2000,
+                query_prefix: Some("search_query: "),
+                document_prefix: Some("search_document: "),
+                cache_name: "standard",
+            }
+        }
+        Some("lightweight") | Some("minilm") => TierConfig {
+            fastembed_model: EmbeddingModel::AllMiniLML6V2Q,
             dim: 384,
             max_chunk_chars: 1500,
+            query_prefix: None,
+            document_prefix: None,
+            cache_name: "lightweight",
         },
-        Some("codebert") => ModelConfig {
-            model_id: "microsoft/codebert-base".into(),
+        Some("quality") => TierConfig {
+            fastembed_model: EmbeddingModel::NomicEmbedTextV15,
             dim: 768,
             max_chunk_chars: 2000,
+            query_prefix: Some("search_query: "),
+            document_prefix: Some("search_document: "),
+            cache_name: "quality",
         },
-        Some("starencoder") => {
-            ModelConfig { model_id: "bigcode/starencoder".into(), dim: 768, max_chunk_chars: 2000 }
-        }
-        Some(custom) => {
-            ModelConfig { model_id: custom.to_string(), dim: 768, max_chunk_chars: 2000 }
-        }
-    }
-}
-
-/// Select the best available device: CUDA GPU if available, otherwise CPU.
-fn select_device() -> Device {
-    #[cfg(feature = "cuda")]
-    {
-        match Device::new_cuda(0) {
-            Ok(dev) => {
-                return dev;
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "CUDA unavailable, falling back to CPU");
+        Some("code") | Some("jina-code") => TierConfig {
+            fastembed_model: EmbeddingModel::JinaEmbeddingsV2BaseCode,
+            dim: 768,
+            max_chunk_chars: 2000,
+            query_prefix: None,
+            document_prefix: None,
+            cache_name: "code",
+        },
+        Some(unknown) => {
+            tracing::warn!(model = unknown, "Unknown model tier, falling back to standard");
+            TierConfig {
+                fastembed_model: EmbeddingModel::NomicEmbedTextV15Q,
+                dim: 768,
+                max_chunk_chars: 2000,
+                query_prefix: Some("search_query: "),
+                document_prefix: Some("search_document: "),
+                cache_name: "standard",
             }
         }
     }
-    Device::Cpu
 }
 
 // ---------------------------------------------------------------------------
@@ -184,8 +199,6 @@ fn split_stubs_into_chunks(stubs: &str, max_chunk_chars: usize) -> Vec<Chunk> {
     chunks
 }
 
-/// Extract embeddable chunks grouped by file. Parallelized via rayon.
-/// Pre-filters by extension and file size. Returns file metadata for cache keying.
 /// Convert a file path into a context line for embedding.
 /// Strips noise directories and creates a breadcrumb like:
 ///   "// File: SaveGame.h (Engine > GameFramework)"
@@ -207,6 +220,8 @@ fn path_context(rel_path: &str) -> String {
     }
 }
 
+/// Extract embeddable chunks grouped by file. Parallelized via rayon.
+/// Pre-filters by extension and file size. Returns file metadata for cache keying.
 fn extract_chunks_by_file(files: &[ScannedFile], max_chunk_chars: usize) -> Vec<FileChunks> {
     use rayon::prelude::*;
 
@@ -258,168 +273,69 @@ fn extract_chunks_by_file(files: &[ScannedFile], max_chunk_chars: usize) -> Vec<
 }
 
 // ---------------------------------------------------------------------------
-// Model loading
+// Embedding model — fastembed with execution provider auto-detection
 // ---------------------------------------------------------------------------
 
-/// Load the BERT model and tokenizer from HuggingFace Hub.
-/// Models are cached in `~/.cache/codescope/models/` via hf-hub defaults.
-/// Returns (model, tokenizer, device) so callers reuse the same device.
-fn load_model(config: &ModelConfig) -> Result<(BertModel, Tokenizer, Device), String> {
-    let model_id = &config.model_id;
-    let device = select_device();
-    let device_name = match &device {
-        Device::Cpu => "CPU".to_string(),
-        #[cfg(feature = "cuda")]
-        Device::Cuda(_) => "CUDA GPU".to_string(),
-        #[allow(unreachable_patterns)]
-        _ => "unknown".to_string(),
-    };
-
-    let api = Api::new().map_err(|e| format!("Failed to create HF API: {e}"))?;
-
-    let repo =
-        api.repo(Repo::with_revision(model_id.to_string(), RepoType::Model, "main".to_string()));
-
-    tracing::info!(model = model_id, device = device_name.as_str(), "Loading embedding model");
-
-    let config_path =
-        repo.get("config.json").map_err(|e| format!("Failed to get config.json: {e}"))?;
-    let tokenizer_path =
-        repo.get("tokenizer.json").map_err(|e| format!("Failed to get tokenizer.json: {e}"))?;
-    let weights_path = repo
-        .get("model.safetensors")
-        .map_err(|e| format!("Failed to get model.safetensors: {e}"))?;
-
-    let config_str =
-        std::fs::read_to_string(&config_path).map_err(|e| format!("Failed to read config: {e}"))?;
-    let config: BertConfig =
-        serde_json::from_str(&config_str).map_err(|e| format!("Failed to parse config: {e}"))?;
-
-    let tokenizer = Tokenizer::from_file(&tokenizer_path)
-        .map_err(|e| format!("Failed to load tokenizer: {e}"))?;
-
-    let vb = unsafe {
-        VarBuilder::from_mmaped_safetensors(&[weights_path], DType::F32, &device)
-            .map_err(|e| format!("Failed to load weights: {e}"))?
-    };
-
-    let model =
-        BertModel::load(vb, &config).map_err(|e| format!("Failed to load BERT model: {e}"))?;
-
-    tracing::info!(device = device_name.as_str(), "Embedding model loaded");
-    Ok((model, tokenizer, device))
+/// Determine the device label from compiled features.
+fn device_label() -> &'static str {
+    if cfg!(feature = "cuda") {
+        "CUDA"
+    } else if cfg!(feature = "coreml") {
+        "CoreML"
+    } else if cfg!(feature = "directml") {
+        "DirectML"
+    } else if cfg!(feature = "metal") {
+        "Metal"
+    } else if cfg!(feature = "accelerate") {
+        "Accelerate"
+    } else {
+        "CPU"
+    }
 }
 
-// ---------------------------------------------------------------------------
-// Embedding generation
-// ---------------------------------------------------------------------------
+/// Create a fastembed TextEmbedding model with appropriate execution providers.
+/// Registers GPU EPs based on compiled features (CUDA, CoreML, DirectML).
+/// ORT falls back to CPU automatically if a GPU EP is unavailable at runtime.
+fn create_embedding_model(config: &TierConfig) -> Result<TextEmbedding, String> {
+    tracing::info!(
+        model = ?config.fastembed_model,
+        device = device_label(),
+        "Loading embedding model"
+    );
 
-/// Encode a batch of texts into embeddings using mean pooling.
-fn encode_batch(
-    model: &BertModel,
-    tokenizer: &Tokenizer,
-    device: &Device,
-    texts: &[&str],
-    dim: usize,
-) -> Result<Vec<Vec<f32>>, String> {
-    if texts.is_empty() {
-        return Ok(Vec::new());
+    let mut opts = InitOptions::new(config.fastembed_model.clone())
+        .with_show_download_progress(true);
+
+    // Register execution providers based on compiled features.
+    // ORT tries EPs in order and falls back to CPU for unsupported ops.
+    #[allow(unused_mut)]
+    let mut eps: Vec<ort::execution_providers::ExecutionProviderDispatch> = Vec::new();
+
+    #[cfg(feature = "coreml")]
+    {
+        eps.push(
+            ort::ep::CoreML::default()
+                .with_subgraphs(true)
+                .build(),
+        );
     }
 
-    let encodings = tokenizer
-        .encode_batch(texts.to_vec(), true)
-        .map_err(|e| format!("Tokenization failed: {e}"))?;
-
-    let max_len = encodings.iter().map(|e| e.get_ids().len()).max().unwrap_or(0);
-
-    let mut all_ids: Vec<u32> = Vec::new();
-    let mut all_mask: Vec<u32> = Vec::new();
-    let mut all_type_ids: Vec<u32> = Vec::new();
-
-    for enc in &encodings {
-        let ids = enc.get_ids();
-        let mask = enc.get_attention_mask();
-        let type_ids = enc.get_type_ids();
-        let pad_len = max_len - ids.len();
-
-        all_ids.extend_from_slice(ids);
-        all_ids.extend(std::iter::repeat_n(0u32, pad_len));
-
-        all_mask.extend_from_slice(mask);
-        all_mask.extend(std::iter::repeat_n(0u32, pad_len));
-
-        all_type_ids.extend_from_slice(type_ids);
-        all_type_ids.extend(std::iter::repeat_n(0u32, pad_len));
+    #[cfg(feature = "cuda")]
+    {
+        eps.push(ort::ep::CUDA::default().build());
     }
 
-    let batch_size = texts.len();
-    let input_ids = Tensor::from_vec(all_ids, (batch_size, max_len), device)
-        .map_err(|e| format!("Tensor creation failed: {e}"))?;
-    let attention_mask = Tensor::from_vec(
-        all_mask.iter().map(|&x| x as f32).collect::<Vec<_>>(),
-        (batch_size, max_len),
-        device,
-    )
-    .map_err(|e| format!("Tensor creation failed: {e}"))?;
-    let token_type_ids = Tensor::from_vec(all_type_ids, (batch_size, max_len), device)
-        .map_err(|e| format!("Tensor creation failed: {e}"))?;
-
-    // Forward pass
-    let output = model
-        .forward(&input_ids, &token_type_ids, Some(&attention_mask))
-        .map_err(|e| format!("Model forward pass failed: {e}"))?;
-
-    // Mean pooling: sum(output * mask) / sum(mask)
-    let mask_expanded = attention_mask
-        .unsqueeze(2)
-        .map_err(|e| format!("unsqueeze failed: {e}"))?
-        .broadcast_as(output.shape())
-        .map_err(|e| format!("broadcast failed: {e}"))?;
-
-    let masked = output.mul(&mask_expanded).map_err(|e| format!("mul failed: {e}"))?;
-
-    let summed = masked.sum(1).map_err(|e| format!("sum failed: {e}"))?;
-
-    let mask_sum = mask_expanded
-        .sum(1)
-        .map_err(|e| format!("mask sum failed: {e}"))?
-        .clamp(1e-9, f64::MAX)
-        .map_err(|e| format!("clamp failed: {e}"))?;
-
-    let mean_pooled = summed.div(&mask_sum).map_err(|e| format!("div failed: {e}"))?;
-
-    // L2 normalize
-    let norms = mean_pooled
-        .sqr()
-        .map_err(|e| format!("sqr failed: {e}"))?
-        .sum(1)
-        .map_err(|e| format!("norm sum failed: {e}"))?
-        .sqrt()
-        .map_err(|e| format!("sqrt failed: {e}"))?
-        .unsqueeze(1)
-        .map_err(|e| format!("unsqueeze failed: {e}"))?
-        .broadcast_as(mean_pooled.shape())
-        .map_err(|e| format!("broadcast failed: {e}"))?
-        .clamp(1e-9, f64::MAX)
-        .map_err(|e| format!("clamp failed: {e}"))?;
-
-    let normalized = mean_pooled.div(&norms).map_err(|e| format!("div failed: {e}"))?;
-
-    // Extract to Vec<Vec<f32>>
-    let flat: Vec<f32> = normalized
-        .flatten_all()
-        .map_err(|e| format!("flatten failed: {e}"))?
-        .to_vec1()
-        .map_err(|e| format!("to_vec1 failed: {e}"))?;
-
-    let mut result = Vec::with_capacity(batch_size);
-    for i in 0..batch_size {
-        let start = i * dim;
-        let end = start + dim;
-        result.push(flat[start..end].to_vec());
+    #[cfg(feature = "directml")]
+    {
+        eps.push(ort::ep::DirectML::default().build());
     }
 
-    Ok(result)
+    if !eps.is_empty() {
+        opts = opts.with_execution_providers(eps);
+    }
+
+    TextEmbedding::try_new(opts)
+        .map_err(|e| format!("Failed to create embedding model: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -434,7 +350,7 @@ fn encode_batch(
 // Later entries for the same path supersede earlier ones (HashMap insert).
 
 const CACHE_MAGIC: &[u8; 4] = b"CSEM";
-const CACHE_VERSION: u16 = 2; // bumped: chunks now include path context + doc comments
+const CACHE_VERSION: u16 = 4; // bumped: fastembed + nomic model produces different embeddings
 
 /// Cached embeddings for one source file.
 struct CachedFile {
@@ -719,7 +635,7 @@ fn make_snippet(text: &str) -> String {
 
 /// Build a semantic index from scanned files.
 ///
-/// Loads per-file cache from `.codescope/semantic.cache`. Files with matching
+/// Loads per-file cache from the centralized cache directory. Files with matching
 /// (size, mtime) use cached embeddings. Only changed/new files are embedded.
 /// Cache entries are written progressively — if interrupted, completed files
 /// survive for the next startup.
@@ -733,8 +649,8 @@ pub fn build_semantic_index(
 
     // Phase 1: Extract chunks grouped by file
     progress.status.store(1, Relaxed);
-    let model_config = resolve_model(model_name);
-    let file_chunks = extract_chunks_by_file(files, model_config.max_chunk_chars);
+    let tier = resolve_model(model_name);
+    let file_chunks = extract_chunks_by_file(files, tier.max_chunk_chars);
 
     let total_chunks: usize = file_chunks.iter().map(|fc| fc.chunks.len()).sum();
     if total_chunks == 0 {
@@ -752,16 +668,16 @@ pub fn build_semantic_index(
 
     // Phase 2: Load cache, separate hits from misses
     // Try central cache first, fall back to legacy in-repo location
-    let stored_model = model_name.unwrap_or("minilm");
+    let stored_model = tier.cache_name;
     let cp = cache_path(repo_root);
     let legacy_cp = legacy_cache_path(repo_root);
     let (cache, used_legacy) = {
-        let central = load_cache(&cp, model_config.dim, stored_model);
+        let central = load_cache(&cp, tier.dim, stored_model);
         if !central.is_empty() {
             tracing::debug!(path = %cp.display(), "Loaded embedding cache");
             (central, false)
         } else if cp != legacy_cp {
-            let legacy = load_cache(&legacy_cp, model_config.dim, stored_model);
+            let legacy = load_cache(&legacy_cp, tier.dim, stored_model);
             if !legacy.is_empty() {
                 tracing::debug!(path = %legacy_cp.display(), "Migrating legacy embedding cache");
                 (legacy, true)
@@ -805,7 +721,7 @@ pub fn build_semantic_index(
     );
 
     // Phase 3: Open cache file for progressive writes
-    // Write header + all cache-hit entries first, then append as workers complete files.
+    // Write header + all cache-hit entries first, then append as batches complete.
     let cache_writer = {
         if let Some(parent) = cp.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -813,7 +729,7 @@ pub fn build_semantic_index(
         match std::fs::File::create(&cp) {
             Ok(f) => {
                 let mut w = std::io::BufWriter::new(f);
-                if write_cache_header(&mut w, model_config.dim, stored_model).is_err() {
+                if write_cache_header(&mut w, tier.dim, stored_model).is_err() {
                     tracing::warn!("Failed to write embedding cache header");
                 }
                 // Write cache-hit entries
@@ -849,23 +765,24 @@ pub fn build_semantic_index(
         return Some(SemanticIndex {
             embeddings: cached_embs,
             chunk_meta: cached_meta,
-            dim: model_config.dim,
+            dim: tier.dim,
             model_name: stored_model.to_string(),
         });
     }
 
-    // Phase 4: Embed misses — distribute files across workers
-    let use_gpu = !matches!(select_device(), Device::Cpu);
-    // Dynamic batch sizing: aim for ~20 progress updates minimum so the UI
-    // shows meaningful granularity, but clamp to hardware-reasonable bounds.
-    let max_batch = if use_gpu { 512 } else { 64 };
-    let min_batch = if use_gpu { 32 } else { 8 };
-    let target_batches = 20;
-    let batch_size = (miss_chunks / target_batches).clamp(min_batch, max_batch);
-    let n_workers = if use_gpu { 1 } else { num_cpus().min(to_embed.len()).max(1) };
+    // Phase 4: Create embedding model (fastembed handles ORT session, threading)
+    let mut model = match create_embedding_model(&tier) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to create embedding model");
+            progress.status.store(4, Relaxed);
+            return None;
+        }
+    };
 
-    let device_label = if use_gpu { "GPU" } else { "CPU" };
-    *progress.device.write().unwrap() = device_label.to_string();
+    // Dynamic batch sizing for ~20-40 progress updates.
+    let batch_size = (miss_chunks / 30).clamp(16, 64);
+    *progress.device.write().unwrap() = device_label().to_string();
     let total_batches = miss_chunks.div_ceil(batch_size);
     progress.total_batches.store(total_batches, Relaxed);
     progress.completed_batches.store(0, Relaxed);
@@ -873,14 +790,11 @@ pub fn build_semantic_index(
 
     tracing::info!(
         batches = total_batches,
-        workers = n_workers,
-        device = %device_label,
+        device = device_label(),
         "Embedding chunks"
     );
 
-    // Build a flat list of (file_index, chunk_index) pairs, then split into
-    // batch_size batches. This packs small files together into full GPU batches
-    // instead of sending tiny partial batches per file.
+    // Build flat chunk list, then process in sequential batches
     struct ChunkRef {
         file_idx: usize,
         chunk_idx: usize,
@@ -893,122 +807,73 @@ pub fn build_semantic_index(
         }
     }
 
-    // Split into batches, then distribute batches to workers
-    let batches: Vec<&[ChunkRef]> = chunk_refs.chunks(batch_size).collect();
-    let group_size = batches.len().div_ceil(n_workers);
-    let batch_groups: Vec<Vec<&[ChunkRef]>> =
-        batches.chunks(group_size).map(|g| g.to_vec()).collect();
-
-    let batch_counter = std::sync::atomic::AtomicUsize::new(0);
-    let model_config = &model_config;
-    let cache_writer = &cache_writer;
-    let to_embed_ref = &to_embed;
-
-    // Per-file result accumulator: (embeddings, complete?)
-    // Workers write results here; we flush to cache after all workers finish.
+    // Per-file result accumulator for cache writes
     type FileResult = Vec<(ChunkMeta, Vec<f32>)>;
-    let file_results: Vec<std::sync::Mutex<FileResult>> = to_embed
+    let mut file_results: Vec<FileResult> = to_embed
         .iter()
-        .map(|fc| std::sync::Mutex::new(Vec::with_capacity(fc.chunks.len())))
+        .map(|fc| Vec::with_capacity(fc.chunks.len()))
         .collect();
-    let file_results = &file_results;
 
-    // Each worker: load model, process packed batches, store results per-file
-    let worker_results: Vec<Option<(Vec<f32>, Vec<ChunkMeta>)>> = std::thread::scope(|s| {
-        let handles: Vec<_> = batch_groups
+    let mut all_embeddings = cached_embs;
+    let mut chunk_meta = cached_meta;
+    let mut completed_batches = 0usize;
+
+    for batch in chunk_refs.chunks(batch_size) {
+        let texts: Vec<String> = batch
             .iter()
-            .enumerate()
-            .map(|(worker_id, group)| {
-                let batch_counter = &batch_counter;
-                s.spawn(move || {
-                    let (model, tokenizer, device) = match load_model(model_config) {
-                        Ok(m) => m,
-                        Err(e) => {
-                            tracing::error!(worker = worker_id, error = %e, "Worker failed to load model");
-                            return None;
-                        }
-                    };
-
-                    let mut all_embs: Vec<f32> = Vec::new();
-                    let mut all_metas: Vec<ChunkMeta> = Vec::new();
-
-                    for batch in group.iter() {
-                        let texts: Vec<&str> = batch
-                            .iter()
-                            .map(|cr| to_embed_ref[cr.file_idx].chunks[cr.chunk_idx].text.as_str())
-                            .collect();
-
-                        match encode_batch(&model, &tokenizer, &device, &texts, model_config.dim) {
-                            Ok(embeddings) => {
-                                for (i, emb) in embeddings.into_iter().enumerate() {
-                                    let cr = &batch[i];
-                                    let fc = &to_embed_ref[cr.file_idx];
-                                    let chunk = &fc.chunks[cr.chunk_idx];
-                                    let meta = ChunkMeta {
-                                        file_path: fc.rel_path.clone(),
-                                        start_line: chunk.start_line,
-                                        snippet: make_snippet(&chunk.text),
-                                    };
-
-                                    // Store per-file for cache writes
-                                    file_results[cr.file_idx]
-                                        .lock()
-                                        .unwrap()
-                                        .push((meta.clone(), emb.clone()));
-
-                                    all_embs.extend_from_slice(&emb);
-                                    all_metas.push(meta);
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!(worker = worker_id, error = %e, "Batch encode failed");
-                                continue;
-                            }
-                        }
-
-                        let done =
-                            batch_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                        progress.completed_batches.store(done, Relaxed);
-                        if done.is_multiple_of(20) || done == total_batches {
-                            tracing::info!(done = done, total = total_batches, "Embedding progress");
-                        }
-                    }
-
-                    Some((all_embs, all_metas))
-                })
+            .map(|cr| {
+                let text = &to_embed[cr.file_idx].chunks[cr.chunk_idx].text;
+                match tier.document_prefix {
+                    Some(prefix) => format!("{prefix}{text}"),
+                    None => text.clone(),
+                }
             })
             .collect();
 
-        handles.into_iter().map(|h| h.join().unwrap_or(None)).collect()
-    });
+        match model.embed(texts, Some(batch.len())) {
+            Ok(embeddings) => {
+                for (i, emb) in embeddings.into_iter().enumerate() {
+                    let cr = &batch[i];
+                    let fc = &to_embed[cr.file_idx];
+                    let chunk = &fc.chunks[cr.chunk_idx];
+                    let meta = ChunkMeta {
+                        file_path: fc.rel_path.clone(),
+                        start_line: chunk.start_line,
+                        snippet: make_snippet(&chunk.text),
+                    };
+
+                    file_results[cr.file_idx].push((meta.clone(), emb.clone()));
+                    all_embeddings.extend_from_slice(&emb);
+                    chunk_meta.push(meta);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Batch embed failed");
+                continue;
+            }
+        }
+
+        completed_batches += 1;
+        progress.completed_batches.store(completed_batches, Relaxed);
+        tracing::info!(done = completed_batches, total = total_batches, "Embedding progress");
+    }
 
     // Write cache entries for all embedded files
     if let Some(ref writer) = cache_writer {
         if let Ok(mut w) = writer.lock() {
             for (fi, fc) in to_embed.iter().enumerate() {
-                let results = file_results[fi].lock().unwrap();
-                if results.len() == fc.chunks.len() {
+                if file_results[fi].len() == fc.chunks.len() {
                     let _ = write_cache_entry(
                         &mut *w,
                         &fc.rel_path,
                         fc.file_size,
                         fc.mtime_secs,
-                        &results,
+                        &file_results[fi],
                     );
                 }
             }
             let _ = w.flush();
         }
-    }
-
-    let results = worker_results;
-
-    // Merge cached + freshly embedded
-    let mut all_embeddings = cached_embs;
-    let mut chunk_meta = cached_meta;
-    for result in results.into_iter().flatten() {
-        all_embeddings.extend(result.0);
-        chunk_meta.extend(result.1);
     }
 
     if chunk_meta.is_empty() {
@@ -1031,14 +896,9 @@ pub fn build_semantic_index(
     Some(SemanticIndex {
         embeddings: all_embeddings,
         chunk_meta,
-        dim: model_config.dim,
+        dim: tier.dim,
         model_name: stored_model.to_string(),
     })
-}
-
-/// Get number of available CPU cores.
-fn num_cpus() -> usize {
-    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
 }
 
 // ---------------------------------------------------------------------------
@@ -1123,10 +983,18 @@ pub fn semantic_search(
     query: &str,
     limit: usize,
 ) -> Result<Vec<SemanticSearchResult>, String> {
-    let model_config = resolve_model(Some(&index.model_name));
-    let (model, tokenizer, device) = load_model(&model_config)?;
+    let tier = resolve_model(Some(&index.model_name));
+    let mut model = create_embedding_model(&tier)?;
 
-    let query_embeddings = encode_batch(&model, &tokenizer, &device, &[query], model_config.dim)?;
+    // Prepend query prefix if the model requires it
+    let query_text = match tier.query_prefix {
+        Some(prefix) => format!("{prefix}{query}"),
+        None => query.to_string(),
+    };
+
+    let query_embeddings = model
+        .embed(vec![query_text], None)
+        .map_err(|e| format!("Query embedding failed: {e}"))?;
     if query_embeddings.is_empty() {
         return Ok(Vec::new());
     }
@@ -1145,7 +1013,7 @@ pub fn semantic_search(
     }
 
     // Filter out low-relevance results before ranking — prevents garbage results
-    // for queries with no meaningful matches. Threshold tuned for MiniLM on code;
+    // for queries with no meaningful matches. Threshold tuned for code search;
     // code vocabulary mismatch requires a lower cutoff than general text (~0.3-0.5).
     const MIN_SEMANTIC_SCORE: f32 = 0.25;
     scores.retain(|(_, dot)| *dot >= MIN_SEMANTIC_SCORE);

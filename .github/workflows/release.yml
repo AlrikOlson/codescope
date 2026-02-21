@@ -296,11 +296,11 @@ jobs:
           - target: x86_64-apple-darwin
             os: macos-latest
             archive: codescope-macos-x86_64.tar.gz
-            features: semantic
+            features: semantic,accelerate
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: codescope-macos-aarch64.tar.gz
-            features: semantic
+            features: semantic,accelerate
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             archive: codescope-windows-x86_64.zip

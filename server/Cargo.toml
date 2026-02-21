@@ -17,8 +17,12 @@ path = "src/main.rs"
 [features]
 default = ["semantic"]
 tiktoken = ["dep:tiktoken-rs"]
-semantic = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers", "dep:hf-hub"]
-cuda = ["semantic", "candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
+semantic = ["dep:fastembed", "dep:ort"]
+cuda = ["semantic", "fastembed/cuda"]
+coreml = ["semantic", "ort/coreml"]
+directml = ["semantic", "ort/directml"]
+accelerate = ["semantic", "fastembed/accelerate"]
+metal = ["semantic", "fastembed/metal"]
 
 [dependencies]
 axum = "0.8"
@@ -43,11 +47,8 @@ uuid = { version = "1", features = ["v4"] }
 tiktoken-rs = { version = "0.6", optional = true }
 
 # Optional semantic search dependencies
-candle-core = { version = "0.9", optional = true }
-candle-nn = { version = "0.9", optional = true }
-candle-transformers = { version = "0.9", optional = true }
-tokenizers = { version = "0.22", optional = true, default-features = false, features = ["onig"] }
-hf-hub = { version = "0.4", optional = true, default-features = false, features = ["ureq", "rustls-tls"] }
+fastembed = { version = "5", optional = true, default-features = false, features = ["ort-download-binaries-native-tls", "hf-hub-native-tls"] }
+ort = { version = "=2.0.0-rc.11", optional = true }
 
 [profile.release]
 opt-level = 3

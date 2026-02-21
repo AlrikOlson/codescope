@@ -1,6 +1,6 @@
 name: Setup CodeScope Server
 description: >
-  Restore cached codescope binary and BERT model, or build from source
+  Restore cached codescope binary and embedding model, or build from source
   if cache misses. Eliminates redundant builds across workflow jobs when server
   source hasn't changed.
 
@@ -50,13 +50,13 @@ runs:
       shell: bash
       run: cargo build --release --manifest-path server/Cargo.toml
 
-    # ── BERT model cache ──
-    - name: Restore BERT model cache
+    # ── Embedding model cache ──
+    - name: Restore embedding model cache
       if: inputs.init-args != ''
       uses: actions/cache@v4
       with:
-        path: ~/.cache/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2
-        key: bert-all-MiniLM-L6-v2-v1
+        path: ~/.cache/huggingface/hub/models--nomic-ai--nomic-embed-text-v1.5
+        key: nomic-embed-text-v1.5-v1
 
     # ── Semantic index cache ──
     - name: Restore semantic index cache

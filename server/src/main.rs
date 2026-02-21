@@ -62,7 +62,7 @@ struct Cli {
     #[arg(long)]
     no_semantic: bool,
 
-    /// Embedding model: minilm (default), codebert, starencoder, or HuggingFace model ID
+    /// Embedding model tier: auto (default), lightweight, standard, quality, code
     #[arg(long)]
     semantic_model: Option<String>,
 

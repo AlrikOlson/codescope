@@ -14,7 +14,7 @@ export function SemanticScreen({ enabled, onEnabledChange, hasSemantic, onNext, 
     <div className="screen">
       <h2><Brain size={17} /> Semantic Search</h2>
       <p className="subtitle">
-        A BERT model enables natural language code search —
+        An embedding model enables natural language code search —
         find functions by describing what they do, not just their names.
       </p>
 
@@ -41,7 +41,7 @@ export function SemanticScreen({ enabled, onEnabledChange, hasSemantic, onNext, 
               <div>
                 <div className="toggle-label">Enable semantic search</div>
                 <div className="toggle-description">
-                  Downloads MiniLM-L6 (~23 MB) and builds vector embeddings for each selected project.
+                  Downloads nomic-embed-text-v1.5 model (~70 MB quantized) and builds vector embeddings for each selected project.
                 </div>
               </div>
             </div>
@@ -61,7 +61,7 @@ export function SemanticScreen({ enabled, onEnabledChange, hasSemantic, onNext, 
               <div>
                 <div className="toggle-label">Model</div>
                 <div className="toggle-description">
-                  all-MiniLM-L6-v2 — 384 dimensions, fast inference, general-purpose
+                  nomic-embed-text-v1.5 — 768 dimensions, auto-selected tier
                 </div>
               </div>
             </div>
