@@ -370,12 +370,18 @@ fn build_semantic_async(app: AppHandle, paths: Vec<String>, model: String) {
                 }
             });
 
+            // Build AST index if treesitter is available (needed by semantic chunker)
+            #[cfg(feature = "treesitter")]
+            let ast_index = codescope_server::ast::build_ast_index(&all_files);
+
             // Run the actual build (blocking on this background thread)
             codescope_server::semantic::build_semantic_index(
                 &all_files,
                 sem_model.as_deref(),
                 &progress,
                 &root,
+                #[cfg(feature = "treesitter")]
+                Some(&ast_index),
             );
 
             // Ensure we reached a terminal state

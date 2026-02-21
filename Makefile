@@ -5,19 +5,31 @@ UNAME := $(shell uname)
 CUDA_BIN := $(firstword $(wildcard /usr/local/cuda/bin /usr/local/cuda-*/bin /opt/cuda/bin))
 ifneq ($(CUDA_BIN),)
   export PATH := $(CUDA_BIN):$(PATH)
-  FEATURES := --features semantic,cuda
+  ACCEL_FEATURES := semantic,cuda
   $(info [CUDA] Found at $(CUDA_BIN) — GPU embedding enabled)
 else ifdef CUDA_PATH
   export PATH := $(CUDA_PATH)/bin:$(PATH)
-  FEATURES := --features semantic,cuda
+  ACCEL_FEATURES := semantic,cuda
   $(info [CUDA] Found via CUDA_PATH — GPU embedding enabled)
 else ifeq ($(UNAME),Darwin)
-  FEATURES := --features accelerate
+  ACCEL_FEATURES := accelerate
   $(info [macOS] Accelerate framework enabled)
 else
-  FEATURES :=
+  ACCEL_FEATURES :=
   $(info [CPU] No acceleration detected)
 endif
+
+# Common features always enabled
+BASE_FEATURES := treesitter
+
+# Combine: base + hardware acceleration
+ifneq ($(ACCEL_FEATURES),)
+  ALL_FEATURES := $(BASE_FEATURES),$(ACCEL_FEATURES)
+else
+  ALL_FEATURES := $(BASE_FEATURES)
+endif
+
+FEATURES := --features $(ALL_FEATURES)
 
 SERVER := --manifest-path server/Cargo.toml
 SETUP  := --manifest-path src-tauri/Cargo.toml
@@ -42,16 +54,16 @@ dev:
 
 # Run setup wizard (Tauri dev mode with hot reload)
 setup: node_modules
-	npx tauri dev
+	npx tauri dev --features $(ALL_FEATURES)
 
 # Run search window (Tauri dev mode with hot reload)
 search: node_modules
-	npx tauri dev -- -- --search
+	npx tauri dev --features $(ALL_FEATURES) -- -- --search
 
 # Type check everything
 check: node_modules
 	cargo check $(SERVER) $(FEATURES)
-	cargo check $(SETUP)
+	cargo check $(SETUP) $(FEATURES)
 	npx tsc --noEmit
 
 # Run tests

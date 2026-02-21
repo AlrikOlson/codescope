@@ -20,7 +20,13 @@ codescope-server = { path = "../server" }
 
 [features]
 default = []
+semantic = ["codescope-server/semantic"]
 cuda = ["codescope-server/cuda"]
+accelerate = ["codescope-server/accelerate"]
+metal = ["codescope-server/metal"]
+coreml = ["codescope-server/coreml"]
+directml = ["codescope-server/directml"]
+treesitter = ["codescope-server/treesitter"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

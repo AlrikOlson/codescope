@@ -3,6 +3,15 @@ import { useIsTauri } from '../shared/api';
 import { EMPTY_FIND } from '../search-utils';
 import type { FindResponse } from '../types';
 
+function useDebouncedValue<T>(value: T, ms: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), ms);
+    return () => clearTimeout(timer);
+  }, [value, ms]);
+  return debounced;
+}
+
 export function useSearch() {
   const isTauri = useIsTauri();
   const [query, setQuery] = useState('');
@@ -11,8 +20,10 @@ export function useSearch() {
   const [extFilter, setExtFilter] = useState<string | null>(null);
   const requestId = useRef(0);
 
+  const debouncedQuery = useDebouncedValue(query, 200);
+
   useEffect(() => {
-    const q = query.trim();
+    const q = debouncedQuery.trim();
     if (!q) {
       setFindResults(EMPTY_FIND);
       setLoading(false);
@@ -23,7 +34,7 @@ export function useSearch() {
     setLoading(true);
     const controller = new AbortController();
 
-    const timer = setTimeout(async () => {
+    (async () => {
       try {
         let data: FindResponse;
         if (isTauri) {
@@ -39,7 +50,6 @@ export function useSearch() {
           const resp = await fetch(`/api/find?${params}`, { signal: controller.signal });
           data = await resp.json() as FindResponse;
         }
-        // Only apply results if this is still the latest request
         if (id === requestId.current) {
           setFindResults(data);
           setLoading(false);
@@ -49,13 +59,15 @@ export function useSearch() {
           setLoading(false);
         }
       }
-    }, 150);
+    })();
 
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-    };
-  }, [query, extFilter, isTauri]);
+    return () => { controller.abort(); };
+  }, [debouncedQuery, extFilter, isTauri]);
+
+  // Show loading spinner immediately on keystroke, before debounce fires
+  useEffect(() => {
+    if (query.trim()) setLoading(true);
+  }, [query]);
 
   const results = findResults.results;
 
