@@ -149,6 +149,10 @@
   min-width: 0;
   caret-color: var(--neon-cyan);
 }
+.sw-hero-input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
 .sw-hero-input::placeholder {
   color: var(--text3);
   opacity: 0.5;
