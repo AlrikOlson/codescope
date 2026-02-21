@@ -4,6 +4,19 @@ All notable changes to CodeScope will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.11.1] - 2026-02-21
+
+### Fixed
+- Enhanced cross-platform installer with improved WSL detection methods
+- Fixed PowerShell installer to work without pipe to WSL bash
+- Corrected version baking in binaries and made installer output OS-aware
+- Added concurrency groups to prevent overlapping CI/release workflows
+
+### Changed
+- Pinned Rust toolchain to 1.93.1 for reproducible builds
+- Enhanced CI change detection to include rust-toolchain.toml
+- Added rustfmt and clippy components to pinned toolchain
+
 ## [0.11.0] - 2026-02-21
 
 ### Added
