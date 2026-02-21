@@ -11,40 +11,40 @@ export function IntegrationScreen({ onNext, onBack }: Props) {
   const [onPath, setOnPath] = useState(true);
 
   useEffect(() => {
-    invoke<boolean>('check_on_path').then(setOnPath);
+    invoke<boolean>('check_on_path')
+      .then(setOnPath)
+      .catch((e) => console.error('check_on_path failed:', e));
   }, []);
 
   return (
     <div className="screen">
-      <h2><Puzzle size={18} /> Integrations</h2>
+      <h2><Puzzle size={17} /> Integrations</h2>
       <p className="subtitle">
-        Configure how CodeScope connects with your development tools.
+        How CodeScope connects with your development environment.
       </p>
 
       <div className="toggle-row">
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', flex: 1 }}>
-          <Puzzle size={18} className="toggle-row-icon" style={{ marginTop: 2 }} />
+        <div className="toggle-row-left">
+          <Puzzle size={16} className="toggle-row-icon" />
           <div>
             <div className="toggle-label">Claude Code (MCP)</div>
             <div className="toggle-description">
-              CodeScope is configured as an MCP server in each project's
-              <code>.mcp.json</code> during initialization.
+              Each project gets a <code>.mcp.json</code> configured automatically during initialization.
             </div>
           </div>
         </div>
         <span className="toggle-status status-pass">
-          <Check size={14} /> Auto
+          <Check size={13} /> Auto
         </span>
       </div>
 
       <div className="toggle-row">
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', flex: 1 }}>
-          <Terminal size={18} className="toggle-row-icon" style={{ marginTop: 2 }} />
+        <div className="toggle-row-left">
+          <Terminal size={16} className="toggle-row-icon" />
           <div>
             <div className="toggle-label">Shell Completions</div>
             <div className="toggle-description">
-              Tab completion for codescope commands. Run{' '}
-              <code>codescope completions bash</code> to generate.
+              Run <code>codescope completions bash</code> to generate tab completions.
             </div>
           </div>
         </div>
@@ -52,31 +52,31 @@ export function IntegrationScreen({ onNext, onBack }: Props) {
       </div>
 
       <div className="toggle-row">
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', flex: 1 }}>
-          <Globe size={18} className="toggle-row-icon" style={{ marginTop: 2 }} />
+        <div className="toggle-row-left">
+          <Globe size={16} className="toggle-row-icon" />
           <div>
             <div className="toggle-label">PATH</div>
             <div className="toggle-description">
               {onPath
-                ? 'codescope is on your PATH and accessible from any terminal.'
-                : 'codescope is not on your PATH. Add ~/.local/bin to your PATH.'}
+                ? 'codescope is accessible from any terminal.'
+                : 'Not on PATH. Add ~/.local/bin to your shell profile.'}
             </div>
           </div>
         </div>
         <span className={`toggle-status ${onPath ? 'status-pass' : 'status-warn'}`}>
           {onPath
-            ? <><Check size={14} /> OK</>
-            : <><AlertTriangle size={14} /> Fix</>
+            ? <><Check size={13} /> OK</>
+            : <><AlertTriangle size={13} /> Fix</>
           }
         </span>
       </div>
 
       <div className="btn-row">
         <button className="btn btn-secondary" onClick={onBack}>
-          <ArrowLeft size={14} /> Back
+          <ArrowLeft size={13} /> Back
         </button>
         <button className="btn btn-primary" onClick={onNext}>
-          Next <ArrowRight size={14} />
+          Continue <ArrowRight size={13} />
         </button>
       </div>
     </div>

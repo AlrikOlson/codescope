@@ -856,7 +856,12 @@ pub fn build_semantic_index(
 
     // Phase 4: Embed misses — distribute files across workers
     let use_gpu = !matches!(select_device(), Device::Cpu);
-    let batch_size = if use_gpu { 512 } else { 64 };
+    // Dynamic batch sizing: aim for ~20 progress updates minimum so the UI
+    // shows meaningful granularity, but clamp to hardware-reasonable bounds.
+    let max_batch = if use_gpu { 512 } else { 64 };
+    let min_batch = if use_gpu { 32 } else { 8 };
+    let target_batches = 20;
+    let batch_size = (miss_chunks / target_batches).clamp(min_batch, max_batch);
     let n_workers = if use_gpu { 1 } else { num_cpus().min(to_embed.len()).max(1) };
 
     let device_label = if use_gpu { "GPU" } else { "CPU" };

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Brain, AlertCircle, ArrowLeft, ArrowRight } from 'lucide-react';
+import { Brain, AlertCircle, Cpu, ArrowLeft, ArrowRight } from 'lucide-react';
 
 interface Props {
   enabled: boolean;
@@ -12,20 +12,20 @@ interface Props {
 export function SemanticScreen({ enabled, onEnabledChange, hasSemantic, onNext, onBack }: Props) {
   return (
     <div className="screen">
-      <h2><Brain size={18} /> Semantic Search</h2>
+      <h2><Brain size={17} /> Semantic Search</h2>
       <p className="subtitle">
-        CodeScope uses a BERT model to understand code semantically, enabling
-        natural language search beyond simple text matching.
+        A BERT model enables natural language code search —
+        find functions by describing what they do, not just their names.
       </p>
 
       {!hasSemantic && (
         <div className="toggle-row unavailable-banner">
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
-            <AlertCircle size={18} style={{ color: 'var(--red)', flexShrink: 0, marginTop: 2 }} />
+          <div className="toggle-row-left">
+            <AlertCircle size={16} className="toggle-row-icon" style={{ color: 'var(--red)' }} />
             <div>
               <div className="toggle-label" style={{ color: 'var(--red)' }}>Not Available</div>
               <div className="toggle-description">
-                This binary was built without semantic search support.
+                This binary was built without semantic search.
                 Rebuild with <code>--features semantic</code> to enable.
               </div>
             </div>
@@ -36,12 +36,12 @@ export function SemanticScreen({ enabled, onEnabledChange, hasSemantic, onNext, 
       {hasSemantic && (
         <>
           <div className="toggle-row">
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', flex: 1 }}>
-              <Brain size={18} className="toggle-row-icon" style={{ marginTop: 2 }} />
+            <div className="toggle-row-left">
+              <Brain size={16} className="toggle-row-icon" />
               <div>
                 <div className="toggle-label">Enable semantic search</div>
                 <div className="toggle-description">
-                  Downloads the MiniLM-L6 model (~23 MB) and builds embeddings for your code.
+                  Downloads MiniLM-L6 (~23 MB) and builds vector embeddings for each selected project.
                 </div>
               </div>
             </div>
@@ -56,12 +56,12 @@ export function SemanticScreen({ enabled, onEnabledChange, hasSemantic, onNext, 
           </div>
 
           <div className="toggle-row">
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', flex: 1 }}>
-              <div className="toggle-row-icon" style={{ width: 18 }} />
+            <div className="toggle-row-left">
+              <Cpu size={16} className="toggle-row-icon" />
               <div>
                 <div className="toggle-label">Model</div>
                 <div className="toggle-description">
-                  sentence-transformers/all-MiniLM-L6-v2 (384 dimensions, fast, general-purpose)
+                  all-MiniLM-L6-v2 — 384 dimensions, fast inference, general-purpose
                 </div>
               </div>
             </div>
@@ -72,10 +72,10 @@ export function SemanticScreen({ enabled, onEnabledChange, hasSemantic, onNext, 
 
       <div className="btn-row">
         <button className="btn btn-secondary" onClick={onBack}>
-          <ArrowLeft size={14} /> Back
+          <ArrowLeft size={13} /> Back
         </button>
         <button className="btn btn-primary" onClick={onNext}>
-          Next <ArrowRight size={14} />
+          Continue <ArrowRight size={13} />
         </button>
       </div>
     </div>

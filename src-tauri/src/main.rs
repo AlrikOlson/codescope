@@ -4,6 +4,8 @@
 use codescope_server::init;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::atomic::Ordering::Relaxed;
+use tauri::{AppHandle, Emitter};
 
 // ---------------------------------------------------------------------------
 // Types shared with frontend
@@ -132,8 +134,9 @@ fn detect_project(path: String) -> RepoInfo {
 }
 
 /// Initialize a project (generate .codescope.toml + .mcp.json + register globally).
+/// Does NOT build the semantic index — use `build_semantic_async` for that.
 #[tauri::command]
-fn init_repo(path: String, semantic: bool) -> Result<String, String> {
+fn init_repo(path: String) -> Result<String, String> {
     let root = PathBuf::from(&path)
         .canonicalize()
         .map_err(|e| format!("Invalid path: {}", e))?;
@@ -154,17 +157,118 @@ fn init_repo(path: String, semantic: bool) -> Result<String, String> {
     // Register globally
     init::register_global_repo(&root)?;
 
-    // Build semantic index if requested
-    if semantic {
-        init::build_semantic_index(&root, None);
-    }
-
     let labels: Vec<&str> = detection.ecosystems.iter().map(|e| e.label()).collect();
     Ok(format!(
         "Initialized {} ({} files)",
         labels.join(" + "),
         init::validate_scan(&root, &detection.scan_dirs, &detection.extensions)
     ))
+}
+
+/// Event payload emitted during semantic index building.
+#[derive(Clone, Serialize)]
+struct SemanticEvent {
+    repo: String,
+    status: String,           // "extracting", "embedding", "ready", "failed"
+    total_chunks: usize,
+    total_batches: usize,
+    completed_batches: usize,
+    device: String,
+}
+
+/// Build semantic indexes for multiple repos on a background thread.
+/// Emits `semantic-progress` events so the frontend can show granular progress.
+#[tauri::command]
+fn build_semantic_async(app: AppHandle, paths: Vec<String>) {
+    std::thread::spawn(move || {
+        for path in &paths {
+            let root = match PathBuf::from(path).canonicalize() {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let repo_name = root
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+
+            let config = codescope_server::load_codescope_config(&root);
+            let (all_files, _categories) = codescope_server::scan::scan_files(&config);
+            let progress = codescope_server::types::SemanticProgress::new();
+            let sem_model = config.semantic_model.clone();
+
+            // Poll progress on a separate thread while the build runs
+            let app2 = app.clone();
+            let repo2 = repo_name.clone();
+            let progress_ptr = &progress as *const codescope_server::types::SemanticProgress;
+            // SAFETY: progress lives on this thread's stack and we join the poller
+            // before progress goes out of scope.
+            let progress_ref: &'static codescope_server::types::SemanticProgress =
+                unsafe { &*progress_ptr };
+            let poller = std::thread::spawn(move || {
+                let status_labels = ["idle", "extracting", "embedding", "ready", "failed"];
+                loop {
+                    let status_val = progress_ref.status.load(Relaxed) as usize;
+                    let status = status_labels.get(status_val).unwrap_or(&"unknown");
+                    let _ = app2.emit(
+                        "semantic-progress",
+                        SemanticEvent {
+                            repo: repo2.clone(),
+                            status: status.to_string(),
+                            total_chunks: progress_ref.total_chunks.load(Relaxed),
+                            total_batches: progress_ref.total_batches.load(Relaxed),
+                            completed_batches: progress_ref.completed_batches.load(Relaxed),
+                            device: progress_ref
+                                .device
+                                .read()
+                                .map(|d| d.clone())
+                                .unwrap_or_default(),
+                        },
+                    );
+                    // Stop polling once terminal state reached
+                    if status_val >= 3 {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+            });
+
+            // Run the actual build (blocking on this background thread)
+            codescope_server::semantic::build_semantic_index(
+                &all_files,
+                sem_model.as_deref(),
+                &progress,
+                &root,
+            );
+
+            // Ensure we reached a terminal state
+            let final_status = progress.status.load(Relaxed);
+            if final_status < 3 {
+                progress.status.store(4, Relaxed); // mark failed if it didn't finish
+            }
+
+            // Wait for poller to see the terminal state and stop
+            let _ = poller.join();
+
+            // Emit final event
+            let status_labels = ["idle", "extracting", "embedding", "ready", "failed"];
+            let final_val = progress.status.load(Relaxed) as usize;
+            let _ = app.emit(
+                "semantic-progress",
+                SemanticEvent {
+                    repo: repo_name.clone(),
+                    status: status_labels
+                        .get(final_val)
+                        .unwrap_or(&"unknown")
+                        .to_string(),
+                    total_chunks: progress.total_chunks.load(Relaxed),
+                    total_batches: progress.total_batches.load(Relaxed),
+                    completed_batches: progress.completed_batches.load(Relaxed),
+                    device: progress.device.read().map(|d| d.clone()).unwrap_or_default(),
+                },
+            );
+        }
+    });
 }
 
 /// Get current global configuration.
@@ -256,6 +360,7 @@ fn main() {
             scan_for_repos,
             detect_project,
             init_repo,
+            build_semantic_async,
             get_config,
             get_version,
             get_scan_dirs,

@@ -17,6 +17,10 @@ serde_json = "1"
 dirs = "6"
 codescope-server = { path = "../server" }
 
+[features]
+default = []
+cuda = ["codescope-server/cuda"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

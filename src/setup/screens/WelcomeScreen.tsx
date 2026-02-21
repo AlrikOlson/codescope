@@ -11,18 +11,18 @@ export function WelcomeScreen({ version, onNext }: Props) {
     <div className="screen">
       <div className="welcome-center">
         <div className="welcome-logo">
-          <Search size={56} strokeWidth={1.5} />
+          <Search size={48} strokeWidth={1.5} />
         </div>
         <h1 className="welcome-title">CodeScope</h1>
         {version && <span className="version-badge">v{version}</span>}
-        <p className="subtitle">
+        <p className="welcome-subtitle">
           Fast codebase indexer and MCP search server.
-          Let's scan for projects, configure semantic search,
-          and integrate with your tools.
+          We'll scan for projects, configure semantic search,
+          and connect to your tools.
         </p>
-        <div className="btn-row">
+        <div className="btn-row" style={{ marginTop: 24 }}>
           <button className="btn btn-primary" onClick={onNext}>
-            Get Started <ArrowRight size={14} />
+            Get Started <ArrowRight size={13} />
           </button>
         </div>
       </div>
