@@ -183,8 +183,7 @@ async fn main() {
             }
             Commands::Web { path } => {
                 let root = path
-                    .as_ref()
-                    .map(|p| p.clone())
+                    .clone()
                     .unwrap_or_else(|| std::env::current_dir().unwrap());
                 let root = root.canonicalize().unwrap_or_else(|e| {
                     eprintln!("Error: Path '{}' not found: {}", root.display(), e);
