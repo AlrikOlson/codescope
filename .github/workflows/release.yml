@@ -286,32 +286,28 @@ jobs:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             archive: codescope-linux-x86_64.tar.gz
-            use_cross: true
+            use_zigbuild: true
             features: semantic
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             archive: codescope-linux-aarch64.tar.gz
-            use_cross: true
+            use_zigbuild: true
             features: semantic
           - target: x86_64-apple-darwin
             os: macos-latest
             archive: codescope-macos-x86_64.tar.gz
-            use_cross: false
             features: semantic
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: codescope-macos-aarch64.tar.gz
-            use_cross: false
             features: semantic
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             archive: codescope-windows-x86_64.zip
-            use_cross: false
             features: semantic
           - target: aarch64-pc-windows-msvc
             os: windows-latest
             archive: codescope-windows-aarch64.zip
-            use_cross: false
             features: semantic
 
     runs-on: ${{ matrix.os }}
@@ -355,16 +351,24 @@ jobs:
           workspaces: server
           key: ${{ matrix.target }}
 
-      - name: Install cross
-        if: matrix.use_cross
-        uses: taiki-e/install-action@cross
+      - name: Install cargo-zigbuild
+        if: matrix.use_zigbuild
+        uses: taiki-e/install-action@cargo-zigbuild
+
+      - name: Install Zig
+        if: matrix.use_zigbuild
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.13.0
 
       - name: Build binary
         shell: bash
         run: |
-          BUILD_CMD="cargo"
-          if [ "${{ matrix.use_cross }}" = "true" ]; then BUILD_CMD="cross"; fi
-          $BUILD_CMD build --release --manifest-path server/Cargo.toml --target ${{ matrix.target }} --features ${{ matrix.features }}
+          if [ "${{ matrix.use_zigbuild }}" = "true" ]; then
+            cargo zigbuild --release --manifest-path server/Cargo.toml --target ${{ matrix.target }} --features ${{ matrix.features }}
+          else
+            cargo build --release --manifest-path server/Cargo.toml --target ${{ matrix.target }} --features ${{ matrix.features }}
+          fi
 
       - name: Free disk for packaging
         shell: bash
@@ -406,6 +410,7 @@ jobs:
   # ──────────────────────────────────────────────
   # Stable release — commit, tag, push, GH release
   # Waits for both build AND version (AI analysis)
+  # AI doc sync moved to post-release-docs (non-blocking)
   # ──────────────────────────────────────────────
   stable-release:
     needs: [release-gate, version, build]
@@ -415,7 +420,10 @@ jobs:
       (needs.release-gate.outputs.action == 'full' || needs.release-gate.outputs.action == 'complete') &&
       (needs.version.result == 'success' || needs.release-gate.outputs.action == 'complete')
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      needs_commit: ${{ steps.tag.outputs.needs_commit }}
     steps:
       - uses: step-security/harden-runner@v2
         with:
@@ -443,22 +451,6 @@ jobs:
             echo "needs_commit=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # ── AI Doc Sync (full releases only) ──
-
-      - uses: ./.github/actions/setup-codescope
-        if: steps.tag.outputs.needs_commit == 'true' && inputs.skip_ai_docs != true
-        with:
-          init-args: '. --semantic'
-
-      - uses: actions/setup-node@v4
-        if: steps.tag.outputs.needs_commit == 'true'
-        with:
-          node-version: 22
-
-      - name: Install Claude Agent SDK
-        if: steps.tag.outputs.needs_commit == 'true'
-        run: npm install @anthropic-ai/claude-agent-sdk
-
       - name: Download AI release output
         if: steps.tag.outputs.needs_commit == 'true'
         uses: actions/download-artifact@v4
@@ -466,44 +458,10 @@ jobs:
           name: ai-release-output
           path: /tmp
 
-      - name: AI documentation sync
-        if: steps.tag.outputs.needs_commit == 'true' && inputs.skip_ai_docs != true
-        continue-on-error: true
-        timeout-minutes: 10
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          NEW_VERSION: ${{ steps.tag.outputs.tag }}
-        run: node .github/scripts/ai-docs-sync.mjs
-
-      - name: Apply doc updates
+      - uses: actions/setup-node@v4
         if: steps.tag.outputs.needs_commit == 'true'
-        run: |
-          node -e "
-            const fs = require('fs');
-            const path = '/tmp/ai-docs-sync-output.json';
-            if (!fs.existsSync(path)) process.exit(0);
-            const data = JSON.parse(fs.readFileSync(path, 'utf8'));
-
-            // Scope guard: only allow updates to known doc files
-            const ALLOWED = new Set(['README.md', 'CONTRIBUTING.md']);
-            for (const update of (data.updates || [])) {
-              if (!ALLOWED.has(update.file)) {
-                console.error('BLOCKED: Agent tried to update disallowed file: ' + update.file);
-                continue;
-              }
-              fs.writeFileSync(update.file, update.content);
-              console.error('Updated: ' + update.file + ' — ' + update.reason);
-            }
-          "
-
-      - name: Upload agent conversation logs
-        if: always()
-        uses: actions/upload-artifact@v4
         with:
-          name: agent-logs-docs-sync
-          path: /tmp/agent-conversation-*.jsonl
-          retention-days: 30
-          if-no-files-found: ignore
+          node-version: 22
 
       # ── Atomic release sequence ──
 
@@ -569,7 +527,7 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add server/Cargo.toml server/Cargo.lock package.json package-lock.json CHANGELOG.md README.md CONTRIBUTING.md
+          git add server/Cargo.toml server/Cargo.lock package.json package-lock.json CHANGELOG.md
           if git diff --cached --quiet; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "No changes to commit"
@@ -655,6 +613,98 @@ jobs:
           files: |
             artifacts/*.tar.gz
             artifacts/*.zip
+
+  # ──────────────────────────────────────────────
+  # Post-release docs — AI doc sync (non-blocking)
+  # Runs after release is published, commits directly
+  # ──────────────────────────────────────────────
+  post-release-docs:
+    needs: [release-gate, stable-release]
+    if: |
+      always() &&
+      needs.stable-release.result == 'success' &&
+      needs.stable-release.outputs.needs_commit == 'true' &&
+      needs.release-gate.outputs.action == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup-codescope
+        if: inputs.skip_ai_docs != true
+        with:
+          init-args: '. --semantic'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Claude Agent SDK
+        run: npm install @anthropic-ai/claude-agent-sdk
+
+      - name: Download AI release output
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-release-output
+          path: /tmp
+
+      - name: AI documentation sync
+        if: inputs.skip_ai_docs != true
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NEW_VERSION: ${{ needs.stable-release.outputs.tag }}
+        run: node .github/scripts/ai-docs-sync.mjs
+
+      - name: Apply and commit doc updates
+        run: |
+          node -e "
+            const fs = require('fs');
+            const path = '/tmp/ai-docs-sync-output.json';
+            if (!fs.existsSync(path)) process.exit(0);
+            const data = JSON.parse(fs.readFileSync(path, 'utf8'));
+
+            // Scope guard: only allow updates to known doc files
+            const ALLOWED = new Set(['README.md', 'CONTRIBUTING.md']);
+            let changed = false;
+            for (const update of (data.updates || [])) {
+              if (!ALLOWED.has(update.file)) {
+                console.error('BLOCKED: Agent tried to update disallowed file: ' + update.file);
+                continue;
+              }
+              fs.writeFileSync(update.file, update.content);
+              console.error('Updated: ' + update.file + ' — ' + update.reason);
+              changed = true;
+            }
+            if (!changed) process.exit(0);
+          "
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md CONTRIBUTING.md
+          if git diff --cached --quiet; then
+            echo "No doc changes to commit"
+          else
+            git commit -m "docs: AI documentation sync for ${{ needs.stable-release.outputs.tag }}"
+            git push origin HEAD:master
+          fi
+
+      - name: Upload agent conversation logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-logs-docs-sync
+          path: /tmp/agent-conversation-*.jsonl
+          retention-days: 30
+          if-no-files-found: ignore
 
   # ──────────────────────────────────────────────
   # Channel release (edge/dev)
