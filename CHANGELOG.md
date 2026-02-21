@@ -4,6 +4,12 @@ All notable changes to CodeScope will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.2] - 2026-02-21
+
+### Fixed
+- Cargo.lock version synchronization in release process
+- CUDA binary auto-detection in installation script
+
 ## [0.9.1] - 2026-02-21
 
 ### Fixed

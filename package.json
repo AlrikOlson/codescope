@@ -1,7 +1,7 @@
 {
   "name": "codescope",
   "private": true,
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "CodeScope web UI — codebase browser with treemap, dependency graph, and full-text search",
   "repository": "https://github.com/AlrikOlson/codescope",
   "license": "MIT",
