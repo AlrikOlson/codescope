@@ -108,6 +108,24 @@ else
     INSTALL_DIR="$HOME/.local/bin"
 fi
 
+# --- Display path helper ---
+# Converts Unix paths to Windows-style for display when on Windows
+display_path() {
+    local p="$1"
+    if [ "$IS_WINDOWS" = "true" ]; then
+        local wp
+        wp="$(cygpath -w "$p" 2>/dev/null || wslpath -w "$p" 2>/dev/null || true)"
+        if [ -z "$wp" ]; then
+            local dl
+            dl="$(echo "$p" | cut -c6 | tr 'a-z' 'A-Z')"
+            wp="${dl}:\\$(echo "${p:7}" | sed 's|/|\\|g')"
+        fi
+        echo "$wp"
+    else
+        echo "$p"
+    fi
+}
+
 # --- Output helpers ---
 # Respect NO_COLOR (https://no-color.org/) and detect TTY
 if [ -n "${NO_COLOR:-}" ] || [ ! -t 1 ]; then
@@ -334,7 +352,7 @@ download_binary() {
         xattr -d com.apple.quarantine "$INSTALL_DIR/$binary_name" 2>/dev/null || true
     fi
 
-    ok "Installed $binary_name -> $INSTALL_DIR/"
+    ok "Installed $binary_name -> $(display_path "$INSTALL_DIR")"
 
     rm -rf "$tmpdir"
     return 0
@@ -401,7 +419,7 @@ install_from_source() {
     mkdir -p "$src_install_dir"
     rm -f "$src_install_dir/codescope"
     cp "$script_dir/target/release/codescope" "$src_install_dir/codescope"
-    ok "Installed codescope -> $src_install_dir/"
+    ok "Installed codescope -> $(display_path "$src_install_dir")"
 
     local repo_root
     repo_root="$(cd "$script_dir/.." && pwd)"
@@ -422,7 +440,7 @@ install_from_source() {
             mkdir -p "$dist_install"
             rm -rf "$dist_install"
             cp -r "$repo_root/dist" "$dist_install"
-            ok "Installed web UI -> $dist_install"
+            ok "Installed web UI -> $(display_path "$dist_install")"
         fi
     fi
 
@@ -461,11 +479,13 @@ SCRIPT_DIR="$(cd "$(dirname -- "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd 2>/d
 
 echo ""
 if [ "$IS_WSL" = "true" ] && [ "$FROM_SOURCE" = "0" ]; then
-    info "Installing CodeScope for Windows (detected WSL)..."
+    info "Installing CodeScope for Windows (detected WSL)"
+    info "Install dir: $(display_path "$INSTALL_DIR")"
 elif [ "$IS_GITBASH" = "true" ]; then
-    info "Installing CodeScope for Windows..."
+    info "Installing CodeScope for Windows"
+    info "Install dir: $(display_path "$INSTALL_DIR")"
 else
-    info "Installing CodeScope..."
+    info "Installing CodeScope"
 fi
 echo ""
 
@@ -502,33 +522,40 @@ fi
 echo ""
 ok "CodeScope installed!"
 
-# Show version if detectable
-if command -v codescope >/dev/null 2>&1; then
-    echo "  $(codescope --version 2>/dev/null || true)"
+# Show version — use the binary we just installed, not whatever's on PATH
+installed_bin="$INSTALL_DIR/codescope"
+if [ "$IS_WINDOWS" = "true" ] && [ -f "$INSTALL_DIR/codescope.exe" ]; then
+    installed_bin="$INSTALL_DIR/codescope.exe"
+fi
+ver="$("$installed_bin" --version 2>/dev/null || true)"
+if [ -n "$ver" ]; then
+    echo "  $ver"
 fi
 
-# GPU hint — if binary install and CUDA is available, suggest rebuilding
-if [ "$USED_BINARY" = "1" ] && has_cuda; then
+# GPU hint — only on native Linux (not WSL/Windows, where CUDA builds produce Linux binaries)
+if [ "$USED_BINARY" = "1" ] && [ "$IS_WINDOWS" = "false" ] && has_cuda; then
     echo ""
     warn "GPU detected — for CUDA-accelerated semantic search, rebuild from source:"
     echo "    bash setup.sh --cuda"
 fi
 
+# Get started — show OS-appropriate commands
 echo ""
 echo "  Get started:"
-echo "    codescope init          Set up your project"
-echo "    codescope doctor        Verify everything works"
+if [ -n "$PATH_HINT" ]; then
+    # Not on PATH yet — show full path
+    echo "    $(display_path "$installed_bin") init          Set up your project"
+    echo "    $(display_path "$installed_bin") doctor        Verify everything works"
+else
+    echo "    codescope init          Set up your project"
+    echo "    codescope doctor        Verify everything works"
+fi
 echo ""
 
 if [ -n "$PATH_HINT" ]; then
-    warn "Add to your PATH to use codescope from anywhere:"
+    warn "Add to your PATH to use 'codescope' from anywhere:"
     if [ "$IS_WINDOWS" = "true" ]; then
-        winpath="$(cygpath -w "$PATH_HINT" 2>/dev/null || wslpath -w "$PATH_HINT" 2>/dev/null || true)"
-        if [ -z "$winpath" ]; then
-            # Manual: /mnt/c/Users/foo -> C:\Users\foo
-            dl="$(echo "$PATH_HINT" | cut -c6 | tr 'a-z' 'A-Z')"
-            winpath="${dl}:\\$(echo "${PATH_HINT:7}" | sed 's|/|\\|g')"
-        fi
+        winpath="$(display_path "$PATH_HINT")"
         echo "    [Environment]::SetEnvironmentVariable('Path', \$env:Path + ';$winpath', 'User')"
     else
         echo "    export PATH=\"$PATH_HINT:\$PATH\""
