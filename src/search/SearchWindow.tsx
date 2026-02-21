@@ -7,6 +7,7 @@ import { ResultsList } from './components/ResultsList';
 import { CodePreview } from './components/CodePreview';
 import { ShortcutsBar } from './components/ShortcutsBar';
 import { IndexOverview } from './components/IndexOverview';
+import type { FindResult } from '../types';
 
 export function SearchWindow() {
   const {
@@ -17,19 +18,30 @@ export function SearchWindow() {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Reset active index on new results
+  // Refs for stable keyboard handler — avoids re-registering on every state change
+  const stateRef = useRef<{
+    activeIdx: number;
+    results: FindResult[];
+    query: string;
+    extFilter: string | null;
+  }>({ activeIdx: 0, results: [], query: '', extFilter: null });
+  stateRef.current = { activeIdx, results, query, extFilter };
+
+  const handleClearRef = useRef<() => void>(() => {});
+
+  // Reset active index on new query/filter
   useEffect(() => {
     setActiveIdx(0);
   }, [query, extFilter]);
 
-  // Auto-preview first result
+  // Sync activeIdx/results → selectedPath (single effect replaces two separate ones)
   useEffect(() => {
-    if (results.length > 0) {
-      setSelectedPath(results[0].path);
+    if (results.length > 0 && results[activeIdx]) {
+      setSelectedPath(results[activeIdx].path);
     } else {
       setSelectedPath(null);
     }
-  }, [results]);
+  }, [activeIdx, results]);
 
   const handleSelect = useCallback((path: string) => {
     setSelectedPath(path);
@@ -42,22 +54,19 @@ export function SearchWindow() {
     inputRef.current?.focus();
   }, [setQuery, setExtFilter]);
 
-  // Global keyboard navigation
+  handleClearRef.current = handleClear;
+
+  // Global keyboard handler — registered ONCE, reads mutable refs for current state
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      const { results, query, extFilter, activeIdx } = stateRef.current;
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setActiveIdx(prev => {
-          const next = prev < results.length - 1 ? prev + 1 : 0;
-          return next;
-        });
+        setActiveIdx(prev => (prev < results.length - 1 ? prev + 1 : 0));
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setActiveIdx(prev => {
-          const next = prev > 0 ? prev - 1 : results.length - 1;
-          return next;
-        });
+        setActiveIdx(prev => (prev > 0 ? prev - 1 : results.length - 1));
       }
       if (e.key === 'Enter' && results.length > 0) {
         const item = results[activeIdx];
@@ -67,7 +76,7 @@ export function SearchWindow() {
         if (extFilter) {
           setExtFilter(null);
         } else if (query) {
-          handleClear();
+          handleClearRef.current();
         } else {
           getCurrentWindow().close();
         }
@@ -75,14 +84,7 @@ export function SearchWindow() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [activeIdx, results, query, extFilter, setExtFilter, handleClear]);
-
-  // Sync activeIdx → selectedPath
-  useEffect(() => {
-    if (results.length > 0 && results[activeIdx]) {
-      setSelectedPath(results[activeIdx].path);
-    }
-  }, [activeIdx, results]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const hasQuery = query.trim().length > 0;
 

@@ -1,8 +1,9 @@
+import React from 'react';
 import type { FindResponse } from './types';
 
 export const EMPTY_FIND: FindResponse = { results: [], queryTime: 0, extCounts: {}, catCounts: {} };
 
-export function HighlightedText({ text, indices }: { text: string; indices: number[] }) {
+export const HighlightedText = React.memo(function HighlightedText({ text, indices }: { text: string; indices: number[] }) {
   if (indices.length === 0) return <>{text}</>;
   const set = new Set(indices);
   const parts: JSX.Element[] = [];
@@ -24,4 +25,4 @@ export function HighlightedText({ text, indices }: { text: string; indices: numb
     parts.push(inMatch ? <mark key="end">{run}</mark> : <span key="end">{run}</span>);
   }
   return <>{parts}</>;
-}
+});

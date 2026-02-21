@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { useMemo, useRef, useEffect } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useFileContent } from '../../hooks/useFileContent';
 import { tokenizeCode } from '../../syntax';
 import { getExtColor } from '../../colors';
@@ -10,6 +11,7 @@ interface Props {
 
 export function CodePreview({ path }: Props) {
   const { data, loading, error } = useFileContent(path);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const filename = path ? getFilename(path) : '';
   const ext = path ? getExt(path) : '';
@@ -19,6 +21,18 @@ export function CodePreview({ path }: Props) {
     if (!data?.content) return [];
     return tokenizeCode(data.content, ext);
   }, [data?.content, ext]);
+
+  const virtualizer = useVirtualizer({
+    count: tokenizedLines.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 20,
+    overscan: 20,
+  });
+
+  // Reset scroll to top when file changes
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [path]);
 
   if (!path) {
     return (
@@ -44,7 +58,7 @@ export function CodePreview({ path }: Props) {
           )}
         </div>
       </div>
-      <div className="preview-body">
+      <div ref={scrollRef} className="preview-body">
         {loading && (
           <div className="preview-loading">
             <div className="spinner" />
@@ -56,20 +70,32 @@ export function CodePreview({ path }: Props) {
         )}
         {data && !loading && (
           <pre className="preview-code">
-            <code>
-              {tokenizedLines.map((lineTokens, i) => (
-                <div key={i} className="preview-line">
-                  <span className="preview-linenum">{i + 1}</span>
-                  <span className="preview-linetext">
-                    {lineTokens.length === 0
-                      ? '\n'
-                      : lineTokens.map((tok, j) => (
-                          <span key={j} className={`syntax-${tok.type}`}>{tok.text}</span>
-                        ))
-                    }
-                  </span>
-                </div>
-              ))}
+            <code style={{ height: virtualizer.getTotalSize(), position: 'relative', display: 'block' }}>
+              {virtualizer.getVirtualItems().map(vi => {
+                const lineTokens = tokenizedLines[vi.index];
+                return (
+                  <div
+                    key={vi.index}
+                    className="preview-line"
+                    style={{
+                      position: 'absolute',
+                      top: vi.start,
+                      height: vi.size,
+                      width: '100%',
+                    }}
+                  >
+                    <span className="preview-linenum">{vi.index + 1}</span>
+                    <span className="preview-linetext">
+                      {lineTokens.length === 0
+                        ? '\n'
+                        : lineTokens.map((tok, j) => (
+                            <span key={j} className={`syntax-${tok.type}`}>{tok.text}</span>
+                          ))
+                      }
+                    </span>
+                  </div>
+                );
+              })}
             </code>
           </pre>
         )}

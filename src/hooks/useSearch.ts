@@ -64,10 +64,8 @@ export function useSearch() {
     return () => { controller.abort(); };
   }, [debouncedQuery, extFilter, isTauri]);
 
-  // Show loading spinner immediately on keystroke, before debounce fires
-  useEffect(() => {
-    if (query.trim()) setLoading(true);
-  }, [query]);
+  // Derive "typing" state from query vs debounced — no extra render needed
+  const isTyping = query.trim() !== '' && query !== debouncedQuery;
 
   const results = findResults.results;
 
@@ -82,7 +80,7 @@ export function useSearch() {
     setQuery,
     findResults,
     results,
-    loading,
+    loading: loading || isTyping,
     extFilter,
     setExtFilter,
     topExts,

@@ -137,12 +137,12 @@
   display: flex;
   min-height: 20px;
   border-left: var(--border-width) solid transparent;
-  transition: all var(--fast) var(--ease);
+  transition: background-color var(--fast) var(--ease),
+              border-left-color var(--fast) var(--ease);
 }
 .preview-line:hover {
   background: color-mix(in oklch, var(--neon-cyan) 3%, transparent);
   border-left-color: color-mix(in oklch, var(--neon-cyan) 30%, transparent);
-  box-shadow: inset 2px 0 8px color-mix(in oklch, var(--neon-cyan) 5%, transparent);
 }
 .preview-linenum {
   display: inline-block;

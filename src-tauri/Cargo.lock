@@ -675,6 +675,7 @@ version = "0.11.2"
 dependencies = [
  "codescope-server",
  "dirs",
+ "rayon",
  "regex",
  "serde",
  "serde_json",

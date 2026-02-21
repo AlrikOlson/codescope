@@ -1536,17 +1536,17 @@ fn get_search_state() -> Result<Arc<RwLock<ServerState>>, String> {
 }
 
 /// Open (or focus) the search window.
+/// Window opens immediately; search state is pre-warmed in the background
+/// so the UI never blocks on repo scanning.
 #[tauri::command]
-fn open_search_window(app: AppHandle) -> Result<(), String> {
+async fn open_search_window(app: AppHandle) -> Result<(), String> {
     // If the window already exists, just focus it
     if let Some(w) = app.get_webview_window("search") {
         w.set_focus().map_err(|e| e.to_string())?;
         return Ok(());
     }
 
-    // Pre-initialize the search state so the window opens fast
-    get_search_state()?;
-
+    // Open window IMMEDIATELY — don't wait for state initialization
     tauri::WebviewWindowBuilder::new(
         &app,
         "search",
@@ -1559,6 +1559,12 @@ fn open_search_window(app: AppHandle) -> Result<(), String> {
     .resizable(true)
     .build()
     .map_err(|e| e.to_string())?;
+
+    // Pre-warm search state in background — the first search_find call will
+    // wait on the Mutex if init is still running, so no race condition.
+    tauri::async_runtime::spawn_blocking(|| {
+        let _ = get_search_state();
+    });
 
     Ok(())
 }
@@ -1644,8 +1650,10 @@ fn search_find_blocking(q: String, ext: Option<String>, limit: Option<usize>, st
         });
     }
 
-    // 2. Content grep (only if query is >= 2 chars)
+    // 2. Content grep (only if query is >= 2 chars) — parallelized with rayon
     if q.len() >= 2 {
+        use rayon::prelude::*;
+
         let terms: Vec<String> = q.split_whitespace().map(|s| s.to_string()).collect();
         let terms_lower: Vec<String> = terms.iter().map(|t| t.to_lowercase()).collect();
         let pattern_str = terms.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("|");
@@ -1653,14 +1661,12 @@ fn search_find_blocking(q: String, ext: Option<String>, limit: Option<usize>, st
         if let Ok(pattern) = RegexBuilder::new(&pattern_str).case_insensitive(true).build() {
             let idf_weights: Vec<f64> = terms_lower.iter().map(|t| repo.term_doc_freq.idf(t)).collect();
 
-            for file in &repo.all_files {
+            // Parallel grep across all files
+            let grep_hits: Vec<_> = repo.all_files.par_iter().filter_map(|file| {
                 if let Some(ref exts) = ext_filter {
-                    if !exts.contains(&file.ext) { continue; }
+                    if !exts.contains(&file.ext) { return None; }
                 }
-                let content = match std::fs::read_to_string(&file.abs_path) {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
+                let content = std::fs::read_to_string(&file.abs_path).ok()?;
                 let total_lines = content.lines().count().max(1);
                 let mut match_count = 0usize;
                 let mut best_snippet: Option<String> = None;
@@ -1698,7 +1704,7 @@ fn search_find_blocking(q: String, ext: Option<String>, limit: Option<usize>, st
                     }
                 }
 
-                if match_count == 0 { continue; }
+                if match_count == 0 { return None; }
 
                 let filename = file.rel_path.rsplit('/').next().unwrap_or(&file.rel_path).to_lowercase();
                 let grep_score = grep_relevance_score(
@@ -1718,7 +1724,7 @@ fn search_find_blocking(q: String, ext: Option<String>, limit: Option<usize>, st
                 let category = get_category_path(&file.rel_path, &repo.config).join(" > ");
                 let file_terms_matched = terms_seen.len();
 
-                let entry = merged.entry(file.rel_path.clone()).or_insert_with(|| MergedFind {
+                Some((file.rel_path.clone(), MergedFind {
                     path: file.rel_path.clone(),
                     filename: fname,
                     dir,
@@ -1726,20 +1732,28 @@ fn search_find_blocking(q: String, ext: Option<String>, limit: Option<usize>, st
                     desc: String::new(),
                     category,
                     name_score: 0.0,
-                    grep_score: 0.0,
-                    grep_count: 0,
-                    top_match: None,
-                    top_match_line: None,
+                    grep_score,
+                    grep_count: match_count,
+                    top_match: best_snippet,
+                    top_match_line: best_snippet_line,
                     filename_indices: Vec::new(),
-                    terms_matched: 0,
+                    terms_matched: file_terms_matched,
                     total_terms: terms_lower.len(),
-                });
-                entry.grep_score = grep_score;
-                entry.grep_count = match_count;
-                entry.top_match = best_snippet;
-                entry.top_match_line = best_snippet_line;
-                entry.terms_matched = file_terms_matched;
-                entry.total_terms = terms_lower.len();
+                }))
+            }).collect();
+
+            // Merge parallel grep results into the merged map
+            for (path, grep_find) in grep_hits {
+                let entry = merged.entry(path).or_insert(grep_find);
+                if entry.grep_score == 0.0 {
+                    // Entry existed from filename search — fill in grep data
+                    entry.grep_score = grep_find.grep_score;
+                    entry.grep_count = grep_find.grep_count;
+                    entry.top_match = grep_find.top_match;
+                    entry.top_match_line = grep_find.top_match_line;
+                    entry.terms_matched = grep_find.terms_matched;
+                    entry.total_terms = grep_find.total_terms;
+                }
             }
         }
     }
@@ -1936,11 +1950,8 @@ fn main() {
                 if let Some(w) = app.get_webview_window("main") {
                     let _ = w.hide();
                 }
-                // Pre-initialize search state (scans repos)
-                if let Err(e) = get_search_state() {
-                    eprintln!("Error: {}", e);
-                    std::process::exit(1);
-                }
+
+                // Open search window IMMEDIATELY — state warms in background
                 let search = tauri::WebviewWindowBuilder::new(
                     app,
                     "search",
@@ -1952,6 +1963,13 @@ fn main() {
                 .decorations(false)
                 .resizable(true)
                 .build()?;
+
+                // Pre-warm search state in background thread
+                std::thread::spawn(|| {
+                    if let Err(e) = get_search_state() {
+                        eprintln!("Error initializing search state: {}", e);
+                    }
+                });
 
                 // Close the hidden setup window now that search is ready
                 let app_handle = app.handle().clone();
