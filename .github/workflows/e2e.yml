@@ -10,8 +10,9 @@ permissions:
   contents: read
   actions: write
 
-# No workflow-level concurrency group — force-cancel step in e2e-agent
-# handles deduplication immediately instead of queuing behind stale runs.
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   changes:
