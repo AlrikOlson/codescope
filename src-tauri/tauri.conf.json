@@ -1,0 +1,35 @@
+{
+  "productName": "CodeScope Setup",
+  "version": "0.11.2",
+  "identifier": "com.codescope.setup",
+  "build": {
+    "frontendDist": "../dist-setup",
+    "devUrl": "http://localhost:5174/setup.html",
+    "beforeBuildCommand": "npm run build:setup",
+    "beforeDevCommand": "npm run dev:setup"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "CodeScope Setup",
+        "width": 800,
+        "height": 600,
+        "resizable": true,
+        "center": true,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/icon.ico"
+    ]
+  }
+}

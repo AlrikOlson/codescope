@@ -2,6 +2,8 @@ sample-project
 node_modules
 target
 dist
+dist-setup
+src-tauri/gen
 .mcp.json
 __pycache__/
 *.pyc

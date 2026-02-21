@@ -9,17 +9,24 @@
   "type": "module",
   "scripts": {
     "dev": "vite --open",
-    "build": "tsc && vite build"
+    "build": "tsc && vite build",
+    "dev:setup": "vite --config vite.setup.config.ts --port 5174",
+    "build:setup": "vite build --config vite.setup.config.ts --outDir dist-setup",
+    "tauri": "tauri"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.50",
     "@tanstack/react-virtual": "^3.13.2",
+    "@tauri-apps/plugin-dialog": "^2.6.0",
+    "@tauri-apps/plugin-shell": "^2.3.5",
     "@types/three": "^0.182.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "three": "^0.182.0"
   },
   "devDependencies": {
+    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/cli": "^2.10.0",
     "@types/node": "^25.2.3",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

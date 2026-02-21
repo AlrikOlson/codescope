@@ -1,0 +1,238 @@
+.setup-wizard {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  padding: 2rem;
+  max-width: 700px;
+  margin: 0 auto;
+}
+
+/* Progress bar */
+.progress-bar {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  margin-bottom: 2rem;
+  padding: 1rem 0;
+}
+
+.progress-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #2a2a35;
+  transition: all 0.3s ease;
+}
+
+.progress-dot.active {
+  background: #4a6cf7;
+}
+
+.progress-dot.current {
+  width: 24px;
+  border-radius: 4px;
+}
+
+/* Screen content */
+.screen-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Common screen styles */
+.screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.screen h1 {
+  font-size: 1.75rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+  color: #ffffff;
+}
+
+.screen h2 {
+  font-size: 1.25rem;
+  font-weight: 500;
+  margin-bottom: 1rem;
+  color: #ffffff;
+}
+
+.screen p.subtitle {
+  color: #888;
+  margin-bottom: 2rem;
+  line-height: 1.5;
+}
+
+/* Buttons */
+.btn {
+  padding: 0.625rem 1.5rem;
+  border-radius: 6px;
+  border: none;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-primary {
+  background: #4a6cf7;
+  color: white;
+}
+
+.btn-primary:hover {
+  background: #5b7af8;
+}
+
+.btn-secondary {
+  background: #1a1a25;
+  color: #ccc;
+  border: 1px solid #2a2a35;
+}
+
+.btn-secondary:hover {
+  background: #222230;
+  border-color: #3a3a45;
+}
+
+.btn-row {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+  margin-top: auto;
+  padding-top: 2rem;
+}
+
+/* Repo list */
+.repo-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 1rem 0;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.repo-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: #12121a;
+  border: 1px solid #1e1e2a;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.repo-item:hover {
+  border-color: #4a6cf7;
+  background: #15152a;
+}
+
+.repo-item.selected {
+  border-color: #4a6cf7;
+  background: #1a1a35;
+}
+
+.repo-item input[type="checkbox"] {
+  accent-color: #4a6cf7;
+  width: 16px;
+  height: 16px;
+}
+
+.repo-name {
+  font-weight: 500;
+  color: #e0e0e8;
+}
+
+.repo-meta {
+  font-size: 0.8rem;
+  color: #666;
+}
+
+.ecosystem-tag {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  background: #1e2a4a;
+  color: #6b8af7;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  margin-right: 0.25rem;
+}
+
+/* Toggle switch */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem;
+  background: #12121a;
+  border: 1px solid #1e1e2a;
+  border-radius: 8px;
+  margin-bottom: 0.75rem;
+}
+
+.toggle-label {
+  font-weight: 500;
+}
+
+.toggle-description {
+  font-size: 0.8rem;
+  color: #666;
+  margin-top: 0.25rem;
+}
+
+/* Status indicators */
+.status-pass { color: #4ade80; }
+.status-warn { color: #facc15; }
+.status-fail { color: #f87171; }
+
+.check-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.625rem 0;
+  border-bottom: 1px solid #1a1a25;
+}
+
+.check-icon {
+  font-size: 1.1rem;
+  width: 1.5rem;
+  text-align: center;
+}
+
+/* Welcome screen */
+.welcome-logo {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+  text-align: center;
+  padding-top: 3rem;
+}
+
+.welcome-center {
+  text-align: center;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+.welcome-center h1 {
+  margin-bottom: 1rem;
+}
+
+.welcome-center .btn-row {
+  justify-content: center;
+}

@@ -114,6 +114,8 @@ enum Commands {
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
+    /// Launch the setup wizard (guided onboarding)
+    Setup,
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +163,14 @@ async fn main() {
     if let Some(command) = &cli.command {
         match command {
             Commands::Init { path, global, semantic } => {
+                if path.is_none() {
+                    eprintln!("Error: No path specified.");
+                    eprintln!();
+                    eprintln!("Usage:");
+                    eprintln!("  codescope init <path>    Add a project (generates .codescope.toml + .mcp.json)");
+                    eprintln!("  codescope setup          Guided setup wizard");
+                    std::process::exit(1);
+                }
                 // Build args vector matching init::run_init's expected format
                 let mut args = vec!["init".to_string()];
                 if let Some(p) = path {
@@ -221,6 +231,14 @@ async fn main() {
                     "codescope",
                     &mut std::io::stdout(),
                 );
+                return;
+            }
+            Commands::Setup => {
+                let version = env!("CARGO_PKG_VERSION");
+                eprintln!("codescope {} setup", version);
+                eprintln!();
+                eprintln!("  The setup wizard is coming soon.");
+                eprintln!("  For now, use `codescope init <path>` to add a project.");
                 return;
             }
         }
