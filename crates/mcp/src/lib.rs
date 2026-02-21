@@ -4,11 +4,14 @@
 //! `cs_modules`, `cs_imports`, `cs_git`, `cs_status`, `cs_rescan`, `cs_add_repo`),
 //! protocol version negotiation, and legacy tool name translation for backward compatibility.
 
-use crate::budget::{allocate_budget, BudgetUnit, DEFAULT_TOKEN_BUDGET};
-use crate::fuzzy::run_search;
-use crate::scan::get_category_path;
-use crate::stubs::extract_stubs;
-use crate::types::*;
+pub mod auth;
+pub mod http;
+
+use codescope_core::budget::{allocate_budget, BudgetUnit, DEFAULT_TOKEN_BUDGET};
+use codescope_core::fuzzy::run_search;
+use codescope_core::scan::get_category_path;
+use codescope_core::stubs::extract_stubs;
+use codescope_core::types::*;
 use regex::RegexBuilder;
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fs;
@@ -932,7 +935,7 @@ fn handle_tool_call(
                 let edge_kind = if edge_type_str == "all" {
                     None
                 } else {
-                    crate::graph::EdgeKind::parse(edge_type_str)
+                    codescope_core::graph::EdgeKind::parse(edge_type_str)
                 };
 
                 let graph_guard = repo.code_graph.read().unwrap();
@@ -1219,13 +1222,13 @@ fn handle_tool_call(
 
             let mut merged: std::collections::HashMap<String, FindResult> =
                 std::collections::HashMap::new();
-            let mut all_modules: Vec<(&RepoState, crate::fuzzy::SearchModuleResult)> = Vec::new();
+            let mut all_modules: Vec<(&RepoState, codescope_core::fuzzy::SearchModuleResult)> = Vec::new();
 
             for repo in &repos {
                 let config = &repo.config;
 
                 // 1. Fuzzy filename search
-                let query = crate::fuzzy::preprocess_search_query(raw_query);
+                let query = codescope_core::fuzzy::preprocess_search_query(raw_query);
                 let search_resp = run_search(
                     &repo.search_files,
                     &repo.search_modules,
@@ -1451,7 +1454,7 @@ fn handle_tool_call(
                     if let Some(ref index) = *sem_guard {
                         let sem_limit = file_limit * 2;
                         if let Ok(sem_results) =
-                            crate::semantic::semantic_search(index, raw_query, sem_limit)
+                            codescope_core::semantic::semantic_search(index, raw_query, sem_limit)
                         {
                             if !sem_results.is_empty() {
                                 fused = true;
@@ -1469,7 +1472,7 @@ fn handle_tool_call(
                                     .collect();
 
                                 // Build semantic rank map + metadata
-                                use crate::semantic::SemanticSearchResult;
+                                use codescope_core::semantic::SemanticSearchResult;
                                 let sem_map: std::collections::HashMap<
                                     String,
                                     (usize, &SemanticSearchResult),
@@ -1701,7 +1704,7 @@ fn handle_tool_call(
                     let start_line = args["start_line"].as_u64().map(|n| n as usize);
                     let end_line = args["end_line"].as_u64().map(|n| n as usize);
 
-                    match crate::git::blame(&repo.root, path, start_line, end_line) {
+                    match codescope_core::git::blame(&repo.root, path, start_line, end_line) {
                         Ok(lines) => {
                             if lines.is_empty() {
                                 return (format!("No blame data for '{path}'"), false);
@@ -1742,7 +1745,7 @@ fn handle_tool_call(
                     }
                     let limit = args["limit"].as_u64().unwrap_or(10).min(100) as usize;
 
-                    match crate::git::file_history(&repo.root, path, limit) {
+                    match codescope_core::git::file_history(&repo.root, path, limit) {
                         Ok(commits) => {
                             if commits.is_empty() {
                                 return (format!("No commit history found for '{path}'"), false);
@@ -1781,7 +1784,7 @@ fn handle_tool_call(
                         return ("Error: 'since' is required".to_string(), true);
                     }
 
-                    match crate::git::changed_since(&repo.root, since) {
+                    match codescope_core::git::changed_since(&repo.root, since) {
                         Ok(files) => {
                             if files.is_empty() {
                                 return (format!("No changes since '{since}'"), false);
@@ -1811,7 +1814,7 @@ fn handle_tool_call(
                     let limit = args["limit"].as_u64().unwrap_or(20).min(200) as usize;
                     let days = args["days"].as_u64().unwrap_or(90).min(365) as usize;
 
-                    match crate::git::hot_files(&repo.root, limit, days) {
+                    match codescope_core::git::hot_files(&repo.root, limit, days) {
                         Ok(files) => {
                             if files.is_empty() {
                                 return (format!("No file changes found in the last {days} days"), false);
@@ -1873,7 +1876,7 @@ fn handle_tool_call(
                         None => return ("Error: 'end_line' is required (or provide 'symbol' with treesitter feature)".to_string(), true),
                     };
 
-                    match crate::git::symbol_evolution(&repo.root, path, start, end, limit) {
+                    match codescope_core::git::symbol_evolution(&repo.root, path, start, end, limit) {
                         Ok(commits) => {
                             if commits.is_empty() {
                                 return (format!("No commits found touching {path} lines {start}-{end}"), false);
@@ -1914,7 +1917,7 @@ fn handle_tool_call(
                     let days = args["days"].as_u64().unwrap_or(90).min(365) as usize;
                     let limit = args["limit"].as_u64().unwrap_or(20).min(200) as usize;
 
-                    match crate::git::cochanged_files(&repo.root, path, days, limit) {
+                    match codescope_core::git::cochanged_files(&repo.root, path, days, limit) {
                         Ok(entries) => {
                             if entries.is_empty() {
                                 return (format!("No cochanged files found for '{path}' in the last {days} days"), false);
@@ -2087,7 +2090,7 @@ fn handle_rescan(state: &mut ServerState, args: &serde_json::Value) -> (String, 
     let mut results = Vec::new();
     for name in &repos_to_scan {
         let root = state.repos[name].root.clone();
-        let new_state = crate::scan_repo(name, &root, &tok);
+        let new_state = codescope_core::scan_repo(name, &root, &tok);
         results.push(format!(
             "[{name}] Rescanned: {} files, {} modules, {} import edges ({}ms)",
             new_state.all_files.len(),
@@ -2099,7 +2102,7 @@ fn handle_rescan(state: &mut ServerState, args: &serde_json::Value) -> (String, 
     }
 
     // Rebuild cross-repo edges
-    state.cross_repo_edges = crate::scan::resolve_cross_repo_imports(&state.repos);
+    state.cross_repo_edges = codescope_core::scan::resolve_cross_repo_imports(&state.repos);
 
     (results.join("\n"), false)
 }
@@ -2123,7 +2126,7 @@ fn handle_add_repo(state: &mut ServerState, args: &serde_json::Value) -> (String
     }
 
     let tok = state.tokenizer.clone();
-    let new_state = crate::scan_repo(&name, &root, &tok);
+    let new_state = codescope_core::scan_repo(&name, &root, &tok);
     let summary = format!(
         "Added [{name}] {}: {} files, {} modules, {} import edges ({}ms)",
         root.display(),
@@ -2150,7 +2153,7 @@ fn handle_add_repo(state: &mut ServerState, args: &serde_json::Value) -> (String
         std::thread::spawn(move || {
             tracing::info!(repo = thread_name.as_str(), "Building semantic index in background");
             let sem_start = std::time::Instant::now();
-            if let Some(idx) = crate::semantic::build_semantic_index(
+            if let Some(idx) = codescope_core::semantic::build_semantic_index(
                 &files,
                 model.as_deref(),
                 &progress,
@@ -2177,7 +2180,7 @@ fn handle_add_repo(state: &mut ServerState, args: &serde_json::Value) -> (String
     state.repos.insert(name.clone(), new_state);
 
     // Persist to global ~/.codescope/repos.toml so the repo survives server restarts
-    let persist_note = match crate::merge_global_repos_toml(&name, &root) {
+    let persist_note = match codescope_core::merge_global_repos_toml(&name, &root) {
         Ok(()) => " Saved to ~/.codescope/repos.toml.",
         Err(e) => {
             tracing::warn!(repo = name.as_str(), error = %e, "Failed to persist repo to global config");
@@ -2186,7 +2189,7 @@ fn handle_add_repo(state: &mut ServerState, args: &serde_json::Value) -> (String
     };
 
     // Rebuild cross-repo edges
-    state.cross_repo_edges = crate::scan::resolve_cross_repo_imports(&state.repos);
+    state.cross_repo_edges = codescope_core::scan::resolve_cross_repo_imports(&state.repos);
 
     (format!("{summary}{semantic_summary}{persist_note}"), false)
 }
@@ -2391,8 +2394,8 @@ fn get_prompt(
     args: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let repo = state.default_repo();
-    let conventions = crate::conventions::mine_conventions(&repo.all_files);
-    let conv_text = crate::conventions::format_conventions(&conventions);
+    let conventions = codescope_core::conventions::mine_conventions(&repo.all_files);
+    let conv_text = codescope_core::conventions::format_conventions(&conventions);
 
     match name {
         "implement-feature" => {
@@ -2462,9 +2465,9 @@ fn read_resource(
     uri: &str,
 ) -> Result<serde_json::Value, String> {
     let repo = state.default_repo();
-    let conventions = crate::conventions::mine_conventions(&repo.all_files);
+    let conventions = codescope_core::conventions::mine_conventions(&repo.all_files);
     let text = match uri {
-        "conventions://summary" => crate::conventions::format_conventions(&conventions),
+        "conventions://summary" => codescope_core::conventions::format_conventions(&conventions),
         "conventions://error-handling" => {
             serde_json::to_string_pretty(&conventions.error_handling)
                 .unwrap_or_else(|_| "serialization error".to_string())

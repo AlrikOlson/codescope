@@ -1,0 +1,24 @@
+[package]
+name = "codescope-cli"
+version = "0.11.2"
+edition = "2021"
+description = "Command-line interface for CodeScope — search, grep, read files"
+repository = "https://github.com/AlrikOlson/codescope"
+license = "MIT"
+
+[[bin]]
+name = "cs"
+path = "src/main.rs"
+
+[features]
+default = ["semantic"]
+semantic = ["codescope-core/semantic"]
+treesitter = ["codescope-core/treesitter"]
+
+[dependencies]
+codescope-core = { path = "../core", default-features = false }
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

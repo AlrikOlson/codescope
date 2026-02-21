@@ -15,8 +15,8 @@ use axum::{
 use std::time::Instant;
 use uuid::Uuid;
 
-use crate::mcp::{dispatch_jsonrpc, negotiate_version};
-use crate::types::*;
+use crate::{dispatch_jsonrpc, negotiate_version};
+use codescope_core::types::*;
 
 const SESSION_HEADER: &str = "mcp-session-id";
 const PROTOCOL_VERSION_HEADER: &str = "mcp-protocol-version";

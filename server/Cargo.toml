@@ -16,26 +16,19 @@ path = "src/main.rs"
 
 [features]
 default = ["semantic"]
-tiktoken = ["dep:tiktoken-rs"]
-semantic = ["dep:fastembed", "dep:ort"]
-cuda = ["semantic", "fastembed/cuda"]
-coreml = ["semantic", "ort/coreml"]
-directml = ["semantic", "ort/directml"]
-accelerate = ["semantic", "fastembed/accelerate"]
-metal = ["semantic", "fastembed/metal"]
-treesitter = [
-    "dep:tree-sitter",
-    "dep:tree-sitter-rust",
-    "dep:tree-sitter-typescript",
-    "dep:tree-sitter-python",
-    "dep:tree-sitter-go",
-    "dep:tree-sitter-javascript",
-    "dep:tree-sitter-c",
-    "dep:tree-sitter-cpp",
-    "dep:tree-sitter-java",
-]
+tiktoken = ["codescope-core/tiktoken"]
+semantic = ["codescope-core/semantic", "codescope-mcp/semantic", "codescope-http/semantic"]
+cuda = ["codescope-core/cuda"]
+coreml = ["codescope-core/coreml"]
+directml = ["codescope-core/directml"]
+accelerate = ["codescope-core/accelerate"]
+metal = ["codescope-core/metal"]
+treesitter = ["codescope-core/treesitter", "codescope-mcp/treesitter", "codescope-http/treesitter"]
 
 [dependencies]
+codescope-core = { path = "../crates/core", default-features = false }
+codescope-mcp = { path = "../crates/mcp", default-features = false }
+codescope-http = { path = "../crates/http", default-features = false }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "macros", "time"] }
 serde = { version = "1", features = ["derive"] }
@@ -45,37 +38,10 @@ clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-ignore = "0.4"
-regex = "1"
 rayon = "1.10"
 dashmap = "6"
-toml = "0.8"
-git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
-notify = "7"
 uuid = { version = "1", features = ["v4"] }
-
-# Optional tokenizer backends
-tiktoken-rs = { version = "0.6", optional = true }
-
-# Optional tree-sitter AST parsing
-tree-sitter = { version = "0.24", optional = true }
-tree-sitter-rust = { version = "0.23", optional = true }
-tree-sitter-typescript = { version = "0.23", optional = true }
-tree-sitter-python = { version = "0.23", optional = true }
-tree-sitter-go = { version = "0.23", optional = true }
-tree-sitter-javascript = { version = "0.23", optional = true }
-tree-sitter-c = { version = "0.23", optional = true }
-tree-sitter-cpp = { version = "0.23", optional = true }
-tree-sitter-java = { version = "0.23", optional = true }
-
-# Optional semantic search dependencies
-fastembed = { version = "5", optional = true, default-features = false, features = ["ort-download-binaries-native-tls", "hf-hub-native-tls"] }
-ort = { version = "=2.0.0-rc.11", optional = true }
+regex = "1"
 
 [dev-dependencies]
 tempfile = "3"
-
-[profile.release]
-opt-level = 3
-lto = "thin"
-strip = true

@@ -1,0 +1,20 @@
+[package]
+name = "codescope-desktop"
+version = "0.11.2"
+edition = "2021"
+description = "CodeScope desktop app — VS Code-like codebase explorer"
+repository = "https://github.com/AlrikOlson/codescope"
+license = "MIT"
+
+[features]
+default = ["desktop"]
+desktop = ["dioxus/desktop"]
+web = ["dioxus/web"]
+semantic = ["codescope-core/semantic"]
+treesitter = ["codescope-core/treesitter"]
+
+[dependencies]
+codescope-core = { path = "../../crates/core", default-features = false }
+dioxus = { version = "0.7", features = [] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

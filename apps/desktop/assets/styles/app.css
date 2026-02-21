@@ -1,0 +1,374 @@
+/* ============================================
+   CodeScope Desktop — App Shell Layout
+   VS Code-like grid with activity bar, sidebar,
+   editor, and status bar.
+   ============================================ */
+
+/* --- App Shell Grid --- */
+.app-shell {
+  display: grid;
+  grid-template-rows: 36px 1fr 24px;
+  grid-template-columns: 48px 1fr;
+  grid-template-areas:
+    "titlebar titlebar"
+    "activity content"
+    "statusbar statusbar";
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
+/* --- Titlebar --- */
+.titlebar {
+  grid-area: titlebar;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  -webkit-app-region: drag;
+  font-size: 12px;
+}
+.titlebar-title {
+  color: var(--text3);
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+/* --- Activity Bar --- */
+.activity-bar {
+  grid-area: activity;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+.activity-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text3);
+  cursor: pointer;
+  transition: color var(--fast) var(--ease),
+              background-color var(--fast) var(--ease);
+}
+.activity-btn:hover {
+  color: var(--text);
+  background: var(--hover-accent);
+}
+.activity-btn.active {
+  color: var(--neon-cyan);
+  border-left: 2px solid var(--neon-cyan);
+  border-radius: 0;
+}
+
+/* --- Content Area --- */
+.content-area {
+  grid-area: content;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* --- Search Panel --- */
+.search-panel {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.search-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 14px 10px;
+  background: var(--deep-black);
+  border: 1.5px solid color-mix(in oklch, var(--neon-cyan) 20%, transparent);
+  border-radius: var(--r-lg);
+  transition: border-color var(--normal) var(--ease),
+              box-shadow var(--normal) var(--ease);
+}
+.search-field:focus-within {
+  border-color: var(--neon-cyan);
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--neon-cyan) 10%, transparent),
+              0 0 20px color-mix(in oklch, var(--neon-cyan) 8%, transparent);
+}
+.search-label {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text3);
+  opacity: 0.5;
+  transition: color var(--fast) var(--ease), opacity var(--fast) var(--ease);
+}
+.search-field:focus-within .search-label {
+  color: var(--neon-cyan);
+  opacity: 0.7;
+}
+.search-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.search-icon {
+  flex-shrink: 0;
+  opacity: 0.35;
+  transition: opacity var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.search-field:focus-within .search-icon {
+  opacity: 0.8;
+  color: var(--neon-cyan);
+}
+.search-input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  min-width: 0;
+  caret-color: var(--neon-cyan);
+}
+.search-input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+.search-input::placeholder {
+  color: var(--text3);
+  opacity: 0.5;
+}
+.search-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: none;
+  border: none;
+  color: var(--text3);
+  font-size: 16px;
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.search-clear:hover {
+  color: var(--text);
+  background: var(--hover-accent);
+}
+
+/* --- Metadata Strip --- */
+.metadata-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 6px;
+  font-size: 11px;
+  color: var(--text3);
+}
+.metadata-strip.hidden {
+  visibility: hidden;
+}
+.metadata-count {
+  color: var(--neon-cyan);
+  font-weight: 600;
+}
+.metadata-sep {
+  opacity: 0.3;
+}
+.metadata-time {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Split Panel --- */
+.split-panel {
+  display: grid;
+  grid-template-columns: clamp(260px, 30%, 400px) 1fr;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* --- Sidebar Panel (Results) --- */
+.sidebar-panel {
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-right: 1px solid var(--border);
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--neon-cyan) 20%, transparent) transparent;
+}
+.sidebar-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text3);
+  font-size: 12px;
+  opacity: 0.5;
+}
+
+/* --- Results List --- */
+.results-list {
+  display: flex;
+  flex-direction: column;
+}
+.result-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: background var(--fast) var(--ease),
+              border-color var(--fast) var(--ease);
+}
+.result-item:hover {
+  background: var(--hover-accent);
+}
+.result-item.active {
+  background: var(--hover-accent-mid);
+  border-left-color: var(--neon-cyan);
+}
+.result-filename {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.result-score {
+  font-size: 10px;
+  color: var(--neon-cyan);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.result-path {
+  width: 100%;
+  font-size: 10px;
+  color: var(--text3);
+  opacity: 0.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Editor Panel --- */
+.editor-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+  background: var(--bg);
+}
+.editor-header {
+  display: flex;
+  align-items: center;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+.editor-filepath {
+  font-size: 11px;
+  color: var(--text2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.editor-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.editor-empty-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--text3);
+  font-size: 12px;
+  opacity: 0.5;
+}
+
+/* --- Code Viewer --- */
+.code-viewer {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--neon-cyan) 20%, transparent) transparent;
+}
+.code-content {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 8px 0;
+}
+.code-line {
+  display: flex;
+  min-height: 19px;
+}
+.code-line:hover {
+  background: var(--hover-accent);
+}
+.line-number {
+  flex-shrink: 0;
+  width: 48px;
+  padding-right: 12px;
+  text-align: right;
+  color: var(--text3);
+  opacity: 0.4;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.line-text {
+  white-space: pre;
+  padding-right: 16px;
+}
+
+/* --- File Tree (placeholder) --- */
+.file-tree {
+  padding: 12px;
+}
+.file-tree-placeholder {
+  color: var(--text3);
+  font-size: 12px;
+  opacity: 0.5;
+}
+
+/* --- Status Bar --- */
+.statusbar {
+  grid-area: statusbar;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text3);
+}
+.statusbar-repo {
+  color: var(--neon-cyan);
+  font-weight: 600;
+}
+.statusbar-sep {
+  opacity: 0.3;
+}
+.statusbar-files {
+  font-variant-numeric: tabular-nums;
+}
+.statusbar-results {
+  font-variant-numeric: tabular-nums;
+}

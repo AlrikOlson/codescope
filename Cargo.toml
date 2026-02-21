@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/mcp",
+    "crates/http",
+    "crates/cli",
+    "apps/desktop",
+    "server",
+    "src-tauri",
+]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

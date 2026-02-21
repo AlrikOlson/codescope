@@ -11,7 +11,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::types::McpAppContext;
+use codescope_core::types::McpAppContext;
 
 // ---------------------------------------------------------------------------
 // Protected Resource Metadata (RFC 9728)

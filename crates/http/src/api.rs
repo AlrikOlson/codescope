@@ -15,11 +15,11 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::time::Instant;
 
-use crate::budget::{allocate_budget, ContextRequest, ContextResponse};
-use crate::fuzzy::{preprocess_search_query, run_search, SearchResponse};
-use crate::scan::get_category_path;
-use crate::stubs::extract_stubs;
-use crate::types::*;
+use codescope_core::budget::{allocate_budget, ContextRequest, ContextResponse};
+use codescope_core::fuzzy::{preprocess_search_query, run_search, SearchResponse};
+use codescope_core::scan::get_category_path;
+use codescope_core::stubs::extract_stubs;
+use codescope_core::types::*;
 
 /// Acquire read lock on server state, returning HTTP 500 if the lock is poisoned.
 fn read_state(
