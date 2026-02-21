@@ -4,6 +4,19 @@ All notable changes to CodeScope will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.11.0] - 2026-02-21
+
+### Added
+- `codescope web` subcommand to launch web UI in browser
+- Unified binary with all functionality accessible through subcommands
+
+### Changed
+- Consolidated separate `codescope-init` and `codescope-web` scripts into main `codescope` binary
+- Improved AI agent SDK integration and security
+
+### Fixed
+- Clippy warning about useless AsRef in web subcommand
+
 ## [0.10.0] - 2026-02-21
 
 ### Added
