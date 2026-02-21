@@ -879,41 +879,12 @@ fn write_or_merge_mcp_json(root: &Path) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 fn merge_global_repos_toml(root: &Path) -> Result<(), String> {
-    let dir = crate::config_dir()
-        .ok_or_else(|| "Could not determine config directory (HOME/APPDATA not set)".to_string())?;
-    let toml_path = dir.join("repos.toml");
-
-    let repo_name = root.file_name().and_then(|n| n.to_str()).unwrap_or("default");
-
-    // Read existing or start fresh
-    let mut table: toml::Table = if toml_path.exists() {
-        let content = std::fs::read_to_string(&toml_path)
-            .map_err(|e| format!("Failed to read {}: {}", toml_path.display(), e))?;
-        content.parse().map_err(|e| format!("Failed to parse {}: {}", toml_path.display(), e))?
-    } else {
-        toml::Table::new()
-    };
-
-    let repos = table.entry("repos").or_insert_with(|| toml::Value::Table(toml::Table::new()));
-    let repos = repos.as_table_mut().ok_or("repos is not a table in repos.toml")?;
-
-    if repos.contains_key(repo_name) {
-        eprintln!("  Repo '{}' already in {}", repo_name, toml_path.display());
-        return Ok(());
-    }
-
-    let mut entry = toml::Table::new();
-    entry.insert("root".to_string(), toml::Value::String(root.to_string_lossy().to_string()));
-    repos.insert(repo_name.to_string(), toml::Value::Table(entry));
-
-    std::fs::create_dir_all(&dir)
-        .map_err(|e| format!("Failed to create {}: {}", dir.display(), e))?;
-    let output = toml::to_string_pretty(&table)
-        .map_err(|e| format!("Failed to serialize repos.toml: {}", e))?;
-    std::fs::write(&toml_path, output)
-        .map_err(|e| format!("Failed to write {}: {}", toml_path.display(), e))?;
-
-    eprintln!("  Added '{}' to {}", repo_name, toml_path.display());
+    let repo_name = root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("default");
+    crate::merge_global_repos_toml(repo_name, root)?;
+    eprintln!("  Added '{}' to ~/.codescope/repos.toml", repo_name);
     Ok(())
 }
 

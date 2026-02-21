@@ -1912,12 +1912,21 @@ fn handle_add_repo(state: &mut ServerState, args: &serde_json::Value) -> (String
     #[cfg(not(feature = "semantic"))]
     let semantic_summary = "";
 
-    state.repos.insert(name, new_state);
+    state.repos.insert(name.clone(), new_state);
+
+    // Persist to global ~/.codescope/repos.toml so the repo survives server restarts
+    let persist_note = match crate::merge_global_repos_toml(&name, &root) {
+        Ok(()) => " Saved to ~/.codescope/repos.toml.",
+        Err(e) => {
+            tracing::warn!(repo = name.as_str(), error = %e, "Failed to persist repo to global config");
+            ""
+        }
+    };
 
     // Rebuild cross-repo edges
     state.cross_repo_edges = crate::scan::resolve_cross_repo_imports(&state.repos);
 
-    (format!("{summary}{semantic_summary}"), false)
+    (format!("{summary}{semantic_summary}{persist_note}"), false)
 }
 
 // ---------------------------------------------------------------------------

@@ -277,6 +277,53 @@ pub fn scan_repo_with_options(
     }
 }
 
+/// Merge a repo entry into the global `~/.codescope/repos.toml` registry.
+///
+/// If the repo name already exists in the file, this is a no-op.
+/// Creates `~/.codescope/` and `repos.toml` if they don't exist.
+pub fn merge_global_repos_toml(name: &str, root: &std::path::Path) -> Result<(), String> {
+    let dir = config_dir()
+        .ok_or_else(|| "Could not determine config directory (HOME/APPDATA not set)".to_string())?;
+    let toml_path = dir.join("repos.toml");
+
+    let mut table: toml::Table = if toml_path.exists() {
+        let content = std::fs::read_to_string(&toml_path)
+            .map_err(|e| format!("Failed to read {}: {}", toml_path.display(), e))?;
+        content
+            .parse()
+            .map_err(|e| format!("Failed to parse {}: {}", toml_path.display(), e))?
+    } else {
+        toml::Table::new()
+    };
+
+    let repos = table
+        .entry("repos")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+    let repos = repos
+        .as_table_mut()
+        .ok_or("repos is not a table in repos.toml")?;
+
+    if repos.contains_key(name) {
+        return Ok(());
+    }
+
+    let mut entry = toml::Table::new();
+    entry.insert(
+        "root".to_string(),
+        toml::Value::String(root.to_string_lossy().to_string()),
+    );
+    repos.insert(name.to_string(), toml::Value::Table(entry));
+
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("Failed to create {}: {}", dir.display(), e))?;
+    let output = toml::to_string_pretty(&table)
+        .map_err(|e| format!("Failed to serialize repos.toml: {}", e))?;
+    std::fs::write(&toml_path, output)
+        .map_err(|e| format!("Failed to write {}: {}", toml_path.display(), e))?;
+
+    Ok(())
+}
+
 /// Parse a `repos.toml` config file and return a list of `(name, root_path)` pairs.
 pub fn parse_repos_toml(path: &std::path::Path) -> Vec<(String, PathBuf)> {
     let content = match std::fs::read_to_string(path) {
