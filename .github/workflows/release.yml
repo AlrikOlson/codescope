@@ -267,10 +267,11 @@ jobs:
   # Now runs in parallel with AI version analysis
   # ──────────────────────────────────────────────
   build:
-    needs: [release-gate]
+    needs: [release-gate, version]
     if: |
       always() &&
       needs.release-gate.result == 'success' &&
+      (needs.version.result == 'success' || needs.version.result == 'skipped') &&
       (
         needs.release-gate.outputs.action == 'full' ||
         needs.release-gate.outputs.action == 'complete' ||
@@ -325,14 +326,15 @@ jobs:
           if [ "${{ needs.release-gate.outputs.action }}" = "complete" ]; then
             VERSION="${{ needs.release-gate.outputs.existing_version }}"
           elif [ "${{ needs.release-gate.outputs.action }}" = "full" ]; then
-            # Version will be finalized by stable-release; use Cargo.toml as-is for now
-            VERSION=""
+            TAG="${{ needs.version.outputs.new_tag }}"
+            VERSION="${TAG#v}"
           else
             # channel_only: use version from Cargo.toml as-is
             VERSION=""
           fi
 
           if [ -n "$VERSION" ]; then
+            echo "Baking version $VERSION into manifests"
             perl -i -pe "s/^version = \".*\"/version = \"$VERSION\"/" server/Cargo.toml
             node -e "
               const fs = require('fs');
