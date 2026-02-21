@@ -13,7 +13,13 @@ Scans 200K files in ~2 seconds. 20+ languages. Also ships with a standalone web 
 curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash
 ```
 
-Detects your platform (Linux, macOS, Windows via Git Bash), downloads a ~5MB binary to `~/.local/bin/`. CUDA is auto-detected on Linux for GPU-accelerated semantic search.
+Detects your platform (Linux, macOS, Windows via WSL/Git Bash), downloads a ~5MB binary to `~/.local/bin/` (Linux/macOS) or `%LOCALAPPDATA%\codescope\bin` (Windows). Semantic search included (CPU). Never modifies your PATH — tells you what to add.
+
+On Windows, use `curl.exe` (not `curl`, which is a PowerShell alias):
+
+```powershell
+curl.exe -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash
+```
 
 Or grab a binary from [Releases](https://github.com/AlrikOlson/codescope/releases) and add it to your PATH.
 
@@ -29,6 +35,12 @@ curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/s
 
 # Build from source (requires Rust 1.87+)
 curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --from-source
+
+# Build from source with CUDA GPU acceleration (auto-detected)
+curl -sSL https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.sh | bash -s -- --cuda
+
+# Windows (PowerShell — delegates to bash via WSL or Git Bash)
+irm https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.ps1 | iex
 ```
 </details>
 
@@ -120,9 +132,14 @@ All tools gain an optional `repo` parameter. With a single repo it's implicit. W
 
 Enabled by default. This is what makes `cs_search` work by concept rather than just string matching — the agent can search for "error handling" and find `try/catch` blocks, exception classes, and error middleware even if none of them contain the word "error" in their names.
 
-Uses [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) (~90MB, downloaded to `~/.cache/codescope/models/` on first use). Adds a few seconds to startup for indexing. CUDA is used automatically on Linux if available.
+Uses [all-MiniLM-L6-v2](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2) (~90MB, downloaded to `~/.cache/codescope/models/` on first use). Adds a few seconds to startup for indexing.
+
+Pre-built binaries use CPU inference. For GPU acceleration, build from source with your local CUDA toolkit:
 
 ```bash
+# Build from source with CUDA (auto-detects nvcc)
+bash setup.sh --cuda
+
 # Pre-build the semantic index during init (avoids first-query delay)
 codescope init --semantic
 
@@ -210,7 +227,7 @@ Environment:
 
 ## Troubleshooting
 
-**`codescope: command not found`** — Restart your terminal or run `source ~/.bashrc` / `source ~/.zshrc`. The binary lives in `~/.local/bin/`.
+**`codescope: command not found`** — The installer tells you what to add to your PATH. On Linux/macOS, add `~/.local/bin` to PATH. On Windows, add `%LOCALAPPDATA%\codescope\bin`. Restart your terminal after updating PATH.
 
 **Claude Code doesn't see the tools** — Run `codescope init` in your project directory, then restart Claude Code. Check that `.mcp.json` exists and contains a `codescope` entry. Run `codescope doctor` for a full diagnostic.
 
@@ -218,7 +235,9 @@ Environment:
 
 **Install fails** — Try building from source: `bash setup.sh --from-source` (requires Rust 1.87+).
 
-**WSL** — Works like regular Linux. No special steps needed.
+**WSL** — The installer detects WSL automatically and installs the Windows binary to `%LOCALAPPDATA%\codescope\bin`. Building from source (`--from-source` / `--cuda`) produces a Linux binary for use within WSL.
+
+**PowerShell `curl` fails** — In PowerShell 5.1, `curl` is an alias for `Invoke-WebRequest`. Use `curl.exe` instead, or use the PowerShell installer: `irm .../setup.ps1 | iex`.
 
 ---
 
@@ -242,14 +261,20 @@ npm run dev
 ### Building from Source
 
 ```bash
-# Server with semantic search
+# Via setup script (easiest — handles everything)
+bash setup.sh --from-source
+
+# With CUDA GPU acceleration (auto-detects nvcc)
+bash setup.sh --cuda
+
+# Manual: server with semantic search
 cargo build --release --manifest-path server/Cargo.toml --features semantic
+
+# Manual: with CUDA
+cargo build --release --manifest-path server/Cargo.toml --features semantic,cuda
 
 # Web UI
 npm ci && npm run build
-
-# Both via setup script
-cd server && ./setup.sh --from-source
 ```
 
 Binary: `server/target/release/codescope`. Web UI: `dist/`.

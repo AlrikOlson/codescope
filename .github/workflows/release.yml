@@ -285,12 +285,6 @@ jobs:
             archive: codescope-linux-x86_64.tar.gz
             use_cross: true
             features: semantic
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            archive: codescope-linux-x86_64-cuda.tar.gz
-            use_cross: false
-            features: semantic,cuda
-            cuda: true
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             archive: codescope-linux-aarch64.tar.gz
@@ -361,20 +355,8 @@ jobs:
         if: matrix.use_cross
         uses: taiki-e/install-action@cross
 
-      - name: Install CUDA toolkit
-        if: matrix.cuda
-        uses: Jimver/cuda-toolkit@v0.2.30
-        with:
-          cuda: '12.6.3'
-          method: network
-          sub-packages: '["nvcc", "cudart-dev", "nvrtc-dev"]'
-          non-cuda-sub-packages: '["libcublas-dev", "libcurand-dev"]'
-
       - name: Build binary
         shell: bash
-        env:
-          # Skip nvidia-smi probe in bindgen_cuda (no GPU in CI)
-          CUDA_COMPUTE_CAP: ${{ matrix.cuda && '89' || '' }}
         run: |
           BUILD_CMD="cargo"
           if [ "${{ matrix.use_cross }}" = "true" ]; then BUILD_CMD="cross"; fi

@@ -1,120 +1,60 @@
-# CodeScope — Windows PowerShell Install Script
-# Downloads a pre-built binary. No compilation needed.
+# CodeScope — Windows PowerShell Bootstrap
+# Finds bash (Git Bash, WSL, or MSYS2) and delegates to setup.sh.
 #
 # Usage:
 #   irm https://raw.githubusercontent.com/AlrikOlson/codescope/master/server/setup.ps1 | iex
 
 $ErrorActionPreference = "Stop"
 $Repo = "AlrikOlson/codescope"
+$Branch = "master"
+$SetupUrl = "https://raw.githubusercontent.com/$Repo/$Branch/server/setup.sh"
 
-# --- Install directory ---
-$InstallDir = Join-Path $env:LOCALAPPDATA "codescope\bin"
+# Find bash — Git for Windows, WSL, MSYS2, Cygwin
+function Find-Bash {
+    # 1. Git for Windows (most common)
+    $gitBash = "${env:ProgramFiles}\Git\bin\bash.exe"
+    if (Test-Path $gitBash) { return $gitBash }
+    $gitBash = "${env:ProgramFiles(x86)}\Git\bin\bash.exe"
+    if (Test-Path $gitBash) { return $gitBash }
 
-function Write-Info($msg)  { Write-Host "==> $msg" -ForegroundColor Cyan }
-function Write-Ok($msg)    { Write-Host " OK $msg" -ForegroundColor Green }
-function Write-Err($msg)   { Write-Host "ERR $msg" -ForegroundColor Red }
+    # 2. In PATH (MSYS2, Cygwin, or manually added)
+    $inPath = Get-Command bash -ErrorAction SilentlyContinue
+    if ($inPath) { return $inPath.Source }
 
-# --- Detect architecture ---
-function Get-Platform {
-    $arch = if ([Environment]::Is64BitOperatingSystem) {
-        if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "aarch64" } else { "x86_64" }
-    } else {
-        throw "32-bit Windows is not supported"
-    }
-    return "windows-$arch"
+    # 3. WSL
+    $wsl = Get-Command wsl -ErrorAction SilentlyContinue
+    if ($wsl) { return "wsl" }
+
+    return $null
 }
 
-# --- Download and install ---
-function Install-CodeScope {
-    $platform = Get-Platform
-    Write-Info "Installing CodeScope..."
+$bash = Find-Bash
+
+if (-not $bash) {
+    Write-Host "  ! bash not found. Install Git for Windows first:" -ForegroundColor Yellow
+    Write-Host "    https://git-scm.com/downloads/win" -ForegroundColor White
     Write-Host ""
-
-    # Fetch latest release
-    Write-Info "Checking for latest stable release..."
-    $releaseUrl = "https://api.github.com/repos/$Repo/releases/latest"
-    try {
-        $release = Invoke-RestMethod -Uri $releaseUrl -TimeoutSec 15
-    } catch {
-        Write-Err "Could not reach GitHub. Check your internet connection."
-        return
-    }
-
-    $tag = $release.tag_name
-    if (-not $tag) {
-        Write-Err "Could not find a release to download"
-        return
-    }
-
-    $archive = "codescope-${platform}.zip"
-    $url = "https://github.com/$Repo/releases/download/$tag/$archive"
-
-    Write-Info "Downloading CodeScope $tag ($platform)..."
-
-    $tmpDir = Join-Path $env:TEMP "codescope-install-$(Get-Random)"
-    New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
-    $archivePath = Join-Path $tmpDir $archive
-
-    try {
-        Invoke-WebRequest -Uri $url -OutFile $archivePath -TimeoutSec 120
-    } catch {
-        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
-        Write-Err "Download failed. Your platform ($platform) may not have a pre-built binary."
-        return
-    }
-
-    # Extract
-    $extractDir = Join-Path $tmpDir "extracted"
-    Expand-Archive -Path $archivePath -DestinationPath $extractDir -Force
-
-    # Find binary
-    $binary = Get-ChildItem -Path $extractDir -Filter "codescope.exe" -Recurse | Select-Object -First 1
-    if (-not $binary) {
-        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
-        Write-Err "Archive did not contain codescope.exe"
-        return
-    }
-
-    # Install
-    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    $dest = Join-Path $InstallDir "codescope.exe"
-    # Remove old binary first to avoid locking issues
-    Remove-Item -Force $dest -ErrorAction SilentlyContinue
-    Copy-Item -Path $binary.FullName -Destination $dest -Force
-    Write-Ok "Installed codescope.exe -> $InstallDir\"
-
-    Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+    Write-Host "  Then re-run:" -ForegroundColor White
+    Write-Host "    irm https://raw.githubusercontent.com/$Repo/$Branch/server/setup.ps1 | iex" -ForegroundColor Cyan
+    exit 1
 }
 
-# --- PATH setup ---
-function Ensure-Path {
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    if ($userPath -notlike "*$InstallDir*") {
-        [Environment]::SetEnvironmentVariable("Path", "$userPath;$InstallDir", "User")
-        $env:Path = "$env:Path;$InstallDir"
-        Write-Info "Added $InstallDir to user PATH"
-    }
+# Download and run setup.sh, forwarding all arguments
+$tmpScript = Join-Path $env:TEMP "codescope-setup-$(Get-Random).sh"
+try {
+    Invoke-WebRequest -Uri $SetupUrl -OutFile $tmpScript -TimeoutSec 30
+} catch {
+    Write-Host "  ! Failed to download setup script. Check your internet connection." -ForegroundColor Red
+    exit 1
 }
 
-# --- Main ---
-Install-CodeScope
-Ensure-Path
+$passArgs = $args -join " "
 
-Write-Host ""
-Write-Ok "CodeScope installed!"
-Write-Host ""
-Write-Host "  Next steps:"
-Write-Host ""
-Write-Host "    1. Set up a project:"
-Write-Host "       cd C:\path\to\your\project"
-Write-Host "       codescope init"
-Write-Host ""
-Write-Host "    2. Open Claude Code in that directory — CodeScope is ready to use."
-Write-Host ""
-Write-Host "  Semantic search enabled by default. Disable with --no-semantic if needed."
-Write-Host ""
-
-if (-not (Get-Command codescope -ErrorAction SilentlyContinue)) {
-    Write-Host "  NOTE: Restart your terminal to pick up the new PATH." -ForegroundColor Yellow
-    Write-Host ""
+if ($bash -eq "wsl") {
+    $wslPath = wsl wslpath -u ($tmpScript -replace '\\','/')
+    wsl bash $wslPath $passArgs
+} else {
+    & $bash $tmpScript $passArgs
 }
+
+Remove-Item -Force $tmpScript -ErrorAction SilentlyContinue
