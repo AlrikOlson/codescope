@@ -13,16 +13,30 @@ use std::time::Instant;
 // Session state (per MCP connection, tracks what the agent has already read)
 // ---------------------------------------------------------------------------
 
-/// Tracks files read during an MCP session to avoid wasting tokens re-reading.
+/// Tracks files read during an MCP session to avoid wasting tokens re-reading,
+/// plus exploration frontier and search history for smarter result ranking.
 pub struct SessionState {
     pub files_read: HashMap<String, Instant>,
     pub total_tokens_served: usize,
     pub started_at: Instant,
+    /// Recent search queries (capped at 50).
+    pub search_queries: Vec<String>,
+    /// Adjacent unread files — "frontier" of exploration.
+    pub exploration_frontier: HashSet<String>,
 }
+
+/// Maximum number of recent search queries to track.
+const MAX_SEARCH_QUERIES: usize = 50;
 
 impl Default for SessionState {
     fn default() -> Self {
-        Self { files_read: HashMap::new(), total_tokens_served: 0, started_at: Instant::now() }
+        Self {
+            files_read: HashMap::new(),
+            total_tokens_served: 0,
+            started_at: Instant::now(),
+            search_queries: Vec::new(),
+            exploration_frontier: HashSet::new(),
+        }
     }
 }
 
@@ -34,10 +48,36 @@ impl SessionState {
     pub fn record_read(&mut self, path: &str, tokens: usize) {
         self.files_read.insert(path.to_string(), Instant::now());
         self.total_tokens_served += tokens;
+        // Remove from frontier since it's now been read
+        self.exploration_frontier.remove(path);
     }
 
     pub fn seen_paths(&self) -> HashSet<String> {
         self.files_read.keys().cloned().collect()
+    }
+
+    /// Record a search query for session history.
+    pub fn record_query(&mut self, query: &str) {
+        if self.search_queries.len() >= MAX_SEARCH_QUERIES {
+            self.search_queries.remove(0);
+        }
+        self.search_queries.push(query.to_string());
+    }
+
+    /// Update exploration frontier: add import neighbors of a read file,
+    /// excluding files already read.
+    pub fn update_frontier(&mut self, read_path: &str, neighbors: &[String]) {
+        for neighbor in neighbors {
+            if !self.files_read.contains_key(neighbor) {
+                self.exploration_frontier.insert(neighbor.clone());
+            }
+        }
+        self.exploration_frontier.remove(read_path);
+    }
+
+    /// Check if a path is on the exploration frontier.
+    pub fn is_on_frontier(&self, path: &str) -> bool {
+        self.exploration_frontier.contains(path)
     }
 }
 
@@ -296,6 +336,8 @@ pub struct RepoState {
     pub scan_time_ms: u64,
     #[cfg(feature = "treesitter")]
     pub ast_index: std::sync::Arc<std::sync::RwLock<crate::ast::AstIndex>>,
+    #[cfg(feature = "treesitter")]
+    pub code_graph: std::sync::Arc<std::sync::RwLock<crate::graph::CodeGraph>>,
     #[cfg(feature = "semantic")]
     pub semantic_index: std::sync::Arc<std::sync::RwLock<Option<SemanticIndex>>>,
     #[cfg(feature = "semantic")]

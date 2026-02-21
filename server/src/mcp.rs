@@ -175,13 +175,14 @@ fn tool_definitions() -> serde_json::Value {
         {
             "name": "cs_imports",
             "annotations": ro,
-            "description": "Find import/include relationships for a file. Shows what a file imports and/or what imports it.\n\nSet transitive=true for impact analysis: finds everything that depends on the file (directly or transitively) via BFS over the import graph.",
+            "description": "Find import/include relationships for a file. Shows what a file imports and/or what imports it.\n\nSet transitive=true for impact analysis: finds everything that depends on the file (directly or transitively) via BFS over the import graph.\n\nUse edge_type to query structural code edges (call, type_ref, extends, implements) when treesitter feature is enabled.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "path": { "type": "string", "description": "Relative path from project root" },
                     "direction": { "type": "string", "enum": ["imports", "imported_by", "both"], "description": "Which direction to query. Default: both" },
                     "transitive": { "type": "boolean", "description": "If true, perform full impact analysis (BFS traversal). Default: false" },
+                    "edge_type": { "type": "string", "enum": ["import", "call", "type_ref", "extends", "all"], "description": "Type of edges to query. Default: import. Requires treesitter feature for non-import types." },
                     "max_depth": { "type": "integer", "description": "Max traversal depth for impact analysis (default: 5)" },
                     "limit": { "type": "integer", "description": "Max files to show in impact analysis (default: 50)" },
                     "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
@@ -192,17 +193,18 @@ fn tool_definitions() -> serde_json::Value {
         {
             "name": "cs_git",
             "annotations": ro,
-            "description": "Git history analysis. Actions:\n- blame: who last modified each line of a file\n- history: recent commits that touched a file\n- changed: files changed since a commit/branch/tag\n- hotspots: most frequently changed files (churn ranking)",
+            "description": "Git history analysis. Actions:\n- blame: who last modified each line of a file\n- history: recent commits that touched a file\n- changed: files changed since a commit/branch/tag\n- hotspots: most frequently changed files (churn ranking)\n- evolution: commits that modified a specific symbol's line range\n- cochange: files that frequently change together with a given file (temporal coupling)",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["blame", "history", "changed", "hotspots"], "description": "What to do (required)" },
-                    "path": { "type": "string", "description": "File path (required for blame/history)" },
+                    "action": { "type": "string", "enum": ["blame", "history", "changed", "hotspots", "evolution", "cochange"], "description": "What to do (required)" },
+                    "path": { "type": "string", "description": "File path (required for blame/history/evolution/cochange)" },
+                    "symbol": { "type": "string", "description": "Symbol name for evolution action (used to look up line range from AST index)" },
                     "since": { "type": "string", "description": "Commit/branch/tag to diff against (required for 'changed')" },
-                    "start_line": { "type": "integer", "description": "First line for blame (1-based, optional)" },
-                    "end_line": { "type": "integer", "description": "Last line for blame (1-based, optional)" },
-                    "limit": { "type": "integer", "description": "Max results (default: 10 for history, 20 for hotspots)" },
-                    "days": { "type": "integer", "description": "Look back N days for hotspots (default: 90)" },
+                    "start_line": { "type": "integer", "description": "First line for blame/evolution (1-based, optional)" },
+                    "end_line": { "type": "integer", "description": "Last line for blame/evolution (1-based, optional)" },
+                    "limit": { "type": "integer", "description": "Max results (default: 10 for history, 20 for hotspots/cochange)" },
+                    "days": { "type": "integer", "description": "Look back N days for hotspots/cochange (default: 90)" },
                     "repo": { "type": "string", "description": "Repository name (optional if single repo)" }
                 },
                 "required": ["action"]
@@ -343,6 +345,23 @@ fn handle_tool_call(
                             if let Some(ref mut s) = session {
                                 let approx_tokens = raw.len() / 4;
                                 s.record_read(path, approx_tokens);
+                                // Update exploration frontier with import neighbors
+                                let neighbors: Vec<String> = repo
+                                    .import_graph
+                                    .imports
+                                    .get(path)
+                                    .cloned()
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .chain(
+                                        repo.import_graph
+                                            .imported_by
+                                            .get(path)
+                                            .cloned()
+                                            .unwrap_or_default(),
+                                    )
+                                    .collect();
+                                s.update_frontier(path, &neighbors);
                             }
                             if mode == "stubs" {
                                 let ext = path.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
@@ -894,6 +913,75 @@ fn handle_tool_call(
         // cs_imports — imports + impact analysis
         // =================================================================
         "cs_imports" => {
+            let edge_type_str = args["edge_type"].as_str().unwrap_or("import");
+
+            // Handle non-import edge types via code graph (requires treesitter)
+            #[cfg(feature = "treesitter")]
+            if edge_type_str != "import" {
+                let repo = match resolve_repo(state, &args) {
+                    Ok(r) => r,
+                    Err(e) => return (format!("Error: {e}"), true),
+                };
+                let path = args["path"].as_str().unwrap_or("");
+                if path.is_empty() {
+                    return ("Error: 'path' is required".to_string(), true);
+                }
+                let direction = args["direction"].as_str().unwrap_or("both");
+                let limit = args["limit"].as_u64().unwrap_or(50).min(500) as usize;
+
+                let edge_kind = if edge_type_str == "all" {
+                    None
+                } else {
+                    crate::graph::EdgeKind::parse(edge_type_str)
+                };
+
+                let graph_guard = repo.code_graph.read().unwrap();
+                let mut out = format!("# {path} — {} edges\n\n", edge_type_str);
+
+                if direction == "both" || direction == "imports" {
+                    let outgoing = graph_guard.edges_from(path, edge_kind);
+                    if !outgoing.is_empty() {
+                        out.push_str(&format!("Outgoing ({} edges):\n", outgoing.len()));
+                        for (i, e) in outgoing.iter().enumerate() {
+                            if i >= limit { break; }
+                            out.push_str(&format!(
+                                "  {} -> {}::{} [{}]\n",
+                                e.from_symbol, e.to_file, e.to_symbol, e.kind.label()
+                            ));
+                        }
+                        out.push('\n');
+                    }
+                }
+
+                if direction == "both" || direction == "imported_by" {
+                    let incoming = graph_guard.edges_to(path, edge_kind);
+                    if !incoming.is_empty() {
+                        out.push_str(&format!("Incoming ({} edges):\n", incoming.len()));
+                        for (i, e) in incoming.iter().enumerate() {
+                            if i >= limit { break; }
+                            out.push_str(&format!(
+                                "  {}::{} -> {} [{}]\n",
+                                e.from_file, e.from_symbol, e.to_symbol, e.kind.label()
+                            ));
+                        }
+                        out.push('\n');
+                    }
+                }
+
+                if out.lines().count() <= 2 {
+                    return (format!("No {edge_type_str} edges found for '{path}'"), false);
+                }
+
+                return (out, false);
+            }
+            #[cfg(not(feature = "treesitter"))]
+            if edge_type_str != "import" {
+                return (
+                    format!("Error: edge_type '{edge_type_str}' requires the treesitter feature. Build with --features treesitter to enable structural edges."),
+                    true,
+                );
+            }
+
             let transitive = args["transitive"].as_bool().unwrap_or(false);
             if transitive {
                 // Impact analysis (was cs_impact)
@@ -1314,12 +1402,23 @@ fn handle_tool_call(
                 }
             }
 
+            // Record search query in session
+            if let Some(ref mut s) = session {
+                s.record_query(raw_query);
+            }
+
             // Unified scoring — adaptive weights with score normalization
             let (name_w, grep_w) = if terms.len() > 1 { (0.4, 0.6) } else { (0.6, 0.4) };
             let mut ranked: Vec<FindResult> = merged.into_values().collect();
 
             let max_name = ranked.iter().map(|r| r.name_score).fold(0.0f64, f64::max).max(1.0);
             let max_grep = ranked.iter().map(|r| r.grep_score).fold(0.0f64, f64::max).max(1.0);
+
+            // Build frontier set for boosting
+            let frontier_set: HashSet<String> = session
+                .as_ref()
+                .map(|s| s.exploration_frontier.clone())
+                .unwrap_or_default();
 
             ranked.sort_by(|a, b| {
                 let norm_a =
@@ -1328,8 +1427,11 @@ fn handle_tool_call(
                     (b.name_score / max_name) * name_w + (b.grep_score / max_grep) * grep_w;
                 let boost_a = if a.name_score > 0.0 && a.grep_count > 0 { 1.25 } else { 1.0 };
                 let boost_b = if b.name_score > 0.0 && b.grep_count > 0 { 1.25 } else { 1.0 };
-                (norm_b * boost_b)
-                    .partial_cmp(&(norm_a * boost_a))
+                // Frontier boost: files adjacent to already-read files get 1.1x
+                let frontier_a = if frontier_set.contains(&a.display_path) { 1.1 } else { 1.0 };
+                let frontier_b = if frontier_set.contains(&b.display_path) { 1.1 } else { 1.0 };
+                (norm_b * boost_b * frontier_b)
+                    .partial_cmp(&(norm_a * boost_a * frontier_a))
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
             ranked.truncate(file_limit);
@@ -1461,12 +1563,51 @@ fn handle_tool_call(
             let has_semantic = false;
 
             let query_time = start.elapsed().as_millis();
+
+            // Compute confidence and coverage for structured output
+            let top_score = ranked
+                .first()
+                .map(|r| r.name_score.max(r.grep_score))
+                .unwrap_or(0.0);
+            let confidence = if ranked.len() >= 3 && top_score > 10.0 {
+                "high"
+            } else if !ranked.is_empty() && top_score > 3.0 {
+                "medium"
+            } else {
+                "low"
+            };
+            let coverage = if terms_lower.len() <= 1 {
+                "full"
+            } else {
+                let best_match = ranked
+                    .first()
+                    .map(|r| r.terms_matched)
+                    .unwrap_or(0);
+                if best_match == terms_lower.len() {
+                    "full"
+                } else if best_match > 0 {
+                    "partial"
+                } else {
+                    "none"
+                }
+            };
+            let frontier_count = frontier_set.len();
+
             let mut out = format!(
-                "Found {} results for \"{}\" ({query_time}ms{})\n\n",
+                "Found {} results for \"{}\" ({query_time}ms{})\nConfidence: {confidence} | Coverage: {coverage}{}",
                 ranked.len(),
                 raw_query,
-                if has_semantic { ", semantic+keyword" } else { "" }
+                if has_semantic { ", semantic+keyword" } else { "" },
+                if frontier_count > 0 {
+                    format!(" | Frontier: {} unexplored neighbor{}", frontier_count, if frontier_count == 1 { "" } else { "s" })
+                } else {
+                    String::new()
+                },
             );
+            if confidence == "low" && !ranked.is_empty() {
+                out.push_str("\nTip: Try more specific terms or use cs_grep for exact pattern matching.");
+            }
+            out.push_str("\n\n");
 
             // Module results
             if !all_modules.is_empty() {
@@ -1681,7 +1822,110 @@ fn handle_tool_call(
                         Err(e) => (format!("Error: {e}"), true),
                     }
                 }
-                _ => (format!("Error: Unknown cs_git action '{action}'. Use: blame, history, changed, hotspots"), true),
+                "evolution" => {
+                    let repo = match resolve_repo(state, &args) {
+                        Ok(r) => r,
+                        Err(e) => return (format!("Error: {e}"), true),
+                    };
+                    let path = args["path"].as_str().unwrap_or("");
+                    if path.is_empty() {
+                        return ("Error: 'path' is required for evolution".to_string(), true);
+                    }
+                    let limit = args["limit"].as_u64().unwrap_or(10).min(100) as usize;
+
+                    // Resolve start_line/end_line: prefer explicit params, fall back to AST symbol lookup
+                    #[allow(unused_mut)]
+                    let mut start_line = args["start_line"].as_u64().map(|n| n as usize);
+                    #[allow(unused_mut)]
+                    let mut end_line = args["end_line"].as_u64().map(|n| n as usize);
+
+                    #[cfg(feature = "treesitter")]
+                    if start_line.is_none() || end_line.is_none() {
+                        if let Some(symbol_name) = args["symbol"].as_str() {
+                            let ast_guard = repo.ast_index.read().unwrap();
+                            if let Some(file_ast) = ast_guard.get(path) {
+                                let matches = file_ast.find(symbol_name);
+                                if let Some(sym) = matches.first() {
+                                    start_line = Some(sym.start_line);
+                                    end_line = Some(sym.end_line);
+                                }
+                            }
+                        }
+                    }
+
+                    let start = match start_line {
+                        Some(s) => s,
+                        None => return ("Error: 'start_line' is required (or provide 'symbol' with treesitter feature)".to_string(), true),
+                    };
+                    let end = match end_line {
+                        Some(e) => e,
+                        None => return ("Error: 'end_line' is required (or provide 'symbol' with treesitter feature)".to_string(), true),
+                    };
+
+                    match crate::git::symbol_evolution(&repo.root, path, start, end, limit) {
+                        Ok(commits) => {
+                            if commits.is_empty() {
+                                return (format!("No commits found touching {path} lines {start}-{end}"), false);
+                            }
+                            let mut out = format!("# {path} (lines {start}-{end}) — {} commits\n\n", commits.len());
+                            for c in &commits {
+                                out.push_str(&format!(
+                                    "{} | {} | {} | {}\n",
+                                    c.hash, c.author, c.date, c.message
+                                ));
+                                if c.files_changed.len() > 1 {
+                                    let others: Vec<&str> = c
+                                        .files_changed
+                                        .iter()
+                                        .filter(|f| f.as_str() != path)
+                                        .map(|f| f.as_str())
+                                        .take(10)
+                                        .collect();
+                                    if !others.is_empty() {
+                                        out.push_str(&format!("  also: {}\n", others.join(", ")));
+                                    }
+                                }
+                            }
+                            (out, false)
+                        }
+                        Err(e) => (format!("Error: {e}"), true),
+                    }
+                }
+                "cochange" => {
+                    let repo = match resolve_repo(state, &args) {
+                        Ok(r) => r,
+                        Err(e) => return (format!("Error: {e}"), true),
+                    };
+                    let path = args["path"].as_str().unwrap_or("");
+                    if path.is_empty() {
+                        return ("Error: 'path' is required for cochange".to_string(), true);
+                    }
+                    let days = args["days"].as_u64().unwrap_or(90).min(365) as usize;
+                    let limit = args["limit"].as_u64().unwrap_or(20).min(200) as usize;
+
+                    match crate::git::cochanged_files(&repo.root, path, days, limit) {
+                        Ok(entries) => {
+                            if entries.is_empty() {
+                                return (format!("No cochanged files found for '{path}' in the last {days} days"), false);
+                            }
+                            let mut out = format!("# {path} — temporal coupling (last {days} days)\n\n");
+                            out.push_str(&format!("{:<4} {:<8} {:<8} {}\n", "Rank", "Count", "Ratio", "File"));
+                            out.push_str(&format!("{}\n", "-".repeat(60)));
+                            for (i, e) in entries.iter().enumerate() {
+                                out.push_str(&format!(
+                                    "{:<4} {:<8} {:<8.2} {}\n",
+                                    i + 1,
+                                    e.cochange_count,
+                                    e.coupling_ratio,
+                                    e.path
+                                ));
+                            }
+                            (out, false)
+                        }
+                        Err(e) => (format!("Error: {e}"), true),
+                    }
+                }
+                _ => (format!("Error: Unknown cs_git action '{action}'. Use: blame, history, changed, hotspots, evolution, cochange"), true),
             }
         }
 
@@ -1985,7 +2229,9 @@ pub fn dispatch_jsonrpc(
                 "result": {
                     "protocolVersion": negotiated,
                     "capabilities": {
-                        "tools": { "listChanged": true }
+                        "tools": { "listChanged": true },
+                        "prompts": { "listChanged": false },
+                        "resources": { "listChanged": false }
                     },
                     "serverInfo": {
                         "name": "codescope",
@@ -2038,6 +2284,39 @@ pub fn dispatch_jsonrpc(
                 }
             })
         }
+        "prompts/list" => {
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "prompts": prompts_list()
+                }
+            })
+        }
+        "prompts/get" => {
+            let prompt_name = msg["params"]["name"].as_str().unwrap_or("");
+            let args = msg["params"].get("arguments").cloned().unwrap_or(serde_json::json!({}));
+            let state_r = state.read().unwrap();
+            match get_prompt(&state_r, prompt_name, &args) {
+                Ok(result) => serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+                Err(e) => serde_json::json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32602, "message": e } }),
+            }
+        }
+        "resources/list" => {
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": { "resources": resources_list() }
+            })
+        }
+        "resources/read" => {
+            let uri = msg["params"]["uri"].as_str().unwrap_or("");
+            let state_r = state.read().unwrap();
+            match read_resource(&state_r, uri) {
+                Ok(result) => serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+                Err(e) => serde_json::json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32602, "message": e } }),
+            }
+        }
         "ping" => {
             serde_json::json!({
                 "jsonrpc": "2.0",
@@ -2055,6 +2334,143 @@ pub fn dispatch_jsonrpc(
     };
 
     Some(response)
+}
+
+// ---------------------------------------------------------------------------
+// MCP prompts and resources
+// ---------------------------------------------------------------------------
+
+fn prompts_list() -> serde_json::Value {
+    serde_json::json!([
+        {
+            "name": "implement-feature",
+            "description": "Get context for implementing a new feature",
+            "arguments": [
+                { "name": "description", "description": "Feature description", "required": true }
+            ]
+        },
+        {
+            "name": "debug-error",
+            "description": "Get context for debugging an error",
+            "arguments": [
+                { "name": "error_text", "description": "Error message or stack trace", "required": true },
+                { "name": "file_path", "description": "File where error occurred", "required": false }
+            ]
+        },
+        {
+            "name": "write-tests",
+            "description": "Get context for writing tests for a file",
+            "arguments": [
+                { "name": "file_path", "description": "File to write tests for", "required": true }
+            ]
+        },
+        {
+            "name": "review-code",
+            "description": "Review code changes with project context",
+            "arguments": [
+                { "name": "diff", "description": "Code diff to review", "required": false }
+            ]
+        }
+    ])
+}
+
+fn get_prompt(
+    state: &ServerState,
+    name: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let repo = state.default_repo();
+    let conventions = crate::conventions::mine_conventions(&repo.all_files);
+    let conv_text = crate::conventions::format_conventions(&conventions);
+
+    match name {
+        "implement-feature" => {
+            let desc = args["description"].as_str().unwrap_or("");
+            Ok(serde_json::json!({
+                "description": format!("Context for implementing: {desc}"),
+                "messages": [{
+                    "role": "user",
+                    "content": { "type": "text", "text": format!(
+                        "I want to implement: {desc}\n\nProject conventions:\n{conv_text}\n\nPlease help me implement this feature following the project's conventions."
+                    )}
+                }]
+            }))
+        }
+        "debug-error" => {
+            let error_text = args["error_text"].as_str().unwrap_or("");
+            let file_path = args["file_path"].as_str().unwrap_or("unknown");
+            Ok(serde_json::json!({
+                "description": format!("Context for debugging: {error_text}"),
+                "messages": [{
+                    "role": "user",
+                    "content": { "type": "text", "text": format!(
+                        "I'm debugging this error:\n```\n{error_text}\n```\n\nFile: {file_path}\n\nProject conventions:\n{conv_text}\n\nPlease help me debug this error."
+                    )}
+                }]
+            }))
+        }
+        "write-tests" => {
+            let file_path = args["file_path"].as_str().unwrap_or("");
+            Ok(serde_json::json!({
+                "description": format!("Context for writing tests: {file_path}"),
+                "messages": [{
+                    "role": "user",
+                    "content": { "type": "text", "text": format!(
+                        "I want to write tests for: {file_path}\n\nProject conventions:\n{conv_text}\n\nPlease help me write tests following the project's testing conventions."
+                    )}
+                }]
+            }))
+        }
+        "review-code" => {
+            let diff = args["diff"].as_str().unwrap_or("(no diff provided)");
+            Ok(serde_json::json!({
+                "description": "Code review with project context",
+                "messages": [{
+                    "role": "user",
+                    "content": { "type": "text", "text": format!(
+                        "Please review this code change:\n```\n{diff}\n```\n\nProject conventions:\n{conv_text}\n\nCheck for convention violations and potential issues."
+                    )}
+                }]
+            }))
+        }
+        _ => Err(format!("Unknown prompt: {name}")),
+    }
+}
+
+fn resources_list() -> serde_json::Value {
+    serde_json::json!([
+        { "uri": "conventions://summary", "name": "Project Conventions", "mimeType": "text/plain" },
+        { "uri": "conventions://error-handling", "name": "Error Handling Conventions", "mimeType": "text/plain" },
+        { "uri": "conventions://naming", "name": "Naming Conventions", "mimeType": "text/plain" },
+        { "uri": "conventions://testing", "name": "Testing Conventions", "mimeType": "text/plain" }
+    ])
+}
+
+fn read_resource(
+    state: &ServerState,
+    uri: &str,
+) -> Result<serde_json::Value, String> {
+    let repo = state.default_repo();
+    let conventions = crate::conventions::mine_conventions(&repo.all_files);
+    let text = match uri {
+        "conventions://summary" => crate::conventions::format_conventions(&conventions),
+        "conventions://error-handling" => {
+            serde_json::to_string_pretty(&conventions.error_handling)
+                .unwrap_or_else(|_| "serialization error".to_string())
+        }
+        "conventions://naming" => {
+            serde_json::to_string_pretty(&conventions.naming)
+                .unwrap_or_else(|_| "serialization error".to_string())
+        }
+        "conventions://testing" => {
+            serde_json::to_string_pretty(&conventions.testing)
+                .unwrap_or_else(|_| "serialization error".to_string())
+        }
+        _ => return Err(format!("Unknown resource: {uri}")),
+    };
+    Ok(serde_json::json!({
+        "contents": [{ "uri": uri, "mimeType": "text/plain", "text": text }]
+    }))
 }
 
 // ---------------------------------------------------------------------------

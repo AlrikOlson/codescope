@@ -25,7 +25,10 @@ pub mod api;
 #[cfg(feature = "treesitter")]
 pub mod ast;
 pub mod auth;
+#[cfg(feature = "treesitter")]
+pub mod graph;
 pub mod budget;
+pub mod conventions;
 pub mod fuzzy;
 pub mod git;
 pub mod init;
@@ -248,6 +251,17 @@ pub fn scan_repo_with_options(
         std::sync::Arc::new(std::sync::RwLock::new(idx))
     };
 
+    #[cfg(feature = "treesitter")]
+    let code_graph = {
+        let ast_guard = ast_index.read().unwrap();
+        let file_pairs: Vec<(String, String)> = all_files
+            .iter()
+            .map(|f| (f.rel_path.clone(), f.abs_path.to_string_lossy().to_string()))
+            .collect();
+        let g = graph::build_code_graph(&ast_guard, &import_graph, &file_pairs);
+        std::sync::Arc::new(std::sync::RwLock::new(g))
+    };
+
     #[cfg(feature = "semantic")]
     let semantic_index = std::sync::Arc::new(std::sync::RwLock::new(None));
     #[cfg(feature = "semantic")]
@@ -280,6 +294,8 @@ pub fn scan_repo_with_options(
         scan_time_ms,
         #[cfg(feature = "treesitter")]
         ast_index,
+        #[cfg(feature = "treesitter")]
+        code_graph,
         #[cfg(feature = "semantic")]
         semantic_index,
         #[cfg(feature = "semantic")]

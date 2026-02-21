@@ -283,6 +283,13 @@ pub fn changed_since(repo_root: &Path, since: &str) -> Result<Vec<ChangedFile>, 
     Ok(results)
 }
 
+#[derive(Serialize)]
+pub struct CochangeEntry {
+    pub path: String,
+    pub cochange_count: usize,
+    pub coupling_ratio: f64,
+}
+
 /// Most frequently changed files (churn ranking) within recent N days.
 pub fn hot_files(repo_root: &Path, limit: usize, days: usize) -> Result<Vec<HotFile>, String> {
     let repo = Repository::open(repo_root).map_err(|e| format!("Failed to open repo: {e}"))?;
@@ -346,6 +353,210 @@ pub fn hot_files(repo_root: &Path, limit: usize, days: usize) -> Result<Vec<HotF
     Ok(sorted)
 }
 
+/// Commits that changed lines within a specific symbol's range.
+/// Walks commits that touch `rel_path`, then filters to those where
+/// diff hunks overlap the `[start_line, end_line]` range.
+pub fn symbol_evolution(
+    repo_root: &Path,
+    rel_path: &str,
+    start_line: usize,
+    end_line: usize,
+    limit: usize,
+) -> Result<Vec<CommitInfo>, String> {
+    let repo = Repository::open(repo_root).map_err(|e| format!("Failed to open repo: {e}"))?;
+
+    let mut revwalk = repo.revwalk().map_err(|e| format!("Revwalk failed: {e}"))?;
+    revwalk.push_head().map_err(|e| format!("push_head failed: {e}"))?;
+    revwalk.set_sorting(Sort::TIME).map_err(|e| format!("set_sorting failed: {e}"))?;
+
+    let mut results = Vec::new();
+
+    for oid in revwalk {
+        if results.len() >= limit {
+            break;
+        }
+        let oid = match oid {
+            Ok(o) => o,
+            Err(_) => continue,
+        };
+        let commit = match repo.find_commit(oid) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let tree = match commit.tree() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let parent_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
+
+        let diff = match repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+
+        let mut touches_file = false;
+        let mut overlaps_range = false;
+        let mut files_changed = Vec::new();
+
+        // First pass: check if this commit touches the file at all
+        diff.foreach(
+            &mut |delta, _| {
+                if let Some(path) = delta.new_file().path().and_then(|p| p.to_str()) {
+                    files_changed.push(path.to_string());
+                    if path == rel_path {
+                        touches_file = true;
+                    }
+                }
+                true
+            },
+            None,
+            None,
+            None,
+        )
+        .ok();
+
+        if !touches_file {
+            continue;
+        }
+
+        // Second pass: check hunk line ranges for overlap with [start_line, end_line]
+        diff.foreach(
+            &mut |_delta, _| true,
+            None,
+            Some(&mut |delta, hunk| {
+                let path = delta.new_file().path().and_then(|p| p.to_str()).unwrap_or("");
+                if path != rel_path {
+                    return true;
+                }
+                let hunk_start = hunk.new_start() as usize;
+                let hunk_end = hunk_start + hunk.new_lines().max(1) as usize - 1;
+                // Check overlap: ranges overlap if start_a <= end_b && start_b <= end_a
+                if hunk_start <= end_line && start_line <= hunk_end {
+                    overlaps_range = true;
+                }
+                true
+            }),
+            None,
+        )
+        .ok();
+
+        if !overlaps_range {
+            continue;
+        }
+
+        let sig = commit.author();
+        results.push(CommitInfo {
+            hash: oid.to_string()[..8].to_string(),
+            author: sig.name().unwrap_or("unknown").to_string(),
+            date: format_git_time(sig.when()),
+            message: commit.message().unwrap_or("").lines().next().unwrap_or("").to_string(),
+            files_changed,
+        });
+    }
+
+    Ok(results)
+}
+
+/// Files that frequently change together with the given file (temporal coupling).
+/// Walks recent commits (within `days`), counts how many commits touch both
+/// `rel_path` and each other file. Computes `coupling_ratio = cochange / min(commits_a, commits_b)`.
+pub fn cochanged_files(
+    repo_root: &Path,
+    rel_path: &str,
+    days: usize,
+    limit: usize,
+) -> Result<Vec<CochangeEntry>, String> {
+    let repo = Repository::open(repo_root).map_err(|e| format!("Failed to open repo: {e}"))?;
+
+    let mut revwalk = repo.revwalk().map_err(|e| format!("Revwalk failed: {e}"))?;
+    revwalk.push_head().map_err(|e| format!("push_head failed: {e}"))?;
+    revwalk.set_sorting(Sort::TIME).map_err(|e| format!("set_sorting failed: {e}"))?;
+
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+        as i64;
+    let cutoff = now - (days as i64) * 86400;
+
+    // Track per-file commit counts and cochange counts with the target file
+    let mut file_commits: HashMap<String, usize> = HashMap::new();
+    let mut cochange_counts: HashMap<String, usize> = HashMap::new();
+    let mut target_commits: usize = 0;
+
+    for oid in revwalk {
+        let oid = match oid {
+            Ok(o) => o,
+            Err(_) => continue,
+        };
+        let commit = match repo.find_commit(oid) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        if commit.time().seconds() < cutoff {
+            break;
+        }
+
+        let tree = match commit.tree() {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let parent_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
+
+        let diff = match repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+
+        let mut commit_files: Vec<String> = Vec::new();
+        let mut touches_target = false;
+
+        diff.foreach(
+            &mut |delta, _| {
+                if let Some(path) = delta.new_file().path().and_then(|p| p.to_str()) {
+                    commit_files.push(path.to_string());
+                    if path == rel_path {
+                        touches_target = true;
+                    }
+                }
+                true
+            },
+            None,
+            None,
+            None,
+        )
+        .ok();
+
+        // Count commits per file
+        for f in &commit_files {
+            *file_commits.entry(f.clone()).or_default() += 1;
+        }
+
+        if touches_target {
+            target_commits += 1;
+            for f in &commit_files {
+                if f != rel_path {
+                    *cochange_counts.entry(f.clone()).or_default() += 1;
+                }
+            }
+        }
+    }
+
+    let mut entries: Vec<CochangeEntry> = cochange_counts
+        .into_iter()
+        .map(|(path, cochange_count)| {
+            let other_commits = file_commits.get(&path).copied().unwrap_or(1);
+            let min_commits = target_commits.min(other_commits).max(1);
+            let coupling_ratio = cochange_count as f64 / min_commits as f64;
+            CochangeEntry { path, cochange_count, coupling_ratio }
+        })
+        .collect();
+
+    entries.sort_by(|a, b| b.cochange_count.cmp(&a.cochange_count));
+    entries.truncate(limit);
+
+    Ok(entries)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,5 +584,94 @@ mod tests {
         // Jan=31, Feb=29 (2000 is leap) => 10957+31+29 = 11017
         let (y, m, d) = days_to_ymd(11017);
         assert_eq!((y, m, d), (2000, 3, 1), "day 11017 should be 2000-03-01");
+    }
+
+    /// Helper: create a temp git repo, commit files, return the temp dir.
+    fn make_temp_repo() -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+
+        // git init
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+
+        // Create two files
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn main() {\n    println!(\"hello\");\n}\n")
+            .unwrap();
+        std::fs::write(root.join("src/lib.rs"), "pub fn greet() -> &'static str {\n    \"hi\"\n}\n")
+            .unwrap();
+
+        // Commit 1: both files
+        std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["-c", "user.email=test@test.com", "-c", "user.name=Test", "commit", "-m", "Initial commit"])
+            .current_dir(root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+
+        // Modify both files again
+        std::fs::write(root.join("src/main.rs"), "fn main() {\n    println!(\"world\");\n}\n")
+            .unwrap();
+        std::fs::write(root.join("src/lib.rs"), "pub fn greet() -> &'static str {\n    \"hello\"\n}\n")
+            .unwrap();
+
+        // Commit 2: both files again
+        std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["-c", "user.email=test@test.com", "-c", "user.name=Test", "commit", "-m", "Update both files"])
+            .current_dir(root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+
+        dir
+    }
+
+    #[test]
+    fn test_cochanged_files_basic() {
+        let dir = make_temp_repo();
+        let root = dir.path();
+
+        let result = cochanged_files(root, "src/main.rs", 90, 20).unwrap();
+        // Both commits touched main.rs and lib.rs together, so lib.rs should appear
+        assert!(!result.is_empty(), "Expected at least one cochanged file");
+        let lib_entry = result.iter().find(|e| e.path == "src/lib.rs");
+        assert!(lib_entry.is_some(), "Expected src/lib.rs as cochanged file");
+        let entry = lib_entry.unwrap();
+        assert!(entry.cochange_count >= 1, "Expected cochange_count >= 1");
+        assert!(entry.coupling_ratio > 0.0, "Expected positive coupling ratio");
+    }
+
+    #[test]
+    fn test_symbol_evolution_basic() {
+        let dir = make_temp_repo();
+        let root = dir.path();
+
+        // The `main` function spans lines 1-3. Both commits modified it.
+        let result = symbol_evolution(root, "src/main.rs", 1, 3, 10).unwrap();
+        assert!(!result.is_empty(), "Expected at least one commit touching main function lines");
+        // The most recent commit modified line 2 ("hello" -> "world")
+        assert!(result[0].message.contains("Update"), "Expected update commit: {}", result[0].message);
     }
 }

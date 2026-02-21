@@ -213,6 +213,22 @@ fn process_changes(paths: &[PathBuf], state: &Arc<RwLock<ServerState>>) {
             repo.search_files = search_files;
             repo.search_modules = search_modules;
 
+            // Rebuild code graph (depends on global symbol index so full rebuild)
+            #[cfg(feature = "treesitter")]
+            {
+                let ast_guard = repo.ast_index.read().unwrap();
+                let file_pairs: Vec<(String, String)> = repo
+                    .all_files
+                    .iter()
+                    .map(|f| {
+                        (f.rel_path.clone(), f.abs_path.to_string_lossy().to_string())
+                    })
+                    .collect();
+                let new_graph =
+                    crate::graph::build_code_graph(&ast_guard, &repo.import_graph, &file_pairs);
+                *repo.code_graph.write().unwrap() = new_graph;
+            }
+
             tracing::info!(
                 repo = repo_name.as_str(),
                 updated = changed_count,

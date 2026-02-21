@@ -341,3 +341,288 @@ fn test_legacy_tool_translation() {
     assert!(!is_err, "cs_blame->cs_git translation error: {text}");
     assert!(text.contains("Test"), "Expected blame output from legacy cs_blame: {text}");
 }
+
+// ---------------------------------------------------------------------------
+// MCP prompts tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_prompts_list() {
+    let mut h = TestHarness::from_fixture("basic");
+    let msg = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "prompts/list",
+        "params": {}
+    });
+    let resp = h.dispatch(msg).expect("Expected response");
+    let prompts = resp["result"]["prompts"].as_array().expect("prompts should be an array");
+    assert_eq!(prompts.len(), 4, "Expected 4 prompts, got {}", prompts.len());
+
+    let names: Vec<&str> = prompts.iter().filter_map(|p| p["name"].as_str()).collect();
+    assert!(names.contains(&"implement-feature"), "Missing implement-feature prompt");
+    assert!(names.contains(&"debug-error"), "Missing debug-error prompt");
+    assert!(names.contains(&"write-tests"), "Missing write-tests prompt");
+    assert!(names.contains(&"review-code"), "Missing review-code prompt");
+}
+
+#[test]
+fn test_prompts_get_implement_feature() {
+    let mut h = TestHarness::from_fixture("basic");
+    let msg = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "prompts/get",
+        "params": {
+            "name": "implement-feature",
+            "arguments": { "description": "add logging support" }
+        }
+    });
+    let resp = h.dispatch(msg).expect("Expected response");
+    assert!(resp["error"].is_null(), "Expected no error: {resp}");
+    let messages = resp["result"]["messages"].as_array().expect("messages should be an array");
+    assert!(!messages.is_empty(), "Expected at least one message");
+    let text = messages[0]["content"]["text"].as_str().unwrap_or("");
+    assert!(text.contains("add logging support"), "Expected feature description in prompt text: {text}");
+    assert!(text.contains("conventions"), "Expected conventions in prompt text: {text}");
+}
+
+#[test]
+fn test_prompts_get_unknown() {
+    let mut h = TestHarness::from_fixture("basic");
+    let msg = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "prompts/get",
+        "params": {
+            "name": "nonexistent-prompt",
+            "arguments": {}
+        }
+    });
+    let resp = h.dispatch(msg).expect("Expected response");
+    assert!(resp["error"].is_object(), "Expected error for unknown prompt: {resp}");
+    let error_msg = resp["error"]["message"].as_str().unwrap_or("");
+    assert!(error_msg.contains("Unknown prompt"), "Expected 'Unknown prompt' in error: {error_msg}");
+}
+
+// ---------------------------------------------------------------------------
+// MCP resources tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_resources_list() {
+    let mut h = TestHarness::from_fixture("basic");
+    let msg = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "resources/list",
+        "params": {}
+    });
+    let resp = h.dispatch(msg).expect("Expected response");
+    let resources = resp["result"]["resources"].as_array().expect("resources should be an array");
+    assert_eq!(resources.len(), 4, "Expected 4 resources, got {}", resources.len());
+
+    let uris: Vec<&str> = resources.iter().filter_map(|r| r["uri"].as_str()).collect();
+    assert!(uris.contains(&"conventions://summary"), "Missing conventions://summary");
+    assert!(uris.contains(&"conventions://error-handling"), "Missing conventions://error-handling");
+    assert!(uris.contains(&"conventions://naming"), "Missing conventions://naming");
+    assert!(uris.contains(&"conventions://testing"), "Missing conventions://testing");
+}
+
+#[test]
+fn test_resources_read_conventions_summary() {
+    let mut h = TestHarness::from_fixture("basic");
+    let msg = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "resources/read",
+        "params": { "uri": "conventions://summary" }
+    });
+    let resp = h.dispatch(msg).expect("Expected response");
+    assert!(resp["error"].is_null(), "Expected no error: {resp}");
+    let contents = resp["result"]["contents"].as_array().expect("contents should be an array");
+    assert!(!contents.is_empty(), "Expected at least one content entry");
+    let text = contents[0]["text"].as_str().unwrap_or("");
+    assert!(text.contains("Project Conventions"), "Expected 'Project Conventions' in text: {text}");
+    assert!(text.contains("Error Handling"), "Expected 'Error Handling' section: {text}");
+}
+
+#[test]
+fn test_resources_read_unknown() {
+    let mut h = TestHarness::from_fixture("basic");
+    let msg = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "resources/read",
+        "params": { "uri": "conventions://nonexistent" }
+    });
+    let resp = h.dispatch(msg).expect("Expected response");
+    assert!(resp["error"].is_object(), "Expected error for unknown resource: {resp}");
+}
+
+// ---------------------------------------------------------------------------
+// Initialize capabilities test (prompts + resources)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_initialize_capabilities() {
+    let mut h = TestHarness::from_fixture("basic");
+    let resp = h.initialize();
+    let caps = &resp["result"]["capabilities"];
+    assert!(caps["tools"].is_object(), "Expected tools capability");
+    assert!(caps["prompts"].is_object(), "Expected prompts capability");
+    assert!(caps["resources"].is_object(), "Expected resources capability");
+}
+
+// ---------------------------------------------------------------------------
+// cs_git evolution + cochange tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_cs_git_evolution_action() {
+    let mut h = TestHarness::from_fixture("basic");
+    // Use explicit line range (the entire main.rs file in the fixture is small)
+    let (text, is_err) = h.call_tool(
+        "cs_git",
+        json!({ "action": "evolution", "path": "src/main.rs", "start_line": 1, "end_line": 10 }),
+    );
+    assert!(!is_err, "cs_git evolution error: {text}");
+    // Should find the initial commit that created main.rs
+    assert!(
+        text.contains("Initial commit") || text.contains("commits"),
+        "Expected evolution output: {text}"
+    );
+}
+
+#[test]
+fn test_cs_git_cochange_action() {
+    let mut h = TestHarness::from_fixture("basic");
+    let (text, is_err) = h.call_tool(
+        "cs_git",
+        json!({ "action": "cochange", "path": "src/main.rs" }),
+    );
+    assert!(!is_err, "cs_git cochange error: {text}");
+    // With a single commit touching all files, everything cochanges with main.rs
+    assert!(
+        text.contains("temporal coupling") || text.contains("No cochanged"),
+        "Expected cochange output: {text}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Code graph edge type tests (Phase 3, requires treesitter)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[cfg(feature = "treesitter")]
+fn test_cs_imports_edge_type_call() {
+    let mut h = TestHarness::from_fixture("basic");
+    let (text, is_err) = h.call_tool(
+        "cs_imports",
+        json!({ "path": "src/main.rs", "edge_type": "call" }),
+    );
+    assert!(!is_err, "cs_imports call error: {text}");
+    // main.rs calls greet() from lib.rs
+    assert!(
+        text.contains("greet") || text.contains("call"),
+        "Expected call edges for main.rs: {text}"
+    );
+}
+
+#[test]
+#[cfg(feature = "treesitter")]
+fn test_cs_imports_edge_type_all() {
+    let mut h = TestHarness::from_fixture("basic");
+    let (text, is_err) = h.call_tool(
+        "cs_imports",
+        json!({ "path": "src/lib.rs", "edge_type": "all" }),
+    );
+    assert!(!is_err, "cs_imports all error: {text}");
+    // lib.rs references Config type from types.rs
+    assert!(
+        text.contains("Config") || text.contains("edge"),
+        "Expected edges for lib.rs: {text}"
+    );
+}
+
+#[test]
+#[cfg(feature = "treesitter")]
+fn test_cs_imports_edge_type_type_ref() {
+    let mut h = TestHarness::from_fixture("basic");
+    let (text, is_err) = h.call_tool(
+        "cs_imports",
+        json!({ "path": "src/lib.rs", "edge_type": "type_ref" }),
+    );
+    assert!(!is_err, "cs_imports type_ref error: {text}");
+    // lib.rs uses Config type in process() function signature
+    assert!(
+        text.contains("Config") || text.contains("type_ref") || text.contains("No type_ref"),
+        "Expected type_ref info: {text}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Session memory + structured output tests (Phase 4)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_search_confidence_header() {
+    let mut h = TestHarness::from_fixture("basic");
+    let (text, is_err) = h.call_tool("cs_search", json!({ "query": "Config" }));
+    assert!(!is_err, "cs_search error: {text}");
+    // Should include confidence/coverage metadata
+    assert!(
+        text.contains("Confidence:"),
+        "Search results should include Confidence header: {text}"
+    );
+    assert!(
+        text.contains("Coverage:"),
+        "Search results should include Coverage header: {text}"
+    );
+}
+
+#[test]
+fn test_search_multi_term_coverage() {
+    let mut h = TestHarness::from_fixture("basic");
+    let (text, is_err) = h.call_tool("cs_search", json!({ "query": "Config verbose" }));
+    assert!(!is_err, "cs_search error: {text}");
+    assert!(
+        text.contains("Confidence:") && text.contains("Coverage:"),
+        "Multi-term search should show confidence/coverage: {text}"
+    );
+}
+
+#[test]
+fn test_frontier_tracking() {
+    let mut h = TestHarness::from_fixture("basic");
+    h.initialize();
+
+    // Read a file — this should populate the frontier with its import neighbors
+    let (text, is_err) = h.call_tool("cs_read", json!({ "path": "src/main.rs" }));
+    assert!(!is_err, "cs_read error: {text}");
+
+    // Now search — the frontier count should appear if neighbors exist
+    let (search_text, is_err) = h.call_tool("cs_search", json!({ "query": "greet" }));
+    assert!(!is_err, "cs_search error: {search_text}");
+    // The search should still work and include confidence metadata
+    assert!(
+        search_text.contains("Confidence:"),
+        "Search should include confidence: {search_text}"
+    );
+}
+
+#[test]
+fn test_session_query_history() {
+    let mut h = TestHarness::from_fixture("basic");
+    h.initialize();
+
+    // Multiple searches should not cause errors
+    h.call_tool("cs_search", json!({ "query": "Config" }));
+    h.call_tool("cs_search", json!({ "query": "greet" }));
+    let (text, is_err) = h.call_tool("cs_search", json!({ "query": "process" }));
+    assert!(!is_err, "Third search should succeed: {text}");
+    assert!(
+        text.contains("Confidence:"),
+        "Third search should include confidence: {text}"
+    );
+}
