@@ -4,6 +4,16 @@ All notable changes to CodeScope will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.10.0] - 2026-02-21
+
+### Added
+- Global repository persistence in `~/.codescope/repos.toml`
+- Automatic repo loading from global config in MCP mode
+- Global repo registry integration in `codescope init` command
+
+### Fixed
+- Code formatting in init.rs and lib.rs
+
 ## [0.9.2] - 2026-02-21
 
 ### Fixed
