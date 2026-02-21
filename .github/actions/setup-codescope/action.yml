@@ -37,7 +37,7 @@ runs:
 
     - name: Install Rust toolchain
       if: steps.binary-cache.outputs.cache-hit != 'true'
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@1.93.1
 
     - name: Restore Cargo build cache
       if: steps.binary-cache.outputs.cache-hit != 'true'
