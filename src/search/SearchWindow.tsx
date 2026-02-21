@@ -87,9 +87,9 @@ export function SearchWindow() {
 
   return (
     <div className="sw-root">
-      {/* Custom titlebar */}
+      {/* Custom titlebar (drag region only, no label — label is inside hero field) */}
       <div className="sw-titlebar" data-tauri-drag-region>
-        <span className="sw-titlebar-label" data-tauri-drag-region>CodeScope Search</span>
+        <div className="sw-titlebar-spacer" data-tauri-drag-region />
         <button className="sw-titlebar-close" onClick={() => getCurrentWindow().close()}>&times;</button>
       </div>
 

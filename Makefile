@@ -22,7 +22,7 @@ endif
 SERVER := --manifest-path server/Cargo.toml
 SETUP  := --manifest-path src-tauri/Cargo.toml
 
-.PHONY: build install release dev clean check test setup
+.PHONY: build install release dev clean check test setup search
 
 # Build debug binary
 build:
@@ -43,6 +43,10 @@ dev:
 # Run setup wizard (Tauri dev mode with hot reload)
 setup: node_modules
 	npx tauri dev
+
+# Run search window (Tauri dev mode with hot reload)
+search: node_modules
+	npx tauri dev -- -- --search
 
 # Type check everything
 check: node_modules

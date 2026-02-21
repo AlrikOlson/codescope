@@ -50,22 +50,13 @@
 .sw-titlebar {
   display: flex;
   align-items: center;
-  height: 36px;
+  height: 28px;
   padding: 0 12px;
-  background: var(--glass-strong);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   user-select: none;
   -webkit-app-region: drag;
 }
-.sw-titlebar-label {
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  color: var(--text3);
+.sw-titlebar-spacer {
   flex: 1;
   pointer-events: none;
 }
@@ -94,16 +85,16 @@
 .sw-hero {
   display: flex;
   justify-content: center;
-  padding: 20px 24px 12px;
+  padding: 8px 24px 12px;
   flex-shrink: 0;
 }
 .sw-hero-field {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
   width: 100%;
   max-width: 700px;
-  padding: 10px 16px;
+  padding: 10px 16px 12px;
   background: var(--deep-black);
   border: 1.5px solid color-mix(in oklch, var(--neon-cyan) 20%, transparent);
   border-radius: var(--r-lg);
@@ -114,6 +105,24 @@
   box-shadow: 0 0 0 1px color-mix(in oklch, var(--neon-cyan) 10%, transparent),
               0 0 20px color-mix(in oklch, var(--neon-cyan) 8%, transparent),
               0 0 60px color-mix(in oklch, var(--neon-cyan) 3%, transparent);
+}
+.sw-hero-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text3);
+  opacity: 0.5;
+  transition: all var(--fast) var(--ease);
+}
+.sw-hero-field:focus-within .sw-hero-label {
+  color: var(--neon-cyan);
+  opacity: 0.7;
+}
+.sw-hero-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 .sw-hero-icon {
   flex-shrink: 0;

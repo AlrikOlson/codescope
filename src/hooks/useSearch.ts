@@ -1,45 +1,61 @@
-import { useState, useEffect, useMemo } from 'react';
-import { useApiBase, apiUrl } from '../shared/api';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { useIsTauri } from '../shared/api';
 import { EMPTY_FIND } from '../search-utils';
 import type { FindResponse } from '../types';
 
 export function useSearch() {
-  const baseUrl = useApiBase();
+  const isTauri = useIsTauri();
   const [query, setQuery] = useState('');
   const [findResults, setFindResults] = useState<FindResponse>(EMPTY_FIND);
   const [loading, setLoading] = useState(false);
   const [extFilter, setExtFilter] = useState<string | null>(null);
+  const requestId = useRef(0);
 
   useEffect(() => {
     const q = query.trim();
     if (!q) {
       setFindResults(EMPTY_FIND);
+      setLoading(false);
       return;
     }
 
+    const id = ++requestId.current;
     setLoading(true);
     const controller = new AbortController();
 
-    const timer = setTimeout(() => {
-      const params = new URLSearchParams({ q, limit: '50' });
-      if (extFilter) params.set('ext', extFilter);
-
-      fetch(apiUrl(baseUrl, `/api/find?${params}`), { signal: controller.signal })
-        .then(r => r.json() as Promise<FindResponse>)
-        .then(data => {
+    const timer = setTimeout(async () => {
+      try {
+        let data: FindResponse;
+        if (isTauri) {
+          const { invoke } = await import('@tauri-apps/api/core');
+          data = await invoke('search_find', {
+            q,
+            ext: extFilter ?? undefined,
+            limit: 50,
+          });
+        } else {
+          const params = new URLSearchParams({ q, limit: '50' });
+          if (extFilter) params.set('ext', extFilter);
+          const resp = await fetch(`/api/find?${params}`, { signal: controller.signal });
+          data = await resp.json() as FindResponse;
+        }
+        // Only apply results if this is still the latest request
+        if (id === requestId.current) {
           setFindResults(data);
           setLoading(false);
-        })
-        .catch(() => {
-          // Aborted or error — don't update state
-        });
+        }
+      } catch {
+        if (id === requestId.current) {
+          setLoading(false);
+        }
+      }
     }, 150);
 
     return () => {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [query, extFilter, baseUrl]);
+  }, [query, extFilter, isTauri]);
 
   const results = findResults.results;
 

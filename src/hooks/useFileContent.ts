@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import { useApiBase, apiUrl } from '../shared/api';
+import { useIsTauri } from '../shared/api';
 import type { FileContentResponse } from '../types';
 
 export function useFileContent(path: string | null) {
-  const baseUrl = useApiBase();
+  const isTauri = useIsTauri();
   const [data, setData] = useState<FileContentResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,30 +27,33 @@ export function useFileContent(path: string | null) {
     setLoading(true);
     setError(null);
 
-    fetch(apiUrl(baseUrl, `/api/file?path=${encodeURIComponent(path)}`))
-      .then(r => {
-        if (!r.ok) throw new Error(`${r.status}`);
-        return r.json();
-      })
-      .then((resp: FileContentResponse) => {
+    (async () => {
+      try {
+        let resp: FileContentResponse;
+        if (isTauri) {
+          const { invoke } = await import('@tauri-apps/api/core');
+          resp = await invoke('search_read_file', { path });
+        } else {
+          const r = await fetch(`/api/file?path=${encodeURIComponent(path)}`);
+          if (!r.ok) throw new Error(`${r.status}`);
+          resp = await r.json();
+        }
         if (cancelled) return;
         cache.current.set(path, resp);
-        // LRU: keep cache under 50 entries
         if (cache.current.size > 50) {
           const first = cache.current.keys().next().value;
           if (first) cache.current.delete(first);
         }
         setData(resp);
-      })
-      .catch(err => {
-        if (!cancelled) setError(err.message);
-      })
-      .finally(() => {
+      } catch (err: any) {
+        if (!cancelled) setError(err.message ?? String(err));
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    })();
 
     return () => { cancelled = true; };
-  }, [path, baseUrl]);
+  }, [path, isTauri]);
 
   return { data, loading, error };
 }

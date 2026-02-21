@@ -116,6 +116,39 @@ enum Commands {
     },
     /// Launch the setup wizard (guided onboarding)
     Setup,
+    /// Open the search window
+    Search,
+}
+
+// ---------------------------------------------------------------------------
+// Tauri window launcher
+// ---------------------------------------------------------------------------
+
+/// Launch the Tauri binary (codescope-setup) with the given flag.
+/// Looks for it next to the current executable, then on PATH.
+fn launch_tauri_window(flag: &str) {
+    let self_exe = std::env::current_exe().unwrap_or_default();
+    let self_dir = self_exe.parent().unwrap_or(std::path::Path::new("."));
+
+    // Try sibling binary first (same install dir), then PATH
+    let candidates = [
+        self_dir.join("codescope-setup"),
+        PathBuf::from("codescope-setup"),
+    ];
+
+    for candidate in &candidates {
+        match std::process::Command::new(candidate).arg(flag).spawn() {
+            Ok(mut child) => {
+                let _ = child.wait();
+                return;
+            }
+            Err(_) => continue,
+        }
+    }
+
+    eprintln!("Error: codescope-setup binary not found.");
+    eprintln!("  Install it with: cd src-tauri && cargo install --path .");
+    std::process::exit(1);
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +272,10 @@ async fn main() {
                 eprintln!();
                 eprintln!("  The setup wizard is coming soon.");
                 eprintln!("  For now, use `codescope init <path>` to add a project.");
+                return;
+            }
+            Commands::Search => {
+                launch_tauri_window("--search");
                 return;
             }
         }

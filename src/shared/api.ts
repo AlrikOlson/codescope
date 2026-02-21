@@ -1,9 +1,9 @@
 import { createContext, useContext } from 'react';
 
-const ApiContext = createContext<{ baseUrl: string }>({ baseUrl: '' });
+/** Whether we're running inside Tauri (search window) or the web UI. */
+const ApiContext = createContext<{ tauri: boolean }>({ tauri: false });
 
 export const ApiProvider = ApiContext.Provider;
-export const useApiBase = () => useContext(ApiContext).baseUrl;
-export const apiUrl = (base: string, path: string) => base ? `${base}${path}` : path;
+export const useIsTauri = () => useContext(ApiContext).tauri;
 
 export default ApiContext;
