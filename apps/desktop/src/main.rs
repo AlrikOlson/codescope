@@ -1,5 +1,7 @@
 //! CodeScope Desktop — Dioxus-powered codebase explorer.
 
+use std::sync::Mutex;
+
 use dioxus::prelude::*;
 
 mod app;
@@ -12,6 +14,9 @@ mod components;
 use app::App;
 use state::AppState;
 
+/// Pre-runtime storage — scanned before Dioxus launches, consumed on first render.
+pub static INITIAL_STATE: Mutex<Option<AppState>> = Mutex::new(None);
+
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -21,11 +26,9 @@ fn main() {
         .with_target(false)
         .init();
 
-    // Scan repos at startup (blocking)
+    // Scan repos at startup (blocking) — store in Mutex, NOT in the signal
     let initial_state = AppState::from_cwd();
-
-    // Store in global signal
-    *state::CORE.write() = Some(initial_state);
+    *INITIAL_STATE.lock().unwrap() = Some(initial_state);
 
     #[cfg(feature = "desktop")]
     {

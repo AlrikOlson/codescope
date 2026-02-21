@@ -12,6 +12,13 @@ static APP_CSS: Asset = asset!("/assets/styles/app.css");
 
 #[component]
 pub fn App() -> Element {
+    // Transfer pre-scanned state into the GlobalSignal on first render
+    use_hook(|| {
+        if let Some(state) = crate::INITIAL_STATE.lock().unwrap().take() {
+            *CORE.write() = Some(state);
+        }
+    });
+
     rsx! {
         document::Stylesheet { href: VARIABLES_CSS }
         document::Stylesheet { href: APP_CSS }
