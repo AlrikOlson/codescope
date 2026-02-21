@@ -1,7 +1,7 @@
 {
   "name": "codescope",
   "private": true,
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "CodeScope web UI — codebase browser with treemap, dependency graph, and full-text search",
   "repository": "https://github.com/AlrikOlson/codescope",
   "license": "MIT",
@@ -12,7 +12,7 @@
     "build": "tsc && vite build"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.49",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.50",
     "@tanstack/react-virtual": "^3.13.2",
     "@types/three": "^0.182.0",
     "react": "^18.3.1",

@@ -4,6 +4,12 @@ All notable changes to CodeScope will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.1] - 2026-02-21
+
+### Fixed
+- Hardened AI agent prompts for better reliability
+- Improved CI workflow change detection to include testing when workflow files are modified
+
 ## [0.9.0] - 2026-02-20
 
 ### Added
