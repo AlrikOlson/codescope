@@ -4,6 +4,15 @@ All notable changes to CodeScope will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.11.2] - 2026-02-21
+
+### Fixed
+- Git post-rewrite hook to auto-sync Cargo.lock after rebase when version drifts
+
+### Changed  
+- Optimized CI/CD pipeline with thin LTO and improved workflow structure
+- Enhanced release workflow parallelization and non-blocking doc sync
+
 ## [0.11.1] - 2026-02-21
 
 ### Fixed
